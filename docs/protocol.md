@@ -1,0 +1,377 @@
+# Device protocol, v1
+
+Contract between the Cardputer firmware and the relay. Source of truth for the relay side is `relay/src/protocol/messages.ts`. Every fenced `json device` and `json relay` block below is parsed by `relay/test/protocol.test.ts`, so these examples cannot drift from the schemas.
+
+## Transport
+
+- One secure WebSocket (`wss`) to path `/v1/device`.
+- Text frames: one JSON object per frame, UTF-8, with a string `type` field. Unknown `type`, unknown fields, missing required fields, or wrong types are rejected with `error {code:"bad_message"}`.
+- Binary frames: raw audio, see "Audio".
+- Relay text frames never exceed the `maxFrameBytes` the device declared in `hello`. If a view does not fit, the relay shrinks it (for example `thread_page.truncated`) or sends `error {code:"internal"}`; it never sends an oversize frame.
+- Device-bound text (`lines`, `title`, `label`, `message`, ...) is printable ASCII only (0x20-0x7E), with `\n` allowed only where stated. The device font needs nothing else.
+- JSON numbers are integers unless stated. `?` after a field name means optional: omit it, do not send `null`.
+
+## Ordering
+
+1. Device opens the socket and sends `hello` as its first frame. Anything else first gets `error {code:"auth"}` and close 4401.
+2. Relay answers `welcome`, then immediately `home`. Nothing else is sent before `welcome`.
+3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted.
+4. Every device message with an `id` gets exactly one `ack` with the same `id`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
+5. On reconnect the device sends `hello` again and gets `welcome` then `home`. Nothing is replayed, the relay sends full state.
+
+## Message ids
+
+Every device message except `hello` carries `id`: a string of 1 to 16 characters. Ids are unique per device, across reconnects and reboots. The relay uses `id` as an idempotency key: a repeated `id` gets the original `ack` again and the action is not run twice. Do not reuse an id for a different request. A counter that restarts at boot will collide; use random characters (8+ hex digits is plenty).
+
+## Versioning
+
+`PROTOCOL_VERSION = 1`. `hello.v` must equal the relay's version. On mismatch the relay sends `error {code:"protocol_version"}` and then closes the socket with code 4400. The error `message` names both versions (`device speaks protocol v=2, relay speaks v=1`); the device shows it verbatim, since the relay sends no `welcome` on a mismatch and the device cannot tell which side is newer by itself. The relay checks `v` before anything else in `hello`, so a future `hello` shape never produces a confusing field error.
+
+## Close codes
+
+| Code | Meaning | Device should |
+| --- | --- | --- |
+| 4400 | protocol version mismatch (preceded by `error protocol_version`) | stop reconnecting, show the error message ("update firmware" or "update relay") |
+| 4401 | auth: first frame was not `hello`, token missing or wrong, or no `hello` in time (preceded by `error auth`) | stop reconnecting, show "re-pair" |
+| 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "taken over by another connection" |
+
+Any other close (network drop, relay restart) is reconnected with backoff.
+
+## Errors
+
+`error { code, message }`. `message` is printable ASCII and meant to be shown on screen. `code` is one of:
+
+| Code | When |
+| --- | --- |
+| `protocol_version` | `hello.v` is not 1. Followed by close 4400. |
+| `auth` | `hello` missing, or token rejected. Followed by close 4401. |
+| `bad_message` | a text frame failed validation. `message` names the field path. The socket stays open. |
+| `bad_audio` | binary frame outside an audio window, or odd byte length. The socket stays open. |
+| `internal` | relay failure not caused by the device. The socket stays open. |
+
+Failures of a specific request (thread not found, T3 down, reply too long for T3) come back as `ack {ok:false, error}`, not as `error`.
+
+## Device to relay
+
+### hello
+
+First frame on every connection. Declares the screen and the receive budget. Has no `id`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"hello"` | yes | |
+| `v` | int | yes | must be 1 |
+| `token` | string | yes | 1-256 chars, issued at pairing |
+| `fw` | string | yes | 1-32 chars, firmware version |
+| `cols` | int | yes | 1-255, characters per screen row |
+| `bodyRows` | int | yes | 1-64, rows available for body text |
+| `maxFrameBytes` | int | yes | 256-1048576, largest text frame the device can receive |
+| `maxHomeRows` | int | yes | 1-255, most home rows the device can show |
+
+```json device
+{"type":"hello","v":1,"token":"<device-token>","fw":"0.1.0","cols":40,"bodyRows":11,"maxFrameBytes":4096,"maxHomeRows":8}
+```
+
+### open_thread
+
+Open a thread. Answered by `ack`, then `thread_page` with `page` 1.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"open_thread"` | yes | |
+| `id` | string | yes | 1-16 chars |
+| `threadId` | string | yes | 1-128 chars, taken from a `home` row |
+
+```json device
+{"type":"open_thread","id":"a1b2c3d4","threadId":"thr_01"}
+```
+
+### page
+
+Ask for another page of an open thread. Answered by `ack`, then `thread_page`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"page"` | yes | |
+| `id` | string | yes | 1-16 chars |
+| `threadId` | string | yes | 1-128 chars |
+| `page` | int | yes | 1-based, >= 1. Past the last page the relay acks `ok:false`. |
+
+```json device
+{"type":"page","id":"a1b2c3d5","threadId":"thr_01","page":2}
+```
+
+### reply
+
+Send a message into a thread. `queue` waits for the running turn to finish, `steer` interrupts it.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"reply"` | yes | |
+| `id` | string | yes | 1-16 chars |
+| `threadId` | string | yes | 1-128 chars |
+| `text` | string | yes | 1-4000 chars |
+| `mode` | `"queue"` or `"steer"` | yes | |
+
+```json device
+{"type":"reply","id":"a1b2c3d6","threadId":"thr_01","text":"yes, go ahead","mode":"queue"}
+```
+
+### respond
+
+Answer a `request`. `requestId` and `value` come from the `request` message and the chosen option. `text` is only for `deny_with_reason` (the reason) and free-text question answers.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"respond"` | yes | |
+| `id` | string | yes | 1-16 chars |
+| `threadId` | string | yes | 1-128 chars |
+| `requestId` | string | yes | 1-128 chars, from `request.requestId` |
+| `value` | string | yes | 1-128 chars, from `request.options[].value` |
+| `text?` | string | no | 1-1000 chars |
+
+```json device
+{"type":"respond","id":"a1b2c3d7","threadId":"thr_01","requestId":"req_9","value":"allow_once"}
+```
+
+```json device
+{"type":"respond","id":"a1b2c3d8","threadId":"thr_01","requestId":"req_9","value":"deny_with_reason","text":"use the staging db instead"}
+```
+
+### launch
+
+Start a new thread in a project. Omitted `model`, `workspace`, `runtimeMode` use the project's `defaults` from `projects`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"launch"` | yes | |
+| `id` | string | yes | 1-16 chars |
+| `projectId` | string | yes | 1-128 chars, from `projects` |
+| `text` | string | yes | 1-4000 chars, the first prompt |
+| `model?` | string | no | 1-128 chars, a model id from `projects.defaults.model` |
+| `workspace?` | `"root"` or `"worktree"` | no | |
+| `runtimeMode?` | string | no | `"approval-required"`, `"auto-accept-edits"`, `"auto"`, or `"full-access"` |
+
+```json device
+{"type":"launch","id":"a1b2c3d9","projectId":"proj_1","text":"fix the flaky test in auth","workspace":"worktree","runtimeMode":"approval-required"}
+```
+
+### list_projects
+
+Ask for the project list. Answered by `ack`, then `projects`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"list_projects"` | yes | |
+| `id` | string | yes | 1-16 chars |
+
+```json device
+{"type":"list_projects","id":"a1b2c3da"}
+```
+
+### audio_start
+
+Open an audio window. Binary frames are accepted from now until `audio_end` or `audio_cancel`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"audio_start"` | yes | |
+| `id` | string | yes | 1-16 chars |
+| `sampleRate` | int | yes | must be 16000 |
+
+```json device
+{"type":"audio_start","id":"a1b2c3db","sampleRate":16000}
+```
+
+### audio_end
+
+Close the audio window and transcribe what was sent. Answered by `ack`, then `transcript_final`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"audio_end"` | yes | |
+| `id` | string | yes | 1-16 chars |
+
+```json device
+{"type":"audio_end","id":"a1b2c3dc"}
+```
+
+### audio_cancel
+
+Close the audio window and throw the audio away. No transcript follows.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"audio_cancel"` | yes | |
+| `id` | string | yes | 1-16 chars |
+
+```json device
+{"type":"audio_cancel","id":"a1b2c3dd"}
+```
+
+### Audio
+
+Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty and an even number of bytes. Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`; any other binary frame gets `error {code:"bad_audio"}` and is dropped. Chunk size is the device's choice; the relay's upper bound on a chunk and on total audio length is added here when the voice session lands.
+
+## Relay to device
+
+### welcome
+
+First frame from the relay, after a valid `hello`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"welcome"` | yes | |
+| `v` | int | yes | relay protocol version, 1 |
+| `relay` | string | yes | relay software version |
+
+```json relay
+{"type":"welcome","v":1,"relay":"0.1.0"}
+```
+
+### ack
+
+Result of one device message.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"ack"` | yes | |
+| `id` | string | yes | the device message's `id` |
+| `ok` | bool | yes | |
+| `error?` | string | no | printable ASCII, present when `ok` is false |
+
+```json relay
+{"type":"ack","id":"a1b2c3d6","ok":true}
+```
+
+```json relay
+{"type":"ack","id":"a1b2c3d6","ok":false,"error":"thread not found"}
+```
+
+### home
+
+The home screen: threads that need attention first. Sent after `welcome` and again whenever it changes.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"home"` | yes | |
+| `rows` | HomeRow[] | yes | at most `hello.maxHomeRows`, already in display order |
+| `counts` | object | yes | `{needs, running, done}`, ints >= 0, counts over all threads, not just `rows` |
+| `approvals` | object | yes | `{available: bool, reason?: string}`; when `available` is false the device must not offer approvals and shows `reason` |
+| `warnings` | string[] | yes | short printable ASCII notices for the status bar, may be empty |
+| `t3` | `"ok"` or `"unreachable"` | yes | whether the relay can reach T3 right now |
+
+HomeRow: `{threadId, kind, project, title, ageSec}`
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `threadId` | string | 1-128 chars |
+| `kind` | string | `"approval"`, `"question"`, `"failed"`, `"running"`, or `"done"` |
+| `project` | string | printable ASCII, already shortened to fit |
+| `title` | string | printable ASCII, already shortened to fit |
+| `ageSec` | int | >= 0, seconds since the last activity |
+
+```json relay
+{"type":"home","rows":[{"threadId":"thr_01","kind":"approval","project":"api","title":"run migration","ageSec":42},{"threadId":"thr_02","kind":"running","project":"web","title":"fix flaky test","ageSec":310}],"counts":{"needs":1,"running":1,"done":6},"approvals":{"available":true},"warnings":[],"t3":"ok"}
+```
+
+### thread_page
+
+One page of a thread, already wrapped to `cols` and cut to at most `bodyRows` lines.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"thread_page"` | yes | |
+| `threadId` | string | yes | |
+| `header` | object | yes | `{project, title, model, status}`, all printable ASCII strings; `status` is T3's thread status as text |
+| `page` | int | yes | 1-based |
+| `pages` | int | yes | total pages, >= 1 |
+| `lines` | string[] | yes | each at most `cols` chars, printable ASCII |
+| `truncated?` | object | no | `{budget: string, limit: int, actual: int}`; present when the reply was cut: `budget` names the limit hit, `limit` is its value, `actual` is what was needed |
+
+```json relay
+{"type":"thread_page","threadId":"thr_01","header":{"project":"api","title":"run migration","model":"claude-opus-5","status":"running"},"page":1,"pages":3,"lines":["I ran the migration on a copy of the","database first. It adds two columns and","backfills them in batches of 500."]}
+```
+
+```json relay
+{"type":"thread_page","threadId":"thr_02","header":{"project":"web","title":"fix flaky test","model":"claude-opus-5","status":"done"},"page":32,"pages":32,"lines":["...end of what fits..."],"truncated":{"budget":"max_reply_pages","limit":32,"actual":57}}
+```
+
+### request
+
+A thread is waiting on the user. The device shows `lines` and the `options`, then answers with `respond`.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"request"` | yes | |
+| `threadId` | string | yes | |
+| `requestId` | string | yes | echo it in `respond.requestId` |
+| `kind` | `"approval"` or `"question"` | yes | |
+| `lines` | string[] | yes | wrapped to `cols`, printable ASCII |
+| `options` | Option[] | yes | |
+
+Option: `{key, label, value}`. `key` is one character, the key the user presses; `label` is 1-64 printable ASCII chars; `value` is 1-128 chars, echoed in `respond.value`.
+
+- Approval requests use keys `Y` (value `allow_once`), `A` (`allow_always`), `N` (`deny`), `T` (`deny_with_reason`). On `T` the device asks for a reason and sends it as `respond.text`.
+- Question requests use keys `1` to `9` for the choices. A question with no `options` is free text: the device collects text and sends `respond` with `value` `"text"` and the answer in `respond.text`.
+
+```json relay
+{"type":"request","threadId":"thr_01","requestId":"req_9","kind":"approval","lines":["Run shell command?","","  pnpm db:migrate"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]}
+```
+
+```json relay
+{"type":"request","threadId":"thr_03","requestId":"req_12","kind":"question","lines":["Which database should I use?"],"options":[{"key":"1","label":"staging","value":"staging"},{"key":"2","label":"local","value":"local"}]}
+```
+
+### projects
+
+Projects the device can launch into, with the defaults a `launch` gets when it omits a field.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"projects"` | yes | |
+| `items` | object[] | yes | `{projectId, name, defaults: {model, workspace, runtimeMode}}`; `workspace` is `"root"` or `"worktree"`, `runtimeMode` is one of the four launch values |
+
+```json relay
+{"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}]}
+```
+
+### transcript_partial
+
+Optional running transcript while audio is still open. Zero or more may arrive; each replaces the previous one.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"transcript_partial"` | yes | |
+| `text` | string | yes | printable ASCII |
+
+```json relay
+{"type":"transcript_partial","text":"fix the flaky"}
+```
+
+### transcript_final
+
+Final transcript after `audio_end`. The device puts it in the input line for the user to edit and send.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"transcript_final"` | yes | |
+| `text` | string | yes | printable ASCII |
+
+```json relay
+{"type":"transcript_final","text":"fix the flaky test in auth"}
+```
+
+### error
+
+See "Errors".
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"error"` | yes | |
+| `code` | string | yes | `protocol_version`, `auth`, `bad_message`, `bad_audio`, or `internal` |
+| `message` | string | yes | printable ASCII |
+
+```json relay
+{"type":"error","code":"protocol_version","message":"device speaks protocol v=2, relay speaks v=1"}
+```
