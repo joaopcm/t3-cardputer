@@ -1,0 +1,9 @@
+menu "T3"
+
+    config T3_DEBUG_SERIAL
+        bool "Serial debug channel (SHOT, KEY, HEAP on the USB console)"
+        default y
+        help
+            Compiles and starts the debug channel. Release builds turn it off.
+
+endmenu

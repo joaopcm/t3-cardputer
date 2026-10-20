@@ -2,6 +2,8 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #define M5GFX_BOARD lgfx::boards::board_M5CardputerADV
 #include <M5GFX.h>
@@ -45,6 +47,8 @@ constexpr PaletteEntry kPalette[] = {
 
 M5GFX panel;
 M5Canvas canvas(&panel);
+StaticSemaphore_t canvasLockStorage;
+SemaphoreHandle_t canvasLock;
 
 int rowY(int row)
 {
@@ -60,6 +64,7 @@ bool isBar(int row)
 
 bool display_init()
 {
+    canvasLock = xSemaphoreCreateMutexStatic(&canvasLockStorage);
     panel.init();
     panel.setRotation(1);
     panel.fillScreen(TFT_BLACK);
@@ -80,6 +85,7 @@ bool display_init()
 
 void display_draw(const t3::Grid &grid)
 {
+    xSemaphoreTake(canvasLock, portMAX_DELAY);
     canvas.fillScreen(kBlack);
     for (int row = 0; row < t3::Grid::Rows; ++row) {
         const int y = rowY(row);
@@ -97,10 +103,14 @@ void display_draw(const t3::Grid &grid)
         }
     }
     canvas.pushSprite(0, 0);
+    xSemaphoreGive(canvasLock);
 }
 
-DisplayBuffer display_buffer()
+void display_with_buffer(DisplayBufferFn fn, void *context)
 {
-    return {static_cast<const uint8_t *>(canvas.getBuffer()), kWidth, kHeight, kBpp,
-            static_cast<size_t>((kWidth * kBpp + 7) / 8)};
+    const DisplayBuffer buffer{static_cast<const uint8_t *>(canvas.getBuffer()), kWidth, kHeight, kBpp,
+                               static_cast<size_t>((kWidth * kBpp + 7) / 8)};
+    xSemaphoreTake(canvasLock, portMAX_DELAY);
+    fn(buffer, context);
+    xSemaphoreGive(canvasLock);
 }

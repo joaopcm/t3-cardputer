@@ -16,4 +16,6 @@ struct DisplayBuffer {
     size_t rowBytes;
 };
 
-DisplayBuffer display_buffer();
+using DisplayBufferFn = void (*)(const DisplayBuffer &buffer, void *context);
+
+void display_with_buffer(DisplayBufferFn fn, void *context);

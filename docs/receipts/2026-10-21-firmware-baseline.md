@@ -32,7 +32,7 @@ Measured on the ADV with the task 2 firmware (`t3: boot|sprite|ready` log lines,
 | free internal heap after `display_init()` (panel init + sprite) | 355316 bytes, largest block 286720 | `t3: sprite heap_internal_free` / `largest_block` |
 | boot to after sprite | 23896 bytes of heap, 24576 bytes of largest block | 379212 - 355316, 311296 - 286720 |
 | free internal heap after `debug_serial_start()` | 347272 bytes, largest block 278528 | `t3: ready ...` and `\x02HEAP` reply, same numbers |
-| usb_serial_jtag driver + key queue + task | 8044 bytes of heap | 355316 - 347272 |
+| first `display_draw()` (panel push buffer) | 1456 bytes of heap | `t3: sprite` to `t3: ready` with the debug channel off |
 | debug task stack | 2340 bytes used of 4096 (1756 free at the worst point, during `SHOT`) | `debug: task_stack_free_min` |
 | longest command | 13 bytes (`KEY talk-down`), line buffer 64 | `debug_serial.cpp` `kMaxLineBytes`, an over-long line logs `line_buf=64, command needed more` |
 | rx buffer 256, tx buffer 1024 | commands are at most 13 bytes, one `SHOT` row is 241 bytes | 8 back-to-back screenshots all arrived with 135 intact rows and identical pixels |
@@ -43,3 +43,25 @@ Notes:
 
 - The USB-Serial-JTAG chip resets when the host sets DTR=0 with RTS=1. Linux raises both lines on open, so `screenshot.py` lowers RTS first and the open does not reset the device.
 - Each `SHOT` row goes out in one `fwrite`, so ESP log lines from other tasks land between rows, never inside one. `screenshot.py` keeps only lines of exactly 240 hex chars and fails loudly if it does not get 135.
+
+## debug serial cost (`T3_DEBUG_SERIAL`)
+
+`firmware/main/Kconfig.projbuild`, default y. Off: `debug_serial.cpp` is not compiled, `debug_serial_start()` is an inline no-op, no SHOT, KEY or HEAP. Task 12 builds releases with it off. Measured on the ADV, same source, only the option flipped (`t3: boot|sprite|ready` log lines, `build/t3_cardputer.bin`):
+
+| what | on | off | cost when on |
+| --- | --- | --- | --- |
+| free heap at boot (app_main entry) | 374436 | 379052 | 4616 bytes of static RAM |
+| free heap after `debug_serial_start()` (`ready`) | 347184 | 358388 | 11204 bytes total |
+| heap taken by `debug_serial_start()` itself | 8044 - 1456 = 6588 | 0 | 6588 bytes: 4096 task stack, 256 rx + 1024 tx ring buffers, driver and queue |
+| largest free block at `ready` | 278528 | 294912 | 16384 bytes |
+| app image | 385072 (0x5e030) | 358672 (0x57910) | 26400 bytes of flash |
+| debug task stack used | 2340 of 4096 | - | |
+
+## draw lock
+
+`display_draw()` and the whole `SHOT` dump hold one static mutex (`display.cpp`, no heap). The raw buffer is only reachable through `display_with_buffer()`. Test: a temporary loop in `app_main` redrew the grid every 2 ms, alternating the selected row, while `screenshot.py` ran back to back.
+
+| build | shots | complete | torn |
+| --- | --- | --- | --- |
+| no lock | 10 | 9 | 1 (all black, no text) plus a third, half-drawn variant |
+| lock | 30 | 30 | 0, exactly 2 distinct frames (row 2 or row 3 selected) |

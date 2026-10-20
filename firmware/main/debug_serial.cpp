@@ -54,9 +54,8 @@ void emitLine(const char *format, ...)
     std::fflush(stdout);
 }
 
-void sendShot()
+void dumpShot(const DisplayBuffer &buf, void *)
 {
-    const DisplayBuffer buf = display_buffer();
     char header[48];
     const int n = std::snprintf(header, sizeof(header), "%cSHOT %d %d %d\n", kStx, buf.width, buf.height, buf.bpp);
     emit(header, static_cast<size_t>(n));
@@ -75,6 +74,11 @@ void sendShot()
     const char end[] = {kEtx, '\n'};
     emit(end, sizeof(end));
     std::fflush(stdout);
+}
+
+void sendShot()
+{
+    display_with_buffer(dumpShot, nullptr);
 }
 
 void sendHeap()
