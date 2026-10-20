@@ -215,6 +215,13 @@ describe("VersionWatch", () => {
     await expect(watch.check()).rejects.toThrow(path);
   });
 
+  it("record names the state file when it cannot write it", () => {
+    const blocker = join(mkdtempSync(join(tmpdir(), "relay-version-")), "file");
+    writeFileSync(blocker, "x");
+    const path = join(blocker, "state", "t3-version.json");
+    expect(() => new VersionWatch(async () => env("0.1.0"), path).record(env("0.1.0"), PASS)).toThrow(path);
+  });
+
   it("verdictOf records a pass or a broken failure and nothing for a transient one", () => {
     expect(verdictOf({ ok: true, ms: 5 })).toEqual(PASS);
     expect(verdictOf({ ok: false, stage: "respond", kind: "broken", reason: "decision not accepted" })).toEqual(BROKEN);
@@ -293,7 +300,8 @@ describe("startVersionLoop", () => {
     const rig = loopRig({ results: [fails("respond"), fails("respond")] });
     await vi.advanceTimersByTimeAsync(0);
     expect(rig.canary).toHaveBeenCalledTimes(2);
-    expect(rig.down).toHaveBeenCalledWith("canary respond: adapter said no");
+    expect(rig.down).toHaveBeenNthCalledWith(1, "canary respond: adapter said no", "checking");
+    expect(rig.down).toHaveBeenLastCalledWith("canary respond: adapter said no", "fixing");
     expect(rig.failed).toHaveBeenCalledOnce();
     expect(rig.failed).toHaveBeenCalledWith(failure("respond"), { to: "0.1.0+orch2" });
     expect(await rig.watch.check()).toMatchObject({ saved: { verdict: "broken", stage: "respond", reason: "adapter said no" } });
@@ -314,13 +322,157 @@ describe("startVersionLoop", () => {
     await rig.loop.stop();
   });
 
-  it("two broken failures at different stages are not confirmed, so no hook", async () => {
+  it("broken at two different stages is unconfirmed: no hook, device text says checking again, reruns with backoff until two runs agree", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const rig = loopRig({ results: [fails("approval_seen"), fails("respond")] });
+    const rig = loopRig({ results: [fails("approval_seen"), fails("completed"), fails("completed")] });
     await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(2);
     expect(rig.failed).not.toHaveBeenCalled();
-    expect(rig.down).toHaveBeenLastCalledWith("canary respond: adapter said no");
+    expect(rig.down).toHaveBeenLastCalledWith("canary completed: adapter said no", "checking");
+    expect(rig.down.mock.calls.every(([, phase]) => phase === "checking")).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(rig.canary).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(rig.canary).toHaveBeenCalledTimes(3);
+    expect(rig.failed).toHaveBeenCalledExactlyOnceWith(failure("completed"), { to: "0.1.0+orch2" });
+    expect(rig.down).toHaveBeenLastCalledWith("canary completed: adapter said no", "fixing");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(rig.canary).toHaveBeenCalledTimes(3);
+    await rig.loop.stop();
+  });
+
+  it("keeps rerunning with doubling backoff while broken stages keep changing, and a pass clears it", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const rig = loopRig({ results: [fails("approval_seen"), fails("respond"), fails("completed"), fails("respond"), ok], retryMaxMs: 2000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(rig.canary).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(rig.canary).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(rig.canary).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(rig.canary).toHaveBeenCalledTimes(5);
+    expect(rig.failed).not.toHaveBeenCalled();
+    expect(rig.up).toHaveBeenCalledOnce();
+    await rig.loop.stop();
+  });
+
+  it("with no hook attached a confirmed failure never claims a fix is in progress", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const down = vi.fn();
+    const queue = [fails("respond"), fails("respond")];
+    const loop = startVersionLoop({
+      watch: new VersionWatch(async () => env("0.1.0"), tmpState()),
+      intervalMs: 1000,
+      retryMaxMs: 4000,
+      blocked: () => undefined,
+      canary: () => queue.shift()!(),
+      markApprovalsUp: vi.fn(),
+      markApprovalsDown: down,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(down).toHaveBeenLastCalledWith("canary respond: adapter said no", "none");
+    await loop.stop();
+  });
+
+  it("a throwing hook is logged and the text does not claim a fix", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const down = vi.fn();
+    const queue = [fails("respond"), fails("respond")];
+    const loop = startVersionLoop({
+      watch: new VersionWatch(async () => env("0.1.0"), tmpState()),
+      intervalMs: 1000,
+      retryMaxMs: 4000,
+      blocked: () => undefined,
+      canary: () => queue.shift()!(),
+      markApprovalsUp: vi.fn(),
+      markApprovalsDown: down,
+      onCanaryFailed: () => {
+        throw new Error("repair boom");
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(down).toHaveBeenLastCalledWith("canary respond: adapter said no", "none");
+    await loop.stop();
+  });
+
+  it("a state file that cannot be written is logged naming its path, still applies to devices, and backs off instead of rerunning every tick", async () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const statePath = "/nonexistent-state/t3-version.json";
+    const record = vi.fn(() => {
+      throw new Error(`could not save T3 version state ${statePath}: EACCES`);
+    });
+    const up = vi.fn();
+    const results = [ok, ok, ok, ok];
+    const canary = vi.fn(() => results.shift()!());
+    const loop = startVersionLoop({
+      watch: { check: async () => ({ current: env("0.1.0"), to: "0.1.0+orch2", changed: true }), record },
+      intervalMs: 1000,
+      retryMaxMs: 2000,
+      blocked: () => undefined,
+      canary,
+      markApprovalsUp: up,
+      markApprovalsDown: vi.fn(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(up).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(statePath), expect.anything());
+    expect(canary).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(canary).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(canary).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(canary).toHaveBeenCalledTimes(3);
+    await loop.stop();
+  });
+
+  it("a broken verdict that cannot be saved still reaches devices and is still confirmed from memory", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const down = vi.fn();
+    const failed = vi.fn();
+    const queue = [fails("respond"), fails("respond")];
+    const loop = startVersionLoop({
+      watch: {
+        check: async () => ({ current: env("0.1.0"), to: "0.1.0+orch2", changed: true }),
+        record: () => {
+          throw new Error("could not save T3 version state /x: ENOSPC");
+        },
+      },
+      intervalMs: 1000,
+      retryMaxMs: 2000,
+      blocked: () => undefined,
+      canary: () => queue.shift()!(),
+      markApprovalsUp: vi.fn(),
+      markApprovalsDown: down,
+      onCanaryFailed: failed,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(down).toHaveBeenNthCalledWith(1, "canary respond: adapter said no", "checking");
+    expect(failed).toHaveBeenCalledOnce();
+    await loop.stop();
+  });
+
+  it("a saved broken verdict reaches devices even while the canary is blocked by a missing token, and nothing is run", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const path = tmpState();
+    const seed = new VersionWatch(async () => env("0.1.0"), path);
+    seed.record((await seed.check()).current, BROKEN);
+    const rig = loopRig({ path, results: [], blocked: () => "no T3 internal token" });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(rig.down).toHaveBeenCalledExactlyOnceWith("canary respond: decision not accepted", "checking");
+    expect(rig.canary).not.toHaveBeenCalled();
     await rig.loop.stop();
   });
 
@@ -346,7 +498,7 @@ describe("startVersionLoop", () => {
     let finish!: (result: CanaryResult) => void;
     const rig = loopRig({ path, results: [() => new Promise<CanaryResult>((resolve) => (finish = resolve))] });
     await vi.advanceTimersByTimeAsync(0);
-    expect(rig.down).toHaveBeenCalledExactlyOnceWith("canary respond: decision not accepted");
+    expect(rig.down).toHaveBeenCalledExactlyOnceWith("canary respond: decision not accepted", "checking");
     expect(rig.canary).toHaveBeenCalledOnce();
     expect(rig.failed).not.toHaveBeenCalled();
     finish(failure("respond", "broken", "still not accepted"));
@@ -395,7 +547,7 @@ describe("startVersionLoop", () => {
     const outside = new VersionWatch(async () => env("0.1.0"), rig.path);
     outside.record((await outside.check()).current, BROKEN);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(rig.down).toHaveBeenNthCalledWith(1, "canary respond: decision not accepted");
+    expect(rig.down).toHaveBeenNthCalledWith(1, "canary respond: decision not accepted", "checking");
     expect(rig.canary).toHaveBeenCalledTimes(2);
     expect(rig.failed).toHaveBeenCalledOnce();
     await rig.loop.stop();

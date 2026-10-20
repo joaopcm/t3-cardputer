@@ -28,6 +28,8 @@ import { T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, 
 
 export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch">;
 export type ApprovalsState = { available: boolean; reason?: string };
+export type ApprovalsDownPhase = "checking" | "fixing" | "none";
+const DOWN_PHASE_SUFFIX: Record<ApprovalsDownPhase, string> = { checking: ", checking again", fixing: ", fix in progress", none: "" };
 
 export type HubDeps = {
   limits: Limits;
@@ -82,7 +84,7 @@ export class Hub {
   private readonly sessions = new Map<string, Session>();
   private readonly answers = new Map<string, Record<string, string>>();
   private brokenReason: string | undefined;
-  private canaryReason: string | undefined;
+  private canaryDown: { reason: string; phase: ApprovalsDownPhase } | undefined;
   private adapter: AdapterHealth = { state: "idle" };
 
   constructor(
@@ -132,21 +134,21 @@ export class Hub {
   }
 
   approvalsState(): ApprovalsState {
-    const reason = this.brokenReason ?? this.canaryReason;
-    if (reason !== undefined) return { available: false, reason: clipText(`approvals down: ${reason}, fix in progress`) };
+    if (this.brokenReason !== undefined) return { available: false, reason: clipText(`approvals down: ${this.brokenReason}, fix in progress`) };
+    if (this.canaryDown !== undefined) return { available: false, reason: clipText(`approvals down: ${this.canaryDown.reason}${DOWN_PHASE_SUFFIX[this.canaryDown.phase]}`) };
     if (this.adapter.state === "unauthorized") return { available: false, reason: T3_AUTH_WARNING };
     return this.deps.approvalsState();
   }
 
-  markApprovalsDown(reason: string): void {
-    this.canaryReason = reason;
-    console.error(`approvals marked down by canary: ${reason}`);
+  markApprovalsDown(reason: string, phase: ApprovalsDownPhase): void {
+    this.canaryDown = { reason, phase };
+    console.error(`approvals marked down by canary (${phase}): ${reason}`);
     for (const session of this.sessions.values()) session.refreshHome();
   }
 
   markApprovalsUp(): void {
-    if (this.canaryReason === undefined) return;
-    this.canaryReason = undefined;
+    if (this.canaryDown === undefined) return;
+    this.canaryDown = undefined;
     for (const session of this.sessions.values()) session.refreshHome();
   }
 

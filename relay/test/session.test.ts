@@ -250,13 +250,27 @@ describe("device session", () => {
     const { t3, server, connected } = await setup();
     t3.threads = [summary("t1")];
     const device = await connected();
-    server.markApprovalsDown("canary respond: decision not accepted");
+    server.markApprovalsDown("canary respond: decision not accepted", "checking");
     const down = await device.next("home", (h) => !h.approvals.available);
     expect(down.approvals.reason).toContain("canary respond: decision not accepted");
-    expect(down.approvals.reason).toContain("fix in progress");
     await pause(POLL_MS * 5);
     server.markApprovalsUp();
     await device.next("home", (h) => h.approvals.available);
+  });
+
+  it("the device text claims a fix only once one is running, and says it is checking again before that", async () => {
+    const { t3, server, connected } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    server.markApprovalsDown("canary respond: nope", "checking");
+    const checking = await device.next("home", (h) => !h.approvals.available);
+    expect(checking.approvals.reason).toBe("approvals down: canary respond: nope, checking again");
+    server.markApprovalsDown("canary respond: nope", "fixing");
+    const fixing = await device.next("home", (h) => h.approvals.reason?.includes("fix in progress") === true);
+    expect(fixing.approvals.reason).toBe("approvals down: canary respond: nope, fix in progress");
+    server.markApprovalsDown("canary respond: nope", "none");
+    const none = await device.next("home", (h) => h.approvals.reason === "approvals down: canary respond: nope");
+    expect(none.approvals.available).toBe(false);
   });
 
   it("frame over device maxFrameBytes is replaced by error naming max_frame_bytes", async () => {

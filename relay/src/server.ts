@@ -9,7 +9,7 @@ import { lockoutSourceKey } from "./auth/lockout.js";
 import type { RelayConfig } from "./config.js";
 import type { DefaultsStore } from "./defaults-store.js";
 import { DEVICE_FRAME_BYTES_MAX, DEVICE_NAME_MAX, DEVICE_PATH, PAIR_BODY_BYTES_MAX } from "./protocol/messages.js";
-import { Hub, type ApprovalsState, type T3Client } from "./session.js";
+import { Hub, type ApprovalsDownPhase, type ApprovalsState, type T3Client } from "./session.js";
 import type { Stt } from "./stt/types.js";
 import { Watcher } from "./watcher.js";
 
@@ -37,7 +37,7 @@ const pairBodySchema = z.strictObject({ code: z.string().min(1), name: z.string(
 export async function startServer(deps: ServerDeps): Promise<{
   port: number;
   disconnect(deviceId: string, reason: string): boolean;
-  markApprovalsDown(reason: string): void;
+  markApprovalsDown(reason: string, phase: ApprovalsDownPhase): void;
   markApprovalsUp(): void;
   close(): Promise<void>;
 }> {
@@ -68,7 +68,7 @@ export async function startServer(deps: ServerDeps): Promise<{
   return {
     port: (http.address() as AddressInfo).port,
     disconnect: (deviceId, reason) => hub.disconnect(deviceId, reason),
-    markApprovalsDown: (reason) => hub.markApprovalsDown(reason),
+    markApprovalsDown: (reason, phase) => hub.markApprovalsDown(reason, phase),
     markApprovalsUp: () => hub.markApprovalsUp(),
     async close() {
       hub.closeAll();
