@@ -13,6 +13,7 @@ export const limitsSchema = z.strictObject({
   pollIntervalMs: positiveInt,
   authFailuresPerWindow: positiveInt,
   authWindowMs: positiveInt,
+  pairingCodeTtlMs: positiveInt,
   mcpRequestTimeoutMs: positiveInt,
   mcpWaitGraceMs: positiveInt,
   mcpMaxPages: positiveInt,
@@ -50,10 +51,12 @@ export const DEFAULT_LIMITS: Limits = {
   audioMaxSeconds: 60,
   // receipt: pending Task 11
   audioIdleTimeoutMs: 5000,
-  // receipt: pending Task 8
+  // receipt: a healthy device produces 0 auth failures, so 20 per source only trips a revoked device retrying on backoff or a stranger guessing; the 31^8 (~8.5e11) code space makes 20 per 10 min per source hopeless
   authFailuresPerWindow: 20,
-  // receipt: pending Task 8
+  // receipt: sized with authFailuresPerWindow, a 10 min window holds a revoked device's backoff retries to a throttle, backoff cadence pending plan 2
   authWindowMs: 10 * 60 * 1000,
+  // receipt: pending plan 2 — time to type the code on the ADV keyboard
+  pairingCodeTtlMs: 10 * 60 * 1000,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), slowest MCP call measured was 114 ms, so 30 s only trips on a hung server
   mcpRequestTimeoutMs: 30_000,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), loopback round trip p95 was under 120 ms, so 10 s past the wait is a tripwire

@@ -18,6 +18,7 @@
     "pollIntervalMs": 2000,
     "authFailuresPerWindow": 20,
     "authWindowMs": 600000,
+    "pairingCodeTtlMs": 600000,
     "mcpRequestTimeoutMs": 30000,
     "mcpWaitGraceMs": 10000,
     "mcpMaxPages": 50,
