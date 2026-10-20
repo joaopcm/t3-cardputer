@@ -375,7 +375,7 @@ Fit rule: the device draws `lines`, then one row per option. The relay keeps `li
 ```
 
 ```json relay
-{"type":"request","threadId":"thr_02","requestId":"req_10","kind":"approval","lines":["cat <<'EOF' > seed.sql","INSERT INTO users VALUES (0, 'a');","INSERT INTO users VALUES (1, 'b');","INSERT INTO users VALUES (2, 'c');","INSERT INTO users VALUES (3, 'd');","command truncated: 116 more lines,","bodyRows=11"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]}
+{"type":"request","threadId":"thr_02","requestId":"req_10","kind":"approval","lines":["cat <<'EOF' > seed.sql","INSERT INTO users VALUES (0, 'a');","INSERT INTO users VALUES (1, 'b');","INSERT INTO users VALUES (2, 'c');","INSERT INTO users VALUES (3, 'd');","command truncated: 115 more lines,","bodyRows=11"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]}
 ```
 
 ```json relay
