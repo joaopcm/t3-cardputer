@@ -1,0 +1,113 @@
+<style>
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(640px,1fr)); gap:28px; margin-top:16px; }
+  .shot h3 { margin:0 0 4px; }
+  .shot p { margin:0 0 10px; opacity:.75; font-size:14px; }
+  .bezel { background:#2b2d31; border-radius:14px; padding:18px; width:fit-content; box-shadow:0 6px 24px rgba(0,0,0,.35); }
+  .lcd-wrap { width:600px; height:337.5px; overflow:hidden; border-radius:3px; }
+  .lcd { width:240px; height:135px; transform:scale(2.5); transform-origin:0 0; background:#000; color:#d8d8d8;
+         font:10px/12px "DejaVu Sans Mono","Menlo",monospace; position:relative; image-rendering:pixelated; }
+  .bar { height:12px; background:#1a1a1a; color:#9a9a9a; display:flex; justify-content:space-between; padding:0 3px; }
+  .hint { position:absolute; bottom:0; left:0; right:0; height:12px; background:#1a1a1a; color:#8a8a8a; padding:0 3px; white-space:nowrap; overflow:hidden; }
+  .row { padding:0 3px; white-space:nowrap; overflow:hidden; height:12px; }
+  .sel { background:#2d4a7a; color:#fff; }
+  .warn { color:#ffb020; } .run { color:#4fc3f7; } .ok { color:#7bd88f; } .dim { color:#6b6b6b; } .red { color:#ff6b6b; }
+  .hdr { color:#fff; }
+  .box { margin:2px 3px; border:1px solid #ffb020; padding:1px 3px; color:#ffe0a0; }
+  .notes { font-size:14px; margin-top:8px; max-width:640px; }
+  .notes li { margin:2px 0; }
+</style>
+
+<h2>Cardputer ADV: screen mockups</h2>
+<p class="subtitle">Drawn at the real 240×135 resolution with a small monospace font (~40 columns × 11 rows), scaled up 2.5×. Arrow keys are the Fn + <code>; . , /</code> keys on the ADV.</p>
+
+<div class="grid">
+
+  <div class="shot">
+    <h3>1 · Home: who needs me?</h3>
+    <p>Opens straight to this. Sorted by urgency: waiting on you, then running, then recently done.</p>
+    <div class="bezel"><div class="lcd-wrap"><div class="lcd">
+      <div class="bar"><span>T3 · homelab</span><span>wifi ▂▄▆ 82%</span></div>
+      <div class="row warn">NEEDS YOU (2)</div>
+      <div class="row sel">! resend-api   fix bounce webhook   3m</div>
+      <div class="row warn">? weaver       layout engine plan   9m</div>
+      <div class="row run">RUNNING (3)</div>
+      <div class="row">● homelab      nightly backup cron  12m</div>
+      <div class="row">● resend-api   flaky test sweep      4m</div>
+      <div class="row">● weaver       measure arena sizes   1m</div>
+      <div class="row ok">DONE TODAY (5) ›</div>
+      <div class="hint">↑↓ move  ⏎ open  N new  R refresh</div>
+    </div></div></div>
+    <ul class="notes"><li><span class="warn">!</span> = approval waiting, <span class="warn">?</span> = agent asked you a question.</li><li>The time is how long it's been in that state.</li></ul>
+  </div>
+
+  <div class="shot">
+    <h3>2 · Approval</h3>
+    <p>Opening a "!" thread jumps straight here. One key answers it.</p>
+    <div class="bezel"><div class="lcd-wrap"><div class="lcd">
+      <div class="bar"><span>resend-api · Opus 5.5</span><span>3m</span></div>
+      <div class="row hdr">Wants to run a command:</div>
+      <div class="box">pnpm vitest run src/webhooks/<br>bounce.test.ts --update</div>
+      <div class="row dim">cwd: worktrees/fix-bounce-webhook</div>
+      <div class="row">&nbsp;</div>
+      <div class="row ok">[Y] allow once</div>
+      <div class="row">[A] always allow in this thread</div>
+      <div class="row red">[N] deny   <span class="dim">[T] deny + tell why</span></div>
+      <div class="hint">Y/A/N/T  ⏎ full thread  ⌫ back</div>
+    </div></div></div>
+    <ul class="notes"><li>Options mirror whatever T3 offers for that request. If the agent asked a question instead, its choices show here.</li></ul>
+  </div>
+
+  <div class="shot">
+    <h3>3 · Thread: latest reply</h3>
+    <p>Only the last agent message, word-wrapped and scrollable. Not the transcript.</p>
+    <div class="bezel"><div class="lcd-wrap"><div class="lcd">
+      <div class="bar"><span>weaver · layout engine</span><span class="ok">done</span></div>
+      <div class="row dim">Opus 5.5 · 2m ago · 1/3</div>
+      <div class="row">Measured 14 real widgets. Max nodes</div>
+      <div class="row">seen was 212, so I set the tripwire</div>
+      <div class="row">at 2048 and made the error name the</div>
+      <div class="row">limit and the ask. All 38 tests pass.</div>
+      <div class="row">PR #41 is open against main.</div>
+      <div class="row">&nbsp;</div>
+      <div class="row sel">&gt; _</div>
+      <div class="hint">type to reply  hold ` talk  ↑↓ scroll</div>
+    </div></div></div>
+    <ul class="notes"><li>Typing anything starts the reply line. The reply goes to the same thread with the same model.</li></ul>
+  </div>
+
+  <div class="shot">
+    <h3>4 · Voice prompt</h3>
+    <p>Hold one key to talk, release to stop. You see the text before it's sent.</p>
+    <div class="bezel"><div class="lcd-wrap"><div class="lcd">
+      <div class="bar"><span>weaver · reply</span><span class="red">● REC 0:06</span></div>
+      <div class="row">&nbsp;</div>
+      <div class="row run">▁▃▅▇▆▄▂▁▂▄▆▇▅▃▁▁▂▃▅▆▄▂</div>
+      <div class="row">&nbsp;</div>
+      <div class="row dim">── transcript ──</div>
+      <div class="row">ship it, but also add a test for</div>
+      <div class="row">the 2049th node case_</div>
+      <div class="row">&nbsp;</div>
+      <div class="row">&nbsp;</div>
+      <div class="hint">⏎ send  E edit  ⌫ discard  hold ` more</div>
+    </div></div></div>
+    <ul class="notes"><li>Audio streams to the homelab while you talk (no PSRAM to buffer it). The transcript fills in live or right after release.</li><li>E drops the text into the keyboard line so you can fix a misheard word.</li></ul>
+  </div>
+
+  <div class="shot">
+    <h3>5 · New task</h3>
+    <p>What you approved: pick a project, the rest is remembered per project.</p>
+    <div class="bezel"><div class="lcd-wrap"><div class="lcd">
+      <div class="bar"><span>new task</span><span>2/2</span></div>
+      <div class="row hdr">resend-api</div>
+      <div class="row dim">Tab: Opus 5.5 · new worktree · auto</div>
+      <div class="row">&nbsp;</div>
+      <div class="row">&gt; the bounce webhook drops events</div>
+      <div class="row">  when the payload has no tags. find</div>
+      <div class="row">  why and open a PR_</div>
+      <div class="row">&nbsp;</div>
+      <div class="row">&nbsp;</div>
+      <div class="hint">⏎ start  Tab options  hold ` talk</div>
+    </div></div></div>
+  </div>
+
+</div>
