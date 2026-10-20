@@ -7,7 +7,7 @@ import { AdminUnavailableError, adminRequest, type AdminReply, type AdminRequest
 import { pairT3Internal } from "./approvals/index.js";
 import { DeviceAuth } from "./auth/devices.js";
 import { runCanary, type CanaryDeps } from "./canary.js";
-import { DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, loadConfig, type RelayConfig } from "./config.js";
+import { loadConfig, relayPathsFrom, type RelayConfig } from "./config.js";
 import { readSecret, type SecretInput } from "./read-secret.js";
 import { SecretsStore, type TokenRecord } from "./secrets.js";
 import { ADMIN_SOCKET_NAME, VERSION_STATE_NAME, connectT3, startRelay } from "./serve.js";
@@ -233,8 +233,7 @@ function waitForSignal(): Promise<void> {
 
 if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   runCli(process.argv.slice(2), {
-    configPath: DEFAULT_CONFIG_PATH,
-    secretsPath: DEFAULT_SECRETS_PATH,
+    ...relayPathsFrom(process.env),
     simConfigPath: DEFAULT_SIM_CONFIG_PATH,
     stdin: process.stdin,
     stdout: (line) => console.log(line),

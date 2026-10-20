@@ -31,6 +31,9 @@ export const limitsSchema = z.strictObject({
   heartbeatMaxMissed: positiveInt,
   canaryTimeoutMs: positiveInt,
   canaryRetryMaxMs: positiveInt,
+  repairPollIntervalMs: positiveInt,
+  repairAttemptTimeoutMs: positiveInt,
+  repairStepTimeoutMs: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -44,6 +47,7 @@ export const configSchema = z.strictObject({
     maxAttemptsPerVersion: positiveInt,
     githubRepo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, "expected owner/name"),
     deployDir: z.string().min(1),
+    projectId: z.string().min(1).optional(),
   }),
   limits: limitsSchema,
 });
@@ -104,6 +108,12 @@ export const DEFAULT_LIMITS: Limits = {
   canaryTimeoutMs: 32_165,
   // receipt: docs/receipts/2026-10-20-canary.md, a canary is one 5.6-6.4 s Haiku turn, so backing off from the 20 s version check to 1 h caps a persistent no-verdict failure (revoked token, T3 down) at 24 turns a day after the first few
   canaryRetryMaxMs: 3_600_000,
+  // receipt: CI's steps took 1.5 s install + 0.8 s typecheck + 2.6 s test locally (Task 14), runner start pending Task 15; one PR poll is one GraphQL call against GitHub's 5000/h user budget, so 120/h is 2.4%
+  repairPollIntervalMs: 30_000,
+  // receipt: pending first real repair run; one Opus turn plus CI plus a staging canary, 2 h only trips a stuck thread, and the next attempt starts fresh
+  repairAttemptTimeoutMs: 2 * 60 * 60 * 1000,
+  // receipt: Task 14 measured pnpm install --frozen-lockfile 0.76-1.47 s (cold store 1.44 s), pnpm build 0.66 s, cli start 0.2 s; gh and git fetch against GitHub pending Task 15; 60 s is 40x the slowest
+  repairStepTimeoutMs: 60_000,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {
@@ -115,7 +125,7 @@ export const DEFAULT_CONFIG: RelayConfig = {
   canary: { model: "claude-haiku-5-5" },
   repair: {
     model: "claude-opus-5-5",
-    // receipt: pending Task 14
+    // receipt: pending first real repair run
     maxAttemptsPerVersion: 3,
     githubRepo: "joaopcm/t3-cardputer",
     deployDir: join(dataDir, "deploy"),
@@ -127,6 +137,12 @@ const configDir = join(homedir(), ".config", "t3-cardputer");
 
 export const DEFAULT_CONFIG_PATH = join(configDir, "relay.json");
 export const DEFAULT_SECRETS_PATH = join(configDir, "secrets.json");
+export const CONFIG_PATH_ENV = "T3_CARDPUTER_RELAY_CONFIG";
+export const SECRETS_PATH_ENV = "T3_CARDPUTER_RELAY_SECRETS";
+
+export function relayPathsFrom(env: NodeJS.ProcessEnv): { configPath: string; secretsPath: string } {
+  return { configPath: env[CONFIG_PATH_ENV] || DEFAULT_CONFIG_PATH, secretsPath: env[SECRETS_PATH_ENV] || DEFAULT_SECRETS_PATH };
+}
 
 type Plain = Record<string, unknown>;
 

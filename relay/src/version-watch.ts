@@ -16,6 +16,8 @@ export type Verdict = z.infer<typeof verdictSchema>;
 export type VersionCheck = { current: Seen; to: string; from?: string; changed: boolean; saved?: Verdict };
 type Versions = { from?: string; to: string };
 
+export const canaryDownReason = (failure: { stage: string; reason: string }) => `canary ${failure.stage}: ${failure.reason}`;
+
 const label = (seen: Seen) => `${seen.serverVersion}+orch${seen.orchestrationProtocolVersion}`;
 
 export function verdictOf(result: CanaryResult): Verdict | undefined {
@@ -102,7 +104,7 @@ export function startVersionLoop(deps: VersionLoopDeps): { stop(): Promise<void>
     if (applied === appliedKey) return;
     appliedKey = applied;
     if (verdict.verdict === "pass") deps.markApprovalsUp();
-    else deps.markApprovalsDown(`canary ${verdict.stage}: ${verdict.reason}`, phase);
+    else deps.markApprovalsDown(canaryDownReason(verdict), phase);
   };
 
   const scheduleRetry = (versions: Versions, why: string) => {

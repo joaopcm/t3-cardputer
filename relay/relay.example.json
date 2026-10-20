@@ -8,7 +8,8 @@
     "model": "claude-opus-5-5",
     "maxAttemptsPerVersion": 3,
     "githubRepo": "joaopcm/t3-cardputer",
-    "deployDir": "/home/you/.local/share/t3-cardputer/deploy"
+    "deployDir": "/home/you/.local/share/t3-cardputer/deploy",
+    "projectId": "<t3 project id of this repo, from t3_project_list>"
   },
   "limits": {
     "maxReplyPages": 32,
@@ -35,6 +36,9 @@
     "heartbeatIntervalMs": 30000,
     "heartbeatMaxMissed": 2,
     "canaryTimeoutMs": 32165,
-    "canaryRetryMaxMs": 3600000
+    "canaryRetryMaxMs": 3600000,
+    "repairPollIntervalMs": 30000,
+    "repairAttemptTimeoutMs": 7200000,
+    "repairStepTimeoutMs": 60000
   }
 }

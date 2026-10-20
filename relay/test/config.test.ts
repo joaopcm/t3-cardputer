@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, loadConfig } from "../src/config.js";
+import { CONFIG_PATH_ENV, DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, SECRETS_PATH_ENV, loadConfig, relayPathsFrom } from "../src/config.js";
 
 function tmpFile(contents: string): string {
   const path = join(mkdtempSync(join(tmpdir(), "relay-config-")), "relay.json");
@@ -15,6 +15,20 @@ describe("default paths", () => {
     expect(DEFAULT_CONFIG_PATH).toBe(join(homedir(), ".config", "t3-cardputer", "relay.json"));
     expect(DEFAULT_SECRETS_PATH).toBe(join(homedir(), ".config", "t3-cardputer", "secrets.json"));
     expect(DEFAULT_CONFIG.stateDir).toBe(join(homedir(), ".local", "state", "t3-cardputer"));
+  });
+});
+
+describe("relayPathsFrom", () => {
+  it("uses the default paths unless the environment points elsewhere", () => {
+    expect(relayPathsFrom({})).toEqual({ configPath: DEFAULT_CONFIG_PATH, secretsPath: DEFAULT_SECRETS_PATH });
+    expect(relayPathsFrom({ [CONFIG_PATH_ENV]: "/tmp/staging/relay.json", [SECRETS_PATH_ENV]: "/tmp/s.json" })).toEqual({
+      configPath: "/tmp/staging/relay.json",
+      secretsPath: "/tmp/s.json",
+    });
+  });
+
+  it("ignores empty values", () => {
+    expect(relayPathsFrom({ [CONFIG_PATH_ENV]: "", [SECRETS_PATH_ENV]: "" })).toEqual({ configPath: DEFAULT_CONFIG_PATH, secretsPath: DEFAULT_SECRETS_PATH });
   });
 });
 

@@ -5,6 +5,9 @@ import { DeviceAuth } from "./auth/devices.js";
 import { runCanary, type CanaryFailure } from "./canary.js";
 import { loadConfig, type RelayConfig } from "./config.js";
 import { DefaultsStore } from "./defaults-store.js";
+import { deploy } from "./deploy.js";
+import { execRunner } from "./exec.js";
+import { RepairOrchestrator } from "./repair/orchestrator.js";
 import { SecretsStore } from "./secrets.js";
 import { startServer, type ApprovalsState } from "./server.js";
 import { createWhisperStt } from "./stt/whisper.js";
@@ -99,6 +102,17 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       const state = approvalsState();
       return state.available ? undefined : state.reason;
     };
+    const repair = new RepairOrchestrator({
+      config,
+      secretsPath: paths.secretsPath,
+      exec: execRunner,
+      githubToken: () => secrets.read().githubToken,
+      t3,
+      markApprovalsDown: server.markApprovalsDown,
+      setWarning: server.setRepairWarning,
+      deploy: () => deploy(config),
+    });
+    closers.push(() => repair.close());
     const versionLoop = startVersionLoop({
       watch: new VersionWatch(() => getEnvironment(config.t3BaseUrl), join(stateDir, VERSION_STATE_NAME)),
       intervalMs: limits.pollIntervalMs * VERSION_CHECK_EVERY_POLLS,
@@ -107,7 +121,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       canary: () => runCanary({ t3, approvals }, { model: config.canary.model, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs }),
       markApprovalsUp: server.markApprovalsUp,
       markApprovalsDown: server.markApprovalsDown,
-      ...(hooks.onCanaryFailed ? { onCanaryFailed: hooks.onCanaryFailed } : {}),
+      onCanaryFailed: hooks.onCanaryFailed ?? ((failure, versions) => repair.onBroken(failure, versions)),
     });
     closers.push(versionLoop.stop);
     return { port: server.port, close };

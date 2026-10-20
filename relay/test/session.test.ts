@@ -273,6 +273,19 @@ describe("device session", () => {
     expect(none.approvals.available).toBe(false);
   });
 
+  it("a repair warning shows on Home until approvals come back up", async () => {
+    const { t3, server, connected } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    server.markApprovalsDown("canary respond: nope", "none");
+    server.setRepairWarning("approvals repair gave up after 3 attempts for T3 0.0.27+orch3");
+    const warned = await device.next("home", (h) => h.warnings.length > 0);
+    expect(warned.warnings).toContain("approvals repair gave up after 3 attempts for T3 0.0.27+orch3");
+    server.markApprovalsUp();
+    const up = await device.next("home", (h) => h.approvals.available);
+    expect(up.warnings).toEqual([]);
+  });
+
   it("frame over device maxFrameBytes is replaced by error naming max_frame_bytes", async () => {
     const { t3, connect, token } = await setup();
     t3.threads = Array.from({ length: 8 }, (_, i) => summary(`thread-${i}`, "running", HOURS_AGO(2), "a long title that fills the row"));

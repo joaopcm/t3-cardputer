@@ -39,6 +39,7 @@ export async function startServer(deps: ServerDeps): Promise<{
   disconnect(deviceId: string, reason: string): boolean;
   markApprovalsDown(reason: string, phase: ApprovalsDownPhase): void;
   markApprovalsUp(): void;
+  setRepairWarning(text: string | undefined): void;
   close(): Promise<void>;
 }> {
   const { limits } = deps.config;
@@ -70,6 +71,7 @@ export async function startServer(deps: ServerDeps): Promise<{
     disconnect: (deviceId, reason) => hub.disconnect(deviceId, reason),
     markApprovalsDown: (reason, phase) => hub.markApprovalsDown(reason, phase),
     markApprovalsUp: () => hub.markApprovalsUp(),
+    setRepairWarning: (text) => hub.setRepairWarning(text),
     async close() {
       hub.closeAll();
       for (const ws of wss.clients) ws.terminate();

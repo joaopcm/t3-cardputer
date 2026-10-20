@@ -85,6 +85,7 @@ export class Hub {
   private readonly answers = new Map<string, Record<string, string>>();
   private brokenReason: string | undefined;
   private canaryDown: { reason: string; phase: ApprovalsDownPhase } | undefined;
+  private repairWarning: string | undefined;
   private adapter: AdapterHealth = { state: "idle" };
 
   constructor(
@@ -129,8 +130,14 @@ export class Hub {
     this.watcher.stop();
   }
 
-  sttWarning(): string | undefined {
-    return this.deps.stt.warning?.();
+  warnings(): string[] {
+    return [this.deps.stt.warning?.(), this.repairWarning].filter((warning) => warning !== undefined);
+  }
+
+  setRepairWarning(text: string | undefined): void {
+    if (text === this.repairWarning) return;
+    this.repairWarning = text;
+    for (const session of this.sessions.values()) session.refreshHome();
   }
 
   approvalsState(): ApprovalsState {
@@ -147,8 +154,9 @@ export class Hub {
   }
 
   markApprovalsUp(): void {
-    if (this.canaryDown === undefined) return;
+    if (this.canaryDown === undefined && this.repairWarning === undefined) return;
     this.canaryDown = undefined;
+    this.repairWarning = undefined;
     for (const session of this.sessions.values()) session.refreshHome();
   }
 
@@ -363,7 +371,6 @@ export class Session {
   private pushHome(snapshot: WatchSnapshot): void {
     const hello = this.hello!;
     this.lastSnapshot = snapshot;
-    const sttWarning = this.hub.sttWarning();
     const home = buildHome({
       threads: snapshot.threads,
       approvals: snapshot.approvals,
@@ -372,7 +379,7 @@ export class Session {
       maxRows: Math.min(hello.maxHomeRows, this.hub.deps.limits.maxHomeRows),
       cols: hello.cols,
       approvalsState: this.hub.approvalsState(),
-      warnings: [...snapshot.warnings, ...(sttWarning === undefined ? [] : [sttWarning])].map(clipText),
+      warnings: [...snapshot.warnings, ...this.hub.warnings()].map(clipText),
       t3: snapshot.t3,
     });
     const key = homeKey(home);
