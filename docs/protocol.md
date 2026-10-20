@@ -71,7 +71,7 @@ POST /v1/pair
 | 4401 | auth: the relay rejected the token (unknown, wrong, or revoked), preceded by `error auth`. Also sent mid-session, after `welcome`, when the device is revoked on the relay (`error auth` "device revoked, re-pair this device", then close 4401). Only a token problem closes with 4401 | stop reconnecting, show "re-pair", clear the stored token |
 | 4402 | bad_hello: the first frame was not a `hello`, or `hello` failed validation (preceded by `error bad_message` naming the problem) | stop reconnecting, show the error message; firmware bug or incompatible build, re-pairing will not help |
 | 4408 | hello_timeout: no `hello` within `helloTimeoutMs` (preceded by `error hello_timeout` naming the budget), usually a stalled hotspot | keep the token, reconnect with backoff |
-| 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "taken over by another connection" |
+| 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "replaced by another connection" |
 
 Any other close (network drop, relay restart) is reconnected with backoff.
 
@@ -143,7 +143,7 @@ Ask for another page of an open thread. Answered by `ack`, then `thread_page`.
 
 ### reply
 
-Send a message into a thread. `queue` waits for the running turn to finish, `steer` interrupts it.
+Send a message into a thread. `queue` waits for the running turn to finish, `steer` delivers the message into the running turn (T3 `steer`), it does not interrupt.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
@@ -188,7 +188,7 @@ Start a new thread in a project. Omitted `model`, `workspace`, `runtimeMode` use
 | `id` | string | yes | 1-16 chars |
 | `projectId` | string | yes | 1-128 chars, from `projects` |
 | `text` | string | yes | 1-4000 chars, the first prompt |
-| `model?` | string | no | 1-128 chars, a model id from `projects.defaults.model` |
+| `model?` | string | no | 1-128 chars, a model id from `projects.models[].id` or `projects.defaults.model` |
 | `workspace?` | `"root"` or `"worktree"` | no | |
 | `runtimeMode?` | string | no | `"approval-required"`, `"auto-accept-edits"`, `"auto"`, or `"full-access"` |
 
@@ -409,18 +409,25 @@ Fit rule: the device draws `lines`, then one row per option. The relay keeps `li
 
 ### projects
 
-Projects the device can launch into, with the defaults a `launch` gets when it omits a field. Sorted most recently active first (latest thread activity in the project, else the project's own update time), already in display order.
+Projects the device can launch into, with the defaults a `launch` gets when it omits a field, and the models a `launch` may name. Sorted most recently active first (latest thread activity in the project, else the project's own update time), already in display order.
 
 The list fits the same budgets as home: at most `hello.maxHomeRows` items (and the relay's own `maxHomeRows` limit, whichever is lower), and a frame within `maxFrameBytes`. When projects are left out, `truncated` says how many and which budget did it; the device shows it under the list, for example `+32 more projects: maxHomeRows=8, needed 40`. Left-out projects are the least recently active ones.
+
+`models` are the usable models of T3's catalog, in catalog order. `label` is printable ASCII, 1-16 chars (the id without a leading `claude-`, clipped with `...`); `id` is what `launch.model` takes. The list shares the frame budget with the projects: it is kept whole while at least one project fits beside it, and cut from the end only when it would otherwise push every project out. `models` is absent when T3 offers none. A device with no `models` offers only the project's default model.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"projects"` | yes | |
 | `items` | object[] | yes | `{projectId, name, defaults: {model, workspace, runtimeMode}}`; `workspace` is `"root"` or `"worktree"`, `runtimeMode` is one of the four launch values |
+| `models?` | object[] | no | `{id, label}`; `id` is 1-128 chars, `label` 1-16 printable ASCII chars |
 | `truncated?` | object | no | `{budget: string, limit: int, actual: int, hidden: int}`; present when projects were left out: `budget` is `maxHomeRows` or `maxFrameBytes`, `limit` its value, `actual` what all projects needed (a count for `maxHomeRows`, bytes for `maxFrameBytes`), `hidden` how many projects are not in `items` |
 
 ```json relay
 {"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}]}
+```
+
+```json relay
+{"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}],"models":[{"id":"claude-opus-5-5","label":"opus-5-5"},{"id":"claude-sonnet-5-5","label":"sonnet-5-5"},{"id":"claude-haiku-5-5","label":"haiku-5-5"}]}
 ```
 
 ```json relay

@@ -262,6 +262,31 @@ describe("device session", () => {
     expect(device.received.some((m) => m.type === "error")).toBe(false);
   });
 
+  it("list_projects offers the usable models and launch accepts any listed id", async () => {
+    const { t3, connected } = await setup();
+    t3.models = [{ id: "claude-opus-5-5" }, { id: "claude-sonnet-5-5" }];
+    const device = await connected();
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect((await device.next("ack")).id).toBe("l1");
+    expect(projects.models).toEqual([
+      { id: "claude-opus-5-5", label: "opus-5-5" },
+      { id: "claude-sonnet-5-5", label: "sonnet-5-5" },
+    ]);
+
+    device.send({ type: "launch", id: "l2", projectId: "p1", text: "go", model: projects.models![1]!.id });
+    expect(await device.next("ack")).toMatchObject({ id: "l2", ok: true });
+    expect(t3.launches[0]).toMatchObject({ projectId: "p1", model: "claude-sonnet-5-5" });
+  });
+
+  it("list_projects without a model catalog sends no models", async () => {
+    const { connected } = await setup();
+    const device = await connected();
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect("models" in projects).toBe(false);
+  });
+
   it("a failed reply repeated with the same id gets the same failure, and a new id runs it", async () => {
     const { t3, connected } = await setup();
     t3.threads = [summary("t1")];

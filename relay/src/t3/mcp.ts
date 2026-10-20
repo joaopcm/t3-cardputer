@@ -44,6 +44,7 @@ export function isConnectionError(error: unknown): boolean {
 }
 
 export type T3Project = { projectId: string; name: string; defaultModel?: string; defaultWorkspace?: "root" | "worktree"; updatedAt?: string };
+export type T3Model = { id: string };
 export type T3ThreadSummary = { threadId: string; projectId: string; title: string; status: string; updatedAt: string };
 export type T3Question = {
   requestId: string;
@@ -83,6 +84,16 @@ const projectListSchema = z.object({
     }),
   ),
   nextCursor: z.number().nullish(),
+});
+
+const capabilitiesSchema = z.object({
+  providers: z.array(
+    z.object({
+      providerInstanceId: z.string(),
+      constraints: z.array(z.unknown()).nullish(),
+      models: z.array(z.object({ id: z.string() })),
+    }),
+  ),
 });
 
 const threadListSchema = z.object({
@@ -154,6 +165,13 @@ export class T3Mcp {
       return page.nextCursor;
     });
     return projects;
+  }
+
+  async listModels(): Promise<T3Model[]> {
+    const { providers } = capabilitiesSchema.parse(await this.call("orchestrator_capabilities", {}));
+    // receipt: docs/receipts/2026-10-20-approvals-spike.md (f), a provider is usable when its constraints list is empty
+    const provider = providers.find((p) => p.providerInstanceId === PROVIDER_INSTANCE_ID && (p.constraints ?? []).length === 0);
+    return (provider?.models ?? []).map((model) => ({ id: model.id }));
   }
 
   async listThreads(projectId: string): Promise<T3ThreadSummary[]> {

@@ -86,6 +86,29 @@ describe("T3Mcp", () => {
     expect(projects[0]).toEqual({ projectId: "<project-id-1>", name: "project-1", defaultModel: "claude-opus-5", defaultWorkspace: "worktree", updatedAt: "2026-08-23T14:52:53.124Z" });
   });
 
+  it("listModels returns the usable claudeAgent models from orchestrator_capabilities", async () => {
+    const { mcp, calls } = fakeMcp({
+      orchestrator_capabilities: () => ({
+        providers: [
+          { providerInstanceId: "claudeAgent", constraints: [], models: [{ id: "claude-opus-5-5", name: "Opus" }, { id: "claude-haiku-5-5" }] },
+          { providerInstanceId: "cursor", constraints: [{ kind: "unauthenticated" }], models: [{ id: "grok-4.7" }] },
+          { providerInstanceId: "pi", constraints: [], models: [{ id: "default" }] },
+        ],
+      }),
+    });
+
+    expect(await mcp.listModels()).toEqual([{ id: "claude-opus-5-5" }, { id: "claude-haiku-5-5" }]);
+    expect(calls).toEqual([{ name: "orchestrator_capabilities", args: {} }]);
+  });
+
+  it("listModels is empty when claudeAgent is constrained", async () => {
+    const { mcp } = fakeMcp({
+      orchestrator_capabilities: () => ({ providers: [{ providerInstanceId: "claudeAgent", constraints: [{ kind: "disabled" }], models: [{ id: "claude-opus-5-5" }] }] }),
+    });
+
+    expect(await mcp.listModels()).toEqual([]);
+  });
+
   it("listThreads follows nextCursor until null", async () => {
     const pages: Record<string, unknown> = {
       first: { projectId: "p1", threads: [thread("a"), thread("b")], nextCursor: 2 },

@@ -624,7 +624,11 @@ class DeviceSim {
       case "prompt":
         return {
           bar: ["new task 2/2"],
-          body: [s.project.name, `${s.project.defaults.model} ${s.project.defaults.workspace} ${s.project.defaults.runtimeMode}`],
+          body: [
+            s.project.name,
+            `${s.project.defaults.model} ${s.project.defaults.workspace} ${s.project.defaults.runtimeMode}`,
+            ...(this.projects?.models === undefined ? [] : [`models ${this.projects.models.map((m) => m.label).join(" ")}`]),
+          ],
           hint: "type prompt, Enter starts /talk /b back",
           numbered: false,
         };

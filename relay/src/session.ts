@@ -29,7 +29,7 @@ import { buildRequest } from "./views/request.js";
 import { buildThreadPage, type ThreadPageMessage } from "./views/thread.js";
 import { EMPTY_SNAPSHOT, T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, type WatcherT3 } from "./watcher.js";
 
-export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch">;
+export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch" | "listModels">;
 export type ApprovalsState = { available: boolean; reason?: string };
 export type ApprovalsDownPhase = "checking" | "fixing" | "none";
 const DOWN_PHASE_SUFFIX: Record<ApprovalsDownPhase, string> = { checking: ", checking again", fixing: ", fix in progress", none: "" };
@@ -729,6 +729,7 @@ export class Session {
 
   private async listProjects(id: string): Promise<Ack> {
     const projects = await this.hub.deps.t3.listProjects();
+    const models = await this.hub.deps.t3.listModels();
     const byId = new Map(projects.map((p) => [p.projectId, p]));
     const activity = new Map<string, number>();
     for (const thread of (await this.hub.watcher.current()).threads) {
@@ -741,6 +742,7 @@ export class Session {
       { get: (projectId) => this.hub.deps.defaults.get(projectId) ?? t3Defaults(byId.get(projectId)) },
       { model: "", workspace: "root", runtimeMode: FALLBACK_RUNTIME_MODE },
       { maxRows: Math.min(hello.maxHomeRows, this.hub.deps.limits.maxHomeRows), maxFrameBytes: hello.maxFrameBytes, activity },
+      models,
     );
     this.send(view);
     return ok(id);

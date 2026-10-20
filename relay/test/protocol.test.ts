@@ -61,6 +61,23 @@ describe("docs/protocol.md", () => {
     }
   });
 
+  it("doc example for projects with models parses", () => {
+    const withModels = examples("relay").filter((raw) => {
+      const msg = JSON.parse(raw) as { type: string; models?: unknown };
+      return msg.type === "projects" && msg.models !== undefined;
+    });
+    expect(withModels.length).toBeGreaterThan(0);
+    for (const raw of withModels) {
+      const parsed = relayMessageSchema.parse(JSON.parse(raw));
+      expect(parsed.type === "projects" && (parsed.models ?? []).length > 0).toBe(true);
+    }
+  });
+
+  it("describes steer as delivered into the running turn, not as an interrupt", () => {
+    expect(doc).toContain("delivers the message into the running turn (T3 `steer`), it does not interrupt");
+    expect(doc).not.toContain("`steer` interrupts it");
+  });
+
   it("has an example for every message type", () => {
     const seen = (side: "device" | "relay") =>
       new Set(examples(side).map((raw) => (JSON.parse(raw) as { type: string }).type));
