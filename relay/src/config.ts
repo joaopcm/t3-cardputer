@@ -16,6 +16,7 @@ export const limitsSchema = z.strictObject({
   mcpRequestTimeoutMs: positiveInt,
   mcpWaitGraceMs: positiveInt,
   mcpMaxPages: positiveInt,
+  approvalsRpcTimeoutMs: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -59,6 +60,8 @@ export const DEFAULT_LIMITS: Limits = {
   mcpWaitGraceMs: 10_000,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), busiest project was 57 threads in 2 pages of 50, so 50 pages covers 2500 threads per project
   mcpMaxPages: 50,
+  // receipt: docs/receipts/2026-10-20-approvals-spike.md (b), respond answered in 7-17 ms and the snapshot in 7 ms, so 10 s only trips on a hung or changed server
+  approvalsRpcTimeoutMs: 10_000,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

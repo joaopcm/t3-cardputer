@@ -20,6 +20,7 @@
     "authWindowMs": 600000,
     "mcpRequestTimeoutMs": 30000,
     "mcpWaitGraceMs": 10000,
-    "mcpMaxPages": 50
+    "mcpMaxPages": 50,
+    "approvalsRpcTimeoutMs": 10000
   }
 }
