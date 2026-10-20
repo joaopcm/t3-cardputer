@@ -1,101 +1,43 @@
-
 #include <cstdio>
 
-#include "driver/i2c_master.h"
+#include "debug_serial.h"
+#include "display.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
-#define M5GFX_BOARD lgfx::boards::board_M5CardputerADV
-#include <M5GFX.h>
+#include "t3/grid.h"
+#include "t3/keys.h"
 
 namespace {
 
-constexpr char TAG[] = "hello";
-constexpr char T3_TAG[] = "t3";
-
-constexpr gpio_num_t KBD_SDA = GPIO_NUM_8;
-constexpr gpio_num_t KBD_SCL = GPIO_NUM_9;
-constexpr uint8_t KBD_ADDR = 0x34;
-constexpr uint32_t KBD_HZ = 400000;
-
-constexpr uint8_t TCA_REG_CFG = 0x01;
-constexpr uint8_t TCA_REG_INT_STAT = 0x02;
-constexpr uint8_t TCA_REG_KEY_EVENT_A = 0x04;
-constexpr uint8_t TCA_REG_KP_GPIO1 = 0x1D;
-constexpr uint8_t TCA_REG_KP_GPIO2 = 0x1E;
-constexpr uint8_t TCA_REG_KP_GPIO3 = 0x1F;
-
-M5GFX display;
-i2c_master_bus_handle_t i2c_bus;
-i2c_master_dev_handle_t tca;
-
-esp_err_t tca_write(uint8_t reg, uint8_t val)
-{
-    uint8_t buf[2] = {reg, val};
-    return i2c_master_transmit(tca, buf, sizeof(buf), 100);
-}
-
-esp_err_t tca_read(uint8_t reg, uint8_t *val)
-{
-    return i2c_master_transmit_receive(tca, &reg, 1, val, 1, 100);
-}
-
-bool kbd_init()
-{
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = KBD_SDA,
-        .scl_io_num = KBD_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .intr_priority = 0,
-        .trans_queue_depth = 0,
-        .flags = {.enable_internal_pullup = true},
-    };
-    if (i2c_new_master_bus(&bus_cfg, &i2c_bus) != ESP_OK) {
-        return false;
-    }
-
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = KBD_ADDR,
-        .scl_speed_hz = KBD_HZ,
-    };
-    if (i2c_master_bus_add_device(i2c_bus, &dev_cfg, &tca) != ESP_OK) {
-        return false;
-    }
-
-    if (tca_write(TCA_REG_KP_GPIO1, 0x7F) != ESP_OK) {
-        return false;
-    }
-    tca_write(TCA_REG_KP_GPIO2, 0xFF);
-    tca_write(TCA_REG_KP_GPIO3, 0x00);
-    tca_write(TCA_REG_CFG, 0x01);
-    tca_write(TCA_REG_INT_STAT, 0x0F);
-    return true;
-}
-
-bool kbd_poll_press(uint8_t *keycode)
-{
-    uint8_t ev = 0;
-    if (tca_read(TCA_REG_KEY_EVENT_A, &ev) != ESP_OK || ev == 0) {
-        return false;
-    }
-    tca_write(TCA_REG_INT_STAT, 0x0F);
-    if ((ev & 0x80) == 0) {
-        return false;
-    }
-    *keycode = ev & 0x7F;
-    return true;
-}
+constexpr char TAG[] = "t3";
+constexpr TickType_t kMainPollTicks = pdMS_TO_TICKS(20);
 
 void log_heap(const char *label)
 {
-    ESP_LOGI(T3_TAG, "%s heap_internal_free=%u largest_block=%u", label,
+    ESP_LOGI(TAG, "%s heap_internal_free=%u largest_block=%u", label,
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+}
+
+void draw_test_grid()
+{
+    using t3::Color;
+    t3::Grid grid;
+    grid.put(0, 0, "T3 - homelab");
+    grid.put(0, 32, "wifi 82%");
+    grid.put(1, 0, "NEEDS YOU (2)", Color::Warn);
+    grid.put(2, 0, "! resend-api   fix bounce webhook   3m", Color::Hdr);
+    grid.selectRow(2);
+    grid.put(3, 0, "? weaver       layout engine plan   9m", Color::Warn);
+    grid.put(4, 0, "RUNNING (3)", Color::Run);
+    grid.put(5, 0, "* homelab      nightly backup cron  12m");
+    grid.put(6, 0, "* resend-api   flaky test sweep      4m");
+    grid.put(7, 0, "* weaver       measure arena sizes   1m");
+    grid.put(8, 0, "DONE TODAY (5) >", Color::Ok);
+    grid.put(10, 0, "^v move  Enter open  N new  R refresh");
+    display_draw(grid);
 }
 
 }
@@ -103,43 +45,19 @@ void log_heap(const char *label)
 extern "C" void app_main(void)
 {
     log_heap("boot");
-    ESP_LOGI(T3_TAG, "relay_url_len=%u", static_cast<unsigned>(sizeof(T3_RELAY_URL) - 1));
-    display.init();
-    log_heap("display");
-    display.setRotation(1);
-    display.fillScreen(TFT_BLACK);
-    display.setTextColor(TFT_WHITE, TFT_BLACK);
-    display.setTextSize(2);
-    display.setCursor(8, 40);
-    display.print("Hello world!");
-    display.setTextSize(1);
-    display.setCursor(8, 80);
-    display.print("Press any key...");
-
-    if (!kbd_init()) {
-        ESP_LOGE(TAG, "TCA8418 init failed — is this a Cardputer ADV?");
-        display.setCursor(8, 100);
-        display.setTextColor(TFT_RED, TFT_BLACK);
-        display.print("No TCA8418");
+    if (!display_init()) {
         return;
     }
+    log_heap("sprite");
+    draw_test_grid();
+    debug_serial_start();
+    log_heap("ready");
 
-    ESP_LOGI(TAG, "Waiting for key...");
-    uint8_t key = 0;
     for (;;) {
-        if (kbd_poll_press(&key)) {
-            break;
+        t3::Key key;
+        while (debug_serial_poll_key(&key)) {
+            ESP_LOGI(TAG, "key %s", t3::keyNameString(key).c_str());
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(kMainPollTicks);
     }
-
-    char line[32];
-    std::snprintf(line, sizeof(line), "key %u", static_cast<unsigned>(key));
-    ESP_LOGI(TAG, "%s", line);
-
-    display.fillScreen(TFT_DARKGREEN);
-    display.setTextColor(TFT_WHITE, TFT_DARKGREEN);
-    display.setTextSize(2);
-    display.setCursor(8, 50);
-    display.print(line);
 }

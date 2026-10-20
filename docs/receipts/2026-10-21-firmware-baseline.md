@@ -21,3 +21,25 @@ Measured on the real ADV (ESP32-S3 rev v0.2, 8 MB flash, no PSRAM) with the temp
 - Display init costs 2768 bytes of internal heap and no contiguous space: the 4-bit 240x135 sprite (about 16 KB) and the TLS buffers fit in the 311296-byte block with room to spare.
 - The app is 11.9% of the 3 MB slot with M5GFX + M5Unified and no networking, so WiFi, TLS and websocket have room.
 - The `idf.py size` IRAM row always looks full on the S3 and is not a budget. It only counts the first 16 KB of IRAM after the ICache (`0x40374000`-`0x40378000`). `.iram0.text` spills past it into DIRAM: per `build/t3_cardputer.map`, `.iram0.vectors` starts at `0x40374000` and `.iram0.text` runs `0x40374404` to `0x40384597`, 66967 bytes of IRAM in total. `build/esp-idf/esp_system/ld/memory.ld` gives `iram0_0_seg` org `0x40374000` and `dram0_0_seg` len `0x53700` (341760 bytes), the same DIRAM total `idf.py size` reports. The real budget is DIRAM, which is what is left for the heap: 379212 bytes free at boot.
+
+## grid, sprite and debug serial
+
+Measured on the ADV with the task 2 firmware (`t3: boot|sprite|ready` log lines, `\x02HEAP`, `idf.py size`, `uxTaskGetStackHighWaterMark`). Grid 40x11, 6x12 cells (M5GFX built-in `Font0`, 6x8 glyph, 2 px above and below), 4 bpp palette sprite.
+
+| what | value | where it comes from |
+| --- | --- | --- |
+| sprite size | 16200 bytes (240 x 135 x 4 / 8, 120 bytes per row) | `display_buffer()`, dump rows are 240 hex chars |
+| free internal heap after `display_init()` (panel init + sprite) | 355316 bytes, largest block 286720 | `t3: sprite heap_internal_free` / `largest_block` |
+| boot to after sprite | 23896 bytes of heap, 24576 bytes of largest block | 379212 - 355316, 311296 - 286720 |
+| free internal heap after `debug_serial_start()` | 347272 bytes, largest block 278528 | `t3: ready ...` and `\x02HEAP` reply, same numbers |
+| usb_serial_jtag driver + key queue + task | 8044 bytes of heap | 355316 - 347272 |
+| debug task stack | 2340 bytes used of 4096 (1756 free at the worst point, during `SHOT`) | `debug: task_stack_free_min` |
+| longest command | 13 bytes (`KEY talk-down`), line buffer 64 | `debug_serial.cpp` `kMaxLineBytes`, an over-long line logs `line_buf=64, command needed more` |
+| rx buffer 256, tx buffer 1024 | commands are at most 13 bytes, one `SHOT` row is 241 bytes | 8 back-to-back screenshots all arrived with 135 intact rows and identical pixels |
+| key queue depth 16 | injected keys are consumed every 20 ms; a full queue logs `key_queue=16, injected key dropped` | `debug_serial.cpp` |
+| app image | 384944 bytes (0x5dfb0), 88% of the 3 MB slot free | `idf.py build` |
+
+Notes:
+
+- The USB-Serial-JTAG chip resets when the host sets DTR=0 with RTS=1. Linux raises both lines on open, so `screenshot.py` lowers RTS first and the open does not reset the device.
+- Each `SHOT` row goes out in one `fwrite`, so ESP log lines from other tasks land between rows, never inside one. `screenshot.py` keeps only lines of exactly 240 hex chars and fails loudly if it does not get 135.

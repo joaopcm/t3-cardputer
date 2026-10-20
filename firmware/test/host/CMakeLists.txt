@@ -10,9 +10,14 @@ enable_testing()
 add_library(cjson STATIC third_party/cJSON.c)
 target_include_directories(cjson PUBLIC third_party)
 
-add_executable(host_tests main.cpp)
+set(T3CORE_DIR ${CMAKE_CURRENT_LIST_DIR}/../../components/t3core)
+add_library(t3core STATIC ${T3CORE_DIR}/grid.cpp)
+target_include_directories(t3core PUBLIC ${T3CORE_DIR}/include)
+target_compile_options(t3core PRIVATE -Wall -Wextra)
+
+add_executable(host_tests main.cpp grid_test.cpp keys_test.cpp)
 target_include_directories(host_tests PRIVATE third_party)
-target_link_libraries(host_tests PRIVATE cjson)
+target_link_libraries(host_tests PRIVATE cjson t3core)
 target_compile_options(host_tests PRIVATE -Wall -Wextra)
 
 add_test(NAME host_tests COMMAND host_tests)
