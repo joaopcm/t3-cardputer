@@ -9,7 +9,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 - Binary frames: raw audio, see "Audio".
 - The relay sends a WebSocket ping every `heartbeatIntervalMs` (30 s by default) and drops a socket that leaves `heartbeatMaxMissed` (2) pings in a row without a pong. Answer pings with pongs (most WebSocket clients do this on their own); the drop looks like a network close, so reconnect with backoff.
 - A device frame (text or binary) over 65536 bytes (`DEVICE_FRAME_BYTES_MAX`) closes the socket with 1009. No valid text frame comes near it.
-- Relay text frames never exceed the `maxFrameBytes` the device declared in `hello`. If a view does not fit, the relay shrinks it (for example `thread_page.truncated`) or sends `error {code:"internal"}`; it never sends an oversize frame.
+- Relay text frames never exceed the `maxFrameBytes` the device declared in `hello`. If a view does not fit, the relay shrinks it and says so (`thread_page.truncated`, `projects.truncated`, a `request` truncation line) or, when even the shrunk view cannot fit, sends `error {code:"internal"}` naming `max_frame_bytes`; it never sends an oversize frame.
 - Device-bound text (`lines`, `title`, `label`, `message`, ...) is printable ASCII only (0x20-0x7E), with `\n` allowed only where stated. The device font needs nothing else.
 - JSON numbers are integers unless stated. `?` after a field name means optional: omit it, do not send `null`.
 
