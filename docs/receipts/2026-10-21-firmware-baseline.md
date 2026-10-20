@@ -1,6 +1,6 @@
 # firmware baseline on the Cardputer ADV
 
-Measured on the real ADV (ESP32-S3 rev v0.2, 8 MB flash, no PSRAM) with the template skeleton, ESP-IDF v5.4.2, M5GFX 0.2.33, M5Unified 0.2.27 linked in, custom partition table (`firmware/partitions.csv`: nvs 24K at 0x9000, phy_init 4K at 0xf000, factory 3M at 0x10000). Components come from the IDF component manager (`dependencies.lock`). Source: `t3: boot ...` and `t3: display ...` lines from `firmware/scripts/monitor.sh 10`, and `idf.py size`.
+Measured on the real ADV (ESP32-S3 rev v0.2, 8 MB flash, no PSRAM) with the task 1 template skeleton (commit 2bf4824: no grid, no sprite, no debug serial; every number in this first table is from that build, not the current one, and the current build's numbers are in the later tables), ESP-IDF v5.4.2, M5GFX 0.2.33, M5Unified 0.2.27 linked in, custom partition table (`firmware/partitions.csv`: nvs 24K at 0x9000, phy_init 4K at 0xf000, factory 3M at 0x10000). Components come from the IDF component manager (`dependencies.lock`). Source: `t3: boot ...` and `t3: display ...` lines from `firmware/scripts/monitor.sh 10`, and `idf.py size`.
 
 | what | value | where it comes from |
 | --- | --- | --- |
@@ -24,22 +24,26 @@ Measured on the real ADV (ESP32-S3 rev v0.2, 8 MB flash, no PSRAM) with the temp
 
 ## grid, sprite and debug serial
 
-Measured on the ADV with the task 2 firmware (`t3: boot|sprite|ready` log lines, `\x02HEAP`, `idf.py size`, `uxTaskGetStackHighWaterMark`). Grid 40x11, 6x12 cells (M5GFX built-in `Font0`, 6x8 glyph, 2 px above and below), 4 bpp palette sprite.
+Measured on the ADV with the task 2 firmware at HEAD ffa124c plus the `sdkconfig.h` include in `debug_serial.h`, `T3_DEBUG_SERIAL=y`, draw lock on (`t3: boot|sprite|ready` log lines, `\x02HEAP`, `idf.py size`, `uxTaskGetStackHighWaterMark`), re-measured on the ADV after the fix round. Grid 40x11, 6x12 cells (M5GFX built-in `Font0`, 6x8 glyph, 2 px above and below), 4 bpp palette sprite.
 
 | what | value | where it comes from |
 | --- | --- | --- |
 | sprite size | 16200 bytes (240 x 135 x 4 / 8, 120 bytes per row) | `display_buffer()`, dump rows are 240 hex chars |
-| free internal heap after `display_init()` (panel init + sprite) | 355316 bytes, largest block 286720 | `t3: sprite heap_internal_free` / `largest_block` |
-| boot to after sprite | 23896 bytes of heap, 24576 bytes of largest block | 379212 - 355316, 311296 - 286720 |
+| free internal heap at boot (app_main entry) | 374436 bytes, largest block 311296 | `t3: boot heap_internal_free` / `largest_block` |
+| free internal heap after `display_init()` (panel init + sprite) | 355228 bytes, largest block 286720 | `t3: sprite heap_internal_free` / `largest_block` |
+| boot to after sprite | 19208 bytes of heap, 24576 bytes of largest block | 374436 - 355228, 311296 - 286720 |
 | free internal heap after `debug_serial_start()` | 347272 bytes, largest block 278528 | `t3: ready ...` and `\x02HEAP` reply, same numbers |
 | first `display_draw()` (panel push buffer) | 1456 bytes of heap | `t3: sprite` to `t3: ready` with the debug channel off |
 | debug task stack | 2340 bytes used of 4096 (1756 free at the worst point, during `SHOT`) | `debug: task_stack_free_min` |
 | longest command | 13 bytes (`KEY talk-down`), line buffer 64 | `debug_serial.cpp` `kMaxLineBytes`, an over-long line logs `line_buf=64, command needed more` |
 | rx buffer 256, tx buffer 1024 | commands are at most 13 bytes, one `SHOT` row is 241 bytes | 8 back-to-back screenshots all arrived with 135 intact rows and identical pixels |
 | key queue depth 16 | injected keys are consumed every 20 ms; a full queue logs `key_queue=16, injected key dropped` | `debug_serial.cpp` |
-| app image | 384944 bytes (0x5dfb0), 88% of the 3 MB slot free | `idf.py build` |
+| app image | 385072 bytes (0x5e030), 88% of the 3 MB slot free | `build/t3_cardputer.bin` |
+| static RAM (DIRAM) | 70507 of 341760 bytes (20.63%) | `idf.py size` |
 
 Notes:
+
+- Boot heap differs from the skeleton table (379212 vs 374436, 4776 bytes) because the debug channel is linked in: 4616 bytes of static RAM (see the debug serial table) plus 160 bytes from the display code. With `T3_DEBUG_SERIAL` off the same source boots at 379052.
 
 - The USB-Serial-JTAG chip resets when the host sets DTR=0 with RTS=1. Linux raises both lines on open, so `screenshot.py` lowers RTS first and the open does not reset the device.
 - Each `SHOT` row goes out in one `fwrite`, so ESP log lines from other tasks land between rows, never inside one. `screenshot.py` keeps only lines of exactly 240 hex chars and fails loudly if it does not get 135.
@@ -63,5 +67,5 @@ Notes:
 
 | build | shots | complete | torn |
 | --- | --- | --- | --- |
-| no lock | 10 | 9 | 1 (all black, no text) plus a third, half-drawn variant |
+| no lock | 10 | 9 | 1 (all black, no text); superseded: the first write-up also listed a third half-drawn variant that does not fit 9 + 1 = 10, and the run was not repeated, so only the lock row is the receipt |
 | lock | 30 | 30 | 0, exactly 2 distinct frames (row 2 or row 3 selected) |

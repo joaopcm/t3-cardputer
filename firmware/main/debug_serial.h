@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sdkconfig.h"
 #include "t3/keys.h"
 
 #ifdef CONFIG_T3_DEBUG_SERIAL
