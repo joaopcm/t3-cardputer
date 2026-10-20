@@ -1,0 +1,208 @@
+{
+  "command": "node relay/scripts/measure-whisper.mjs <model> <threads> <runs> [wav]",
+  "host": {
+    "cpu": "Ryzen 7 3700X, 8 cores / 16 threads",
+    "availableMemAtStartGiB": 8.3
+  },
+  "threadsUsed": 8,
+  "jfk": [
+    {
+      "model": "small.en",
+      "threads": 8,
+      "runs": 5,
+      "audioSec": 11.0010625,
+      "loadMs": 439,
+      "latencyMs": [
+        2483,
+        2525,
+        2552,
+        2573,
+        2657
+      ],
+      "medianMs": 2552,
+      "p95Ms": 2657,
+      "peakRssMb": 641,
+      "wordErrors": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "transcript": "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
+    },
+    {
+      "model": "medium.en",
+      "threads": 8,
+      "runs": 5,
+      "audioSec": 11.0010625,
+      "loadMs": 1848,
+      "latencyMs": [
+        7903,
+        8292,
+        8517,
+        8614,
+        8622
+      ],
+      "medianMs": 8517,
+      "p95Ms": 8622,
+      "peakRssMb": 1795,
+      "wordErrors": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "transcript": "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    },
+    {
+      "model": "large-v3-turbo",
+      "threads": 8,
+      "runs": 5,
+      "audioSec": 11.0010625,
+      "loadMs": 1346,
+      "latencyMs": [
+        12164,
+        12577,
+        12738,
+        12887,
+        12904
+      ],
+      "medianMs": 12738,
+      "p95Ms": 12904,
+      "peakRssMb": 1754,
+      "wordErrors": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "transcript": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    }
+  ],
+  "threadSweep": [
+    {
+      "model": "small.en",
+      "threads": 4,
+      "latencyMs": [
+        4359,
+        4387,
+        4393,
+        4394,
+        4491
+      ],
+      "medianMs": 4393,
+      "p95Ms": 4491,
+      "peakRssMb": 654
+    },
+    {
+      "model": "small.en",
+      "threads": 8,
+      "latencyMs": [
+        2489,
+        2514,
+        2565,
+        2566,
+        2686
+      ],
+      "medianMs": 2565,
+      "p95Ms": 2686,
+      "peakRssMb": 642
+    },
+    {
+      "model": "small.en",
+      "threads": 16,
+      "latencyMs": [
+        2706,
+        2725,
+        2742,
+        2754,
+        2801
+      ],
+      "medianMs": 2742,
+      "p95Ms": 2801,
+      "peakRssMb": 642
+    }
+  ],
+  "noisyJfkSingleRun": [
+    {
+      "snrDb": 0,
+      "model": "small.en",
+      "wordErrors": 0,
+      "latencyMs": 2804,
+      "transcript": "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
+    },
+    {
+      "snrDb": 0,
+      "model": "medium.en",
+      "wordErrors": 0,
+      "latencyMs": 8110,
+      "transcript": "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    },
+    {
+      "snrDb": 0,
+      "model": "large-v3-turbo",
+      "wordErrors": 0,
+      "latencyMs": 12091,
+      "transcript": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    },
+    {
+      "snrDb": -5,
+      "model": "small.en",
+      "wordErrors": 2,
+      "latencyMs": 2450,
+      "transcript": "And so my fellow Americans, ask not what your country can do to you, ask what you can do to your country."
+    },
+    {
+      "snrDb": -5,
+      "model": "medium.en",
+      "wordErrors": 2,
+      "latencyMs": 8204,
+      "transcript": "And so my fellow Americans, ask not what your country can do to you, ask what you can do to your country."
+    },
+    {
+      "snrDb": -5,
+      "model": "large-v3-turbo",
+      "wordErrors": 2,
+      "latencyMs": 12217,
+      "transcript": "And so, my fellow Americans, ask not what your country can do to you, ask what you can do to your country."
+    },
+    {
+      "snrDb": -10,
+      "model": "small.en",
+      "wordErrors": 16,
+      "latencyMs": 3264,
+      "transcript": "And so my fellow nuns, and not what's most helpful to you, and what's new to you."
+    },
+    {
+      "snrDb": -10,
+      "model": "medium.en",
+      "wordErrors": 10,
+      "latencyMs": 7631,
+      "transcript": "And so my governor, as not what your husband can do, and what you can do together."
+    },
+    {
+      "snrDb": -10,
+      "model": "large-v3-turbo",
+      "wordErrors": 12,
+      "latencyMs": 12062,
+      "transcript": "And so, my fellow Americans, and stop what the husband continues to do and what you can do to the husband."
+    }
+  ],
+  "clip120sMediumEn": {
+    "model": "medium.en",
+    "threads": 8,
+    "runs": 2,
+    "audioSec": 120,
+    "loadMs": 1352,
+    "latencyMs": [
+      60669,
+      65109
+    ],
+    "medianMs": 65109,
+    "p95Ms": 65109,
+    "peakRssMb": 1896
+  }
+}

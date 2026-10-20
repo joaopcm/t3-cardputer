@@ -183,7 +183,7 @@ export function cleanupAfterEach(): void {
   });
 }
 
-export async function startRelay(limits: Partial<Limits> = {}) {
+export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeStt) {
   const dir = mkdtempSync(join(tmpdir(), "relay-session-"));
   const allLimits: Limits = { ...DEFAULT_LIMITS, pollIntervalMs: POLL_MS, helloTimeoutMs: 150, ...limits };
   const auth = new DeviceAuth(new SecretsStore(join(dir, "secrets.json")), allLimits);
@@ -197,7 +197,7 @@ export async function startRelay(limits: Partial<Limits> = {}) {
     approvals,
     auth,
     defaults,
-    stt: fakeStt,
+    stt,
     approvalsState: () => ({ available: true }),
     onAdapterBroken: (reason) => brokenReasons.push(reason),
   });

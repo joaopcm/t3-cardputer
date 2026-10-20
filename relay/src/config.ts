@@ -10,6 +10,10 @@ export const limitsSchema = z.strictObject({
   maxHomeRows: positiveInt,
   audioMaxSeconds: positiveInt,
   audioIdleTimeoutMs: positiveInt,
+  whisperRestartsPerWindow: positiveInt,
+  whisperRestartWindowMs: positiveInt,
+  whisperStartTimeoutMs: positiveInt,
+  whisperRequestTimeoutMs: positiveInt,
   pollIntervalMs: positiveInt,
   authFailuresPerWindow: positiveInt,
   authWindowMs: positiveInt,
@@ -30,7 +34,7 @@ export const configSchema = z.strictObject({
   port: positiveInt.max(65535),
   t3BaseUrl: z.url(),
   stateDir: z.string().min(1),
-  whisper: z.strictObject({ binDir: z.string().min(1), model: z.string().min(1) }),
+  whisper: z.strictObject({ binDir: z.string().min(1), model: z.string().min(1), port: positiveInt.max(65535), threads: positiveInt }),
   canary: z.strictObject({ model: z.string().min(1) }),
   repair: z.strictObject({
     model: z.string().min(1),
@@ -53,10 +57,18 @@ export const DEFAULT_LIMITS: Limits = {
   maxReplyPages: 32,
   // receipt: pending plan 2
   maxHomeRows: 50,
-  // receipt: pending Task 11
-  audioMaxSeconds: 60,
-  // receipt: pending Task 11
+  // receipt: docs/receipts/2026-10-20-whisper-cpu.md, the spec's 5-30 s prompts x4; a full 120 s clip transcribed in 61-65 s on medium.en and holds 3.84 MB
+  audioMaxSeconds: 120,
+  // receipt: pending plan 2, the measured hotspot jitter decides it
   audioIdleTimeoutMs: 5000,
+  // receipt: docs/receipts/2026-10-20-whisper-cpu.md, whisper-server died 0 times in 59 requests over 17 starts, so 3 restarts in the window only trips a crash loop
+  whisperRestartsPerWindow: 3,
+  // receipt: sized with whisperRestartsPerWindow, 10 min lets a one-off crash age out while a loop that dies in under a second trips in that second
+  whisperRestartWindowMs: 10 * 60 * 1000,
+  // receipt: docs/receipts/2026-10-20-whisper-cpu.md, model load measured 0.4 to 1.8 s with the file cached, so 60 s is ~33x the slowest and only trips a hung load
+  whisperStartTimeoutMs: 60_000,
+  // receipt: docs/receipts/2026-10-20-whisper-cpu.md, the longest allowed recording (120 s) took 65.1 s worst on medium.en, so 260 s is 4x that
+  whisperRequestTimeoutMs: 260_000,
   // receipt: a healthy device produces 0 auth failures, so 20 per source only trips a revoked device retrying on backoff or a stranger guessing; the 31^8 (~8.5e11) code space makes 20 per 10 min per source hopeless
   authFailuresPerWindow: 20,
   // receipt: sized with authFailuresPerWindow, a 10 min window holds a revoked device's backoff retries to a throttle, backoff cadence pending plan 2
@@ -89,7 +101,8 @@ export const DEFAULT_CONFIG: RelayConfig = {
   port: 8787,
   t3BaseUrl: "http://127.0.0.1:3773",
   stateDir: join(homedir(), ".local", "state", "t3-cardputer"),
-  whisper: { binDir: join(dataDir, "whisper"), model: "small.en" },
+  // receipt: docs/receipts/2026-10-20-whisper-cpu.md, threads=8 matches the 8 physical cores and beat 4 (1.7x slower) and 16 (1.07x slower)
+  whisper: { binDir: join(dataDir, "whisper"), model: "medium.en", port: 8788, threads: 8 },
   canary: { model: "claude-haiku-5-5" },
   repair: {
     model: "claude-opus-5-5",

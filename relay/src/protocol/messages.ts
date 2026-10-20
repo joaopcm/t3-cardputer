@@ -8,7 +8,7 @@ export const CLOSE_AUTH = 4401;
 export const CLOSE_REPLACED = 4000;
 export const CLOSE_BAD_HELLO = 4402;
 
-export const ERROR_CODES = ["protocol_version", "auth", "bad_message", "bad_audio", "internal"] as const;
+export const ERROR_CODES = ["protocol_version", "auth", "bad_message", "bad_audio", "audio_not_started", "internal"] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export const REQUEST_ID_MAX = 16;
@@ -33,7 +33,7 @@ export const REJECTION_TEXT_MAX = 120;
 export const FRAME_BYTES_MAX = 1_048_576;
 // receipt: pending plan 2
 export const HOME_ROWS_MAX = 255;
-// receipt: the largest valid text frame is a launch with 4000 chars all JSON-escaped as \uXXXX (24 KB) plus 128-char refs, so 64 KiB only trips a broken or hostile client; audio chunk size pending Task 11
+// receipt: the largest valid text frame is a launch with 4000 chars all JSON-escaped as \uXXXX (24 KB) plus 128-char refs, so 64 KiB only trips a broken or hostile client; it is also the audio chunk cap, 2.05 s of 16 kHz s16le against the 100 ms (3200 byte) chunks the simulator sends
 export const DEVICE_FRAME_BYTES_MAX = 65_536;
 // receipt: a device name is a short label listed by `devices`, the same budget as an option label
 export const DEVICE_NAME_MAX = LABEL_MAX;

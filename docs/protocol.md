@@ -81,7 +81,8 @@ Any other close (network drop, relay restart) is reconnected with backoff.
 | `protocol_version` | `hello.v` is not 1. Followed by close 4400. |
 | `auth` | `hello` missing, or token rejected. Followed by close 4401. |
 | `bad_message` | a text frame failed validation and has no usable `id` (see Ordering rule 4), or an invalid `hello` (then followed by close 4402). `message` names the field path. Otherwise the socket stays open. |
-| `bad_audio` | binary frame outside an audio window, or odd byte length. The socket stays open. |
+| `audio_not_started` | binary frame with no open audio window (before `audio_start`, or after `audio_end`, `audio_cancel`, or a budget error). The frame is dropped and the socket stays open. |
+| `bad_audio` | an empty or odd-length binary frame (dropped, the window stays open), or an audio budget was hit (the window is closed and the buffer thrown away, see "Audio"). `message` names the budget. The socket stays open. |
 | `internal` | relay failure not caused by the device. The socket stays open. |
 
 Failures of a specific request (invalid fields, thread not found, T3 down, reply too long for T3) come back as `ack {ok:false, error}`, not as `error`, whenever the request had a usable `id`.
@@ -246,7 +247,18 @@ Close the audio window and throw the audio away. No transcript follows.
 
 ### Audio
 
-Until the voice session lands, the relay answers `audio_start`, `audio_end`, and `audio_cancel` with `ack {ok:false}`. Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty and an even number of bytes. Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`; any other binary frame gets `error {code:"bad_audio"}` and is dropped. Chunk size is the device's choice; the relay's upper bound on a chunk and on total audio length is added here when the voice session lands.
+Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty, an even number of bytes, and at most 65536 bytes (`DEVICE_FRAME_BYTES_MAX`, 2.05 s of audio; a larger frame closes the socket with 1009). Chunk size within that is the device's choice; the simulator sends 100 ms (3200 byte) chunks in real time.
+
+Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`. Any other binary frame gets `error {code:"audio_not_started"}` and is dropped. An empty or odd-length frame gets `error {code:"bad_audio"}` and is dropped; the window stays open.
+
+`audio_start` while a window is already open gets `ack {ok:false}`. `audio_end` with no frames gets `ack {ok:false, error:"no audio received"}`. `audio_cancel` always gets `ack {ok:true}`.
+
+Two budgets close the window and drop the buffer. Each sends `error {code:"bad_audio"}` naming the budget, and the next `audio_end` is answered with `ack {ok:false}` carrying the same message:
+
+- `audio_max_seconds` (120 by default): `audio budget: audio_max_seconds=120, recording reached 120s`.
+- `audio_idle_timeout_ms` (5000 by default, pending plan 2): `audio budget: audio_idle_timeout_ms=5000, no audio frame for 5000ms, recording dropped`. The timer starts at `audio_start` and restarts on every frame. No transcript follows.
+
+After `audio_end` the relay sends `ack {ok:true}`, then `transcript_final` when whisper.cpp is done (seconds for a 10 s clip). If transcription fails, an `error {code:"internal"}` follows the ack instead. A `home` warning reads `voice down: ...` while the local whisper-server is in a crash loop; it names `whisperRestartsPerWindow` and `whisperRestartWindowMs`.
 
 ## Relay to device
 
@@ -412,7 +424,7 @@ See "Errors".
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"error"` | yes | |
-| `code` | string | yes | `protocol_version`, `auth`, `bad_message`, `bad_audio`, or `internal` |
+| `code` | string | yes | `protocol_version`, `auth`, `bad_message`, `bad_audio`, `audio_not_started`, or `internal` |
 | `message` | string | yes | printable ASCII |
 
 ```json relay

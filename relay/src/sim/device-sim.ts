@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
+import { DEFAULT_LIMITS } from "../config.js";
 import {
   CLOSE_AUTH,
   CLOSE_BAD_HELLO,
@@ -27,12 +28,15 @@ export type SimOptions = {
   wav?: string;
   write?: (text: string) => void;
   stepTimeoutMs?: number;
+  transcribeTimeoutMs?: number;
 };
 
 export type SimResult = { screens: string[]; problems: string[]; closeCode: number | undefined };
 
 // receipt: relay/test/e2e.test.ts runs 11 scripted steps against the real server in about 0.4 s on loopback, so 5 s only trips a dead relay or a lost view
 export const DEFAULT_STEP_TIMEOUT_MS = 5000;
+// receipt: the relay answers transcript_final or an error within whisperRequestTimeoutMs, so the sim waits that long
+export const DEFAULT_TRANSCRIBE_TIMEOUT_MS = DEFAULT_LIMITS.whisperRequestTimeoutMs;
 const FIRMWARE_VERSION = "sim-0.1.0";
 const MARKERS = { approval: "!", question: "?", failed: "x", running: "*", done: "-" } as const;
 
@@ -57,6 +61,7 @@ class DeviceSim {
   private ws!: WebSocket;
   private readonly write: (text: string) => void;
   private readonly stepTimeoutMs: number;
+  private readonly transcribeTimeoutMs: number;
   private readonly clear: boolean;
   private readonly pcm: Buffer | undefined;
   private readonly screens: string[] = [];
@@ -88,6 +93,7 @@ class DeviceSim {
   constructor(private readonly opts: SimOptions) {
     this.write = opts.write ?? ((text) => void process.stdout.write(text));
     this.stepTimeoutMs = opts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
+    this.transcribeTimeoutMs = opts.transcribeTimeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
     this.clear = opts.write === undefined && process.stdout.isTTY === true;
     this.pcm = opts.wav === undefined ? undefined : parseWav(readFileSync(opts.wav));
   }
@@ -268,6 +274,7 @@ class DeviceSim {
         return;
       case "error":
         this.lastError = msg.message;
+        if (msg.code === "bad_audio" || msg.code === "internal") this.dropAwaited("transcript_final");
         this.notice = `relay error ${msg.code}: ${msg.message}`;
         return;
     }
@@ -294,6 +301,10 @@ class DeviceSim {
     if (msg.id === this.openId) this.opening = undefined;
     if (msg.id === this.respondId && this.respondedRequest !== undefined) this.screen = { kind: "request", request: this.respondedRequest };
     if (msg.id === this.audioStartId) this.audioRefused = true;
+  }
+
+  private dropAwaited(type: ViewType): void {
+    for (const [id, awaited] of this.awaitingView) if (awaited === type) this.awaitingView.delete(id);
   }
 
   private consumeView(type: ViewType): void {
@@ -481,7 +492,7 @@ class DeviceSim {
     for (const waiter of [...this.waiters]) waiter();
   }
 
-  private until(done: () => boolean): Promise<boolean> {
+  private until(done: () => boolean, timeoutMs = this.stepTimeoutMs): Promise<boolean> {
     if (done()) return Promise.resolve(true);
     return new Promise((resolve) => {
       const finish = (ok: boolean) => {
@@ -492,15 +503,17 @@ class DeviceSim {
       const check = () => {
         if (done()) finish(true);
       };
-      const timer = setTimeout(() => finish(false), this.stepTimeoutMs);
+      const timer = setTimeout(() => finish(false), timeoutMs);
       this.waiters.add(check);
     });
   }
 
   private async settle(): Promise<void> {
-    const settled = await this.until(() => (this.unacked.size === 0 && this.awaitingView.size === 0) || this.closeCode !== undefined);
+    const transcribing = [...this.awaitingView.values()].includes("transcript_final");
+    const timeoutMs = transcribing ? this.transcribeTimeoutMs : this.stepTimeoutMs;
+    const settled = await this.until(() => (this.unacked.size === 0 && this.awaitingView.size === 0) || this.closeCode !== undefined, timeoutMs);
     if (settled) return;
-    this.problem(`relay did not answer within step_timeout_ms=${this.stepTimeoutMs}: unacked=${this.unacked.size}, views=${[...this.awaitingView.values()].join(",")}`);
+    this.problem(`relay did not answer within ${transcribing ? "transcribe_timeout_ms" : "step_timeout_ms"}=${timeoutMs}: unacked=${this.unacked.size}, views=${[...this.awaitingView.values()].join(",")}`);
     this.unacked.clear();
     this.awaitingView.clear();
   }

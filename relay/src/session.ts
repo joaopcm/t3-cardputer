@@ -16,8 +16,10 @@ import {
   type ErrorCode,
   type RelayMessage,
 } from "./protocol/messages.js";
+import { AudioBuffer, BudgetError } from "./stt/audio-buffer.js";
 import type { Stt } from "./stt/types.js";
 import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
+import { toDeviceAscii } from "./text/device-text.js";
 import { buildHome, type HomeMessage } from "./views/home.js";
 import { buildProjects } from "./views/projects.js";
 import { buildRequest } from "./views/request.js";
@@ -88,6 +90,9 @@ export class Hub {
   ) {
     this.acks = new AckCache(deps.limits);
     watcher.onChange((snapshot) => this.onSnapshot(snapshot));
+    deps.stt.onWarningChange?.(() => {
+      for (const session of this.sessions.values()) session.refreshHome();
+    });
   }
 
   accept(ws: WebSocket, source: string): void {
@@ -111,6 +116,10 @@ export class Hub {
     for (const session of this.sessions.values()) session.terminate();
     this.sessions.clear();
     this.watcher.stop();
+  }
+
+  sttWarning(): string | undefined {
+    return this.deps.stt.warning?.();
   }
 
   approvalsState(): ApprovalsState {
@@ -172,6 +181,9 @@ export class Session {
   private missedPongs = 0;
   private readonly messages = new Map<string, { updatedAt: string; message: Awaited<ReturnType<T3Client["latestAssistantMessage"]>> }>();
   private readonly helloTimer: NodeJS.Timeout;
+  private lastSnapshot: WatchSnapshot | undefined;
+  private audio: { buffer: AudioBuffer; idleTimer: NodeJS.Timeout } | undefined;
+  private audioAbort: string | undefined;
 
   constructor(
     private readonly ws: WebSocket,
@@ -181,7 +193,7 @@ export class Session {
     const { helloTimeoutMs } = hub.deps.limits;
     this.helloTimer = setTimeout(() => this.refuse("auth", `no hello within helloTimeoutMs=${helloTimeoutMs}`, CLOSE_AUTH), helloTimeoutMs);
     ws.on("message", (data, isBinary) => {
-      this.onFrame(data.toString(), isBinary).catch((error: unknown) => {
+      this.onFrame(data, isBinary).catch((error: unknown) => {
         console.error(`device ${this.deviceId}: frame handling failed`, error);
         this.send({ type: "error", code: "internal", message: clipText(`relay failed: ${(error as Error).message}`) });
       });
@@ -207,14 +219,21 @@ export class Session {
     this.showOpenRequest(snapshot);
   }
 
+  refreshHome(): void {
+    if (this.closed || !this.hello || !this.lastSnapshot) return;
+    this.pushHome(this.lastSnapshot);
+  }
+
   private onClose(): void {
     clearTimeout(this.helloTimer);
     clearInterval(this.heartbeat);
+    this.dropAudio();
     this.closed = true;
     if (this.deviceId !== undefined) this.hub.release(this.deviceId, this);
   }
 
-  private async onFrame(raw: string, isBinary: boolean): Promise<void> {
+  private async onFrame(data: WebSocket.RawData, isBinary: boolean): Promise<void> {
+    const raw = isBinary ? "" : data.toString();
     if (!this.established) {
       this.established = this.onHello(raw, isBinary).catch((error: unknown) => {
         console.error(`device hello from ${this.source} failed`, error);
@@ -224,7 +243,7 @@ export class Session {
     }
     if (!(await this.established) || this.closed) return;
     if (isBinary) {
-      this.send({ type: "error", code: "bad_audio", message: "binary frame outside an audio window" });
+      this.onAudioFrame(toBuffer(data));
       return;
     }
     let msg: DeviceMessage;
@@ -240,6 +259,10 @@ export class Session {
     }
     if (msg.type === "hello") {
       this.send({ type: "error", code: "bad_message", message: "hello already received on this connection" });
+      return;
+    }
+    if (msg.type === "audio_end") {
+      await this.audioEnd(msg.id);
       return;
     }
     this.send(await this.handle(msg));
@@ -309,6 +332,8 @@ export class Session {
 
   private pushHome(snapshot: WatchSnapshot): void {
     const hello = this.hello!;
+    this.lastSnapshot = snapshot;
+    const sttWarning = this.hub.sttWarning();
     const home = buildHome({
       threads: snapshot.threads,
       approvals: snapshot.approvals,
@@ -317,7 +342,7 @@ export class Session {
       maxRows: Math.min(hello.maxHomeRows, this.hub.deps.limits.maxHomeRows),
       cols: hello.cols,
       approvalsState: this.hub.approvalsState(),
-      warnings: snapshot.warnings.map(clipText),
+      warnings: [...snapshot.warnings, ...(sttWarning === undefined ? [] : [sttWarning])].map(clipText),
       t3: snapshot.t3,
     });
     const key = homeKey(home);
@@ -359,7 +384,7 @@ export class Session {
     return question && { kind: "question", question };
   }
 
-  private async handle(msg: Exclude<DeviceMessage, Hello>): Promise<Ack> {
+  private async handle(msg: Exclude<DeviceMessage, Hello | Of<"audio_end">>): Promise<Ack> {
     const key = `${this.deviceId}:${msg.id}`;
     switch (msg.type) {
       case "reply":
@@ -375,9 +400,78 @@ export class Session {
       case "list_projects":
         return this.guarded(msg.id, () => this.listProjects(msg.id));
       case "audio_start":
-      case "audio_end":
+        return this.audioStart(msg.id);
       case "audio_cancel":
-        return fail(msg.id, "voice input is not available on this relay yet");
+        this.dropAudio();
+        this.audioAbort = undefined;
+        return ok(msg.id);
+    }
+  }
+
+  private audioStart(id: string): Ack {
+    if (this.audio) return fail(id, "audio already started, send audio_end or audio_cancel first");
+    const { audioMaxSeconds } = this.hub.deps.limits;
+    this.audioAbort = undefined;
+    this.audio = { buffer: new AudioBuffer(16000, audioMaxSeconds), idleTimer: this.idleTimer() };
+    return ok(id);
+  }
+
+  private idleTimer(): NodeJS.Timeout {
+    const { audioIdleTimeoutMs } = this.hub.deps.limits;
+    return setTimeout(
+      () => this.abortAudio(`audio budget: audio_idle_timeout_ms=${audioIdleTimeoutMs}, no audio frame for ${audioIdleTimeoutMs}ms, recording dropped`),
+      audioIdleTimeoutMs,
+    );
+  }
+
+  private onAudioFrame(chunk: Buffer): void {
+    const audio = this.audio;
+    if (!audio) {
+      this.send({ type: "error", code: "audio_not_started", message: "audio frame outside an audio window, send audio_start first" });
+      return;
+    }
+    clearTimeout(audio.idleTimer);
+    audio.idleTimer = this.idleTimer();
+    try {
+      audio.buffer.push(chunk);
+    } catch (error) {
+      if (error instanceof BudgetError) this.abortAudio(error.message);
+      else if (error instanceof RangeError) this.send({ type: "error", code: "bad_audio", message: clipText(error.message) });
+      else throw error;
+    }
+  }
+
+  private abortAudio(message: string): void {
+    this.dropAudio();
+    this.audioAbort = message;
+    this.send({ type: "error", code: "bad_audio", message: clipText(message) });
+  }
+
+  private dropAudio(): void {
+    if (this.audio) clearTimeout(this.audio.idleTimer);
+    this.audio = undefined;
+  }
+
+  private async audioEnd(id: string): Promise<void> {
+    const audio = this.audio;
+    if (!audio) {
+      const why = this.audioAbort ?? "no audio window open, send audio_start first";
+      this.audioAbort = undefined;
+      this.send(fail(id, why));
+      return;
+    }
+    this.dropAudio();
+    if (audio.buffer.durationSec === 0) {
+      this.send(fail(id, "no audio received"));
+      return;
+    }
+    this.send(ok(id));
+    try {
+      const text = await this.hub.deps.stt.transcribe(audio.buffer.toWav());
+      this.send({ type: "transcript_final", text: toDeviceAscii(text).replace(/\s+/g, " ").trim() });
+    } catch (error) {
+      console.error(`device ${this.deviceId}: transcription failed`, error);
+      this.send({ type: "error", code: "internal", message: clipText((error as Error).message) });
     }
   }
 
@@ -546,6 +640,11 @@ export class Session {
     this.send(view);
     return ok(id);
   }
+}
+
+function toBuffer(data: WebSocket.RawData): Buffer {
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return data instanceof ArrayBuffer ? Buffer.from(data) : data;
 }
 
 function pageVersion(thread: T3ThreadSummary): string {

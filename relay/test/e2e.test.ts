@@ -1,8 +1,9 @@
-import { statSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runSim } from "../src/sim/device-sim.js";
 import { loadSimConfig, pairDevice, saveSimConfig } from "../src/sim/sim-config.js";
+import type { Stt } from "../src/stt/types.js";
 import { cleanupAfterEach, startRelay, summary } from "./helpers/relay-fixture.js";
 
 cleanupAfterEach();
@@ -82,5 +83,50 @@ describe("simulator against the real server", () => {
     expect(t3.answers).toEqual([{ threadId: "t3", requestId: "q1", answers: { why: "it was a race in the setup" } }]);
     expect(approvals.responses).toEqual([{ threadId: "t1", requestId: "req1", decision: { kind: "deny_with_reason", reason: "use staging instead" } }]);
     expect(result.screens.join("\n")).toContain("Why did the test fail?");
+  });
+
+  it("sim streams a wav with /talk, gets the transcript, and sends it as the reply", async () => {
+    const heard: Buffer[] = [];
+    const stt: Stt = {
+      transcribe: async (wav) => {
+        heard.push(wav);
+        return "ship it now";
+      },
+    };
+    const { server, auth, t3, dir } = await startRelay({}, stt);
+    t3.threads = [summary("t1"), summary("t2")];
+    const pcm = Buffer.alloc(16_000 * 2 * 0.5);
+    const header = Buffer.alloc(44);
+    header.write("RIFF", 0, "ascii");
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write("WAVEfmt ", 8, "ascii");
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(16_000, 24);
+    header.writeUInt32LE(32_000, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write("data", 36, "ascii");
+    header.writeUInt32LE(pcm.length, 40);
+    const wav = join(dir, "talk.wav");
+    writeFileSync(wav, Buffer.concat([header, pcm]));
+
+    const url = `http://127.0.0.1:${server.port}`;
+    const result = await runSim({
+      url,
+      token: await pairDevice(url, auth.createPairingCode().code, "sim"),
+      cols: 40,
+      bodyRows: 8,
+      maxFrameBytes: 4096,
+      write: () => {},
+      wav,
+      script: ["2", "/talk", "?ship it now", ""],
+    });
+
+    expect(result.problems).toEqual([]);
+    expect(heard).toHaveLength(1);
+    expect(heard[0]!.length).toBe(44 + pcm.length);
+    expect(t3.sends.map(({ threadId, text }) => ({ threadId, text }))).toEqual([{ threadId: "t2", text: "ship it now" }]);
   });
 });
