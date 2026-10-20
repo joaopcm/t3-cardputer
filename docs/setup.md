@@ -10,20 +10,21 @@ how i run the relay on the homelab. placeholders: `<homelab>`, `<tailnet>`, `<po
 
 ## 1. install
 
+prerequisites: node 22, pnpm, git, and `~/.local/bin` on your PATH (node and pnpm live there, the unit puts the same dir on its PATH).
+
+the relay's self-repair runs `git pull --ff-only origin main` in the clone below, so the homelab needs git access to the repo without a prompt.
+
 ```
 git clone https://github.com/joaopcm/t3-cardputer.git ~/.local/share/t3-cardputer/deploy
 cd ~/.local/share/t3-cardputer/deploy/relay
 pnpm install --frozen-lockfile
 pnpm build
 ~/.local/share/t3-cardputer/deploy/relay/scripts/install-whisper.sh
+mkdir -p ~/.local/bin
 ln -sf ~/.local/share/t3-cardputer/deploy/relay/dist/cli.js ~/.local/bin/t3-cardputer-relay
 ```
 
 the symlink puts `t3-cardputer-relay` on PATH for the commands below.
-
-node 22 and pnpm go in `~/.local/bin`. the unit puts that dir on its PATH.
-
-the relay's self-repair runs `git pull --ff-only origin main` in this clone, so it needs git access to the repo without a prompt.
 
 `install-whisper.sh` builds whisper.cpp v1.9.5 (cpu only) and downloads the models. it falls back to a user-local cmake via `uv` when cmake is missing.
 
