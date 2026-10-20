@@ -203,6 +203,32 @@ TEST_CASE("every relay example in protocol.md parses")
     }
 }
 
+TEST_CASE("the projects example with models keeps every model")
+{
+    const t3::HelloCaps caps = docHelloCaps();
+    int withModels = 0;
+    for (const Example &example : docExamples()) {
+        if (example.side != "relay" || typeOf(example.json) != "projects") {
+            continue;
+        }
+        const JsonPtr json(cJSON_Parse(example.json.c_str()));
+        const cJSON *models = cJSON_GetObjectItemCaseSensitive(json.get(), "models");
+        if (models == nullptr) {
+            continue;
+        }
+        ++withModels;
+        std::string err;
+        const auto msg = t3::parseRelay(example.json, caps, err);
+        REQUIRE_MESSAGE(msg.has_value(), err);
+        const auto &projects = std::get<t3::Projects>(*msg);
+        REQUIRE(projects.models.size() == static_cast<size_t>(cJSON_GetArraySize(models)));
+        const cJSON *first = cJSON_GetArrayItem(models, 0);
+        CHECK(projects.models[0].id == str(first, "id"));
+        CHECK(projects.models[0].label == str(first, "label"));
+    }
+    CHECK(withModels >= 1);
+}
+
 TEST_CASE("every device message we encode parses back to the doc's shape")
 {
     std::set<std::string> seen;

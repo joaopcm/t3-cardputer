@@ -18,6 +18,8 @@ inline constexpr int kRequestIdMax = 16;
 inline constexpr int kRefMax = 128;
 // receipt: LABEL_MAX in relay/src/protocol/messages.ts (option label)
 inline constexpr int kLabelMax = 64;
+// receipt: MODEL_LABEL_MAX in relay/src/protocol/messages.ts (projects.models[].label)
+inline constexpr int kModelLabelMax = 16;
 // receipt: TOKEN_MAX in relay/src/protocol/messages.ts
 inline constexpr int kTokenMax = 256;
 // receipt: FW_MAX in relay/src/protocol/messages.ts
@@ -160,8 +162,14 @@ struct ProjectsTruncated {
     int hidden = 0;
 };
 
+struct ModelOption {
+    std::string id;
+    std::string label;
+};
+
 struct Projects {
     std::vector<ProjectItem> items;
+    std::vector<ModelOption> models;
     std::optional<ProjectsTruncated> truncated;
 };
 

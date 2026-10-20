@@ -28,6 +28,7 @@ constexpr size_t kUnbounded = std::numeric_limits<size_t>::max();
 constexpr TextRule kRequestId{1, kRequestIdMax, "request_id_max"};
 constexpr TextRule kRef{1, kRefMax, "ref_max"};
 constexpr TextRule kLabel{1, kLabelMax, "label_max"};
+constexpr TextRule kModelLabel{1, kModelLabelMax, "model_label_max"};
 constexpr TextRule kOptionKey{1, 1, "key_chars"};
 constexpr TextRule kAge{1, kHomeAgeCols, "home_age_cols"};
 constexpr TextRule kErrorMessage{0, kErrorMessageMax, "error_message_max"};
@@ -391,6 +392,27 @@ bool parseProjectItem(Parser &p, const cJSON *json, const std::string &path, Pro
            p.enumeration(defaults, "runtimeMode", defaultsPath, kRuntimeModes, out.defaults.runtimeMode);
 }
 
+bool parseModels(Parser &p, const cJSON *json, std::vector<ModelOption> &out)
+{
+    const cJSON *models = Parser::optional(json, "models");
+    if (models == nullptr) {
+        return true;
+    }
+    if (!cJSON_IsArray(models)) {
+        return p.fail("models: expected array");
+    }
+    int index = 0;
+    for (const cJSON *item = models->child; item != nullptr; item = item->next, ++index) {
+        ModelOption model;
+        const std::string path = element("models", index);
+        if (!p.elementObject(item, path) || !p.text(item, "id", path, kRef, model.id) || !p.text(item, "label", path, kModelLabel, model.label)) {
+            return false;
+        }
+        out.push_back(std::move(model));
+    }
+    return true;
+}
+
 bool parseProjects(Parser &p, const cJSON *json, Projects &out)
 {
     const cJSON *items = p.array(json, "items", "", p.caps().maxHomeRows, "max_home_rows");
@@ -404,6 +426,9 @@ bool parseProjects(Parser &p, const cJSON *json, Projects &out)
             return false;
         }
         out.items.push_back(std::move(project));
+    }
+    if (!parseModels(p, json, out.models)) {
+        return false;
     }
     if (const cJSON *truncated = Parser::optional(json, "truncated")) {
         if (!cJSON_IsObject(truncated)) {

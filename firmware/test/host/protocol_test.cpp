@@ -162,6 +162,23 @@ TEST_CASE("unknown optional fields are ignored")
     CHECK(row.rows.size() == 1);
 }
 
+TEST_CASE("projects models parse, are optional, and name the budget they break")
+{
+    const auto without = parseAs<t3::Projects>(R"({"type":"projects","items":[]})");
+    CHECK(without.models.empty());
+
+    const auto with = parseAs<t3::Projects>(
+        R"({"type":"projects","items":[],"models":[{"id":"claude-opus-5-5","label":"opus-5-5"},{"id":"claude-haiku-5-5","label":"haiku-5-5"}]})");
+    REQUIRE(with.models.size() == 2);
+    CHECK(with.models[0].id == "claude-opus-5-5");
+    CHECK(with.models[0].label == "opus-5-5");
+    CHECK(with.models[1].label == "haiku-5-5");
+
+    CHECK(parseError(R"({"type":"projects","items":[],"models":[{"id":"m","label":"abcdefghijklmnopq"}]})") == "models[0].label: model_label_max=16, got 17");
+    CHECK(parseError(R"({"type":"projects","items":[],"models":[{"id":"m"}]})") == "models[0].label");
+    CHECK(parseError(R"({"type":"projects","items":[],"models":"opus"})") == "models: expected array");
+}
+
 TEST_CASE("missing required field names its path")
 {
     CHECK(parseError(R"({"type":"home","rows":[],"counts":{"needs":0,"running":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})") == "counts.done");

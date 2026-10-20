@@ -68,6 +68,7 @@ App::Out App::projectsKey(Key key)
     case KeyName::Enter:
         if (count > 0) {
             const ProjectDefaults &defaults = projects_->items[projectSelected_].defaults;
+            modelStop_ = 0;
             workspace_ = defaults.workspace;
             mode_ = defaults.runtimeMode;
             field_ = Field::None;
@@ -92,11 +93,18 @@ App::Out App::promptKey(Key key)
     const int step = key.name == KeyName::Right ? 1 : -1;
     switch (key.name) {
     case KeyName::Tab:
-        field_ = field_ == Field::None ? Field::Workspace : field_ == Field::Workspace ? Field::Mode : Field::None;
+        if (field_ == Field::None) {
+            field_ = projects_->models.empty() ? Field::Workspace : Field::Model;
+        } else {
+            field_ = field_ == Field::Model ? Field::Workspace : field_ == Field::Workspace ? Field::Mode : Field::None;
+        }
         break;
     case KeyName::Left:
     case KeyName::Right:
-        if (field_ == Field::Workspace) {
+        if (field_ == Field::Model) {
+            const int stops = static_cast<int>(projects_->models.size()) + 1;
+            modelStop_ = (modelStop_ + step + stops) % stops;
+        } else if (field_ == Field::Workspace) {
             workspace_ = workspace_ == Workspace::Root ? Workspace::Worktree : Workspace::Root;
         } else if (field_ == Field::Mode) {
             mode_ = stepMode(mode_, step);
@@ -112,6 +120,9 @@ App::Out App::promptKey(Key key)
             break;
         }
         LaunchOptions options;
+        if (modelStop_ > 0) {
+            options.model = projects_->models[modelStop_ - 1].id;
+        }
         options.workspace = workspace_;
         options.runtimeMode = mode_;
         const std::string id = nextId();
@@ -178,7 +189,8 @@ void App::drawPrompt(Grid &grid) const
 {
     const ProjectItem &project = projects_->items[projectSelected_];
     grid.put(1, 0, project.name, Color::Hdr);
-    grid.put(kModelRow, 0, field("model", project.defaults.model, false), Color::Dim);
+    const std::string &model = modelStop_ > 0 ? projects_->models[modelStop_ - 1].label : project.defaults.model;
+    grid.put(kModelRow, 0, field("model", model, field_ == Field::Model), field_ == Field::Model ? Color::Text : Color::Dim);
     grid.put(kWorkspaceRow, 0, field("workspace", workspaceLabel(workspace_), field_ == Field::Workspace), field_ == Field::Workspace ? Color::Text : Color::Dim);
     grid.put(kModeRow, 0, field("mode", runtimeModeName(mode_), field_ == Field::Mode), field_ == Field::Mode ? Color::Text : Color::Dim);
 

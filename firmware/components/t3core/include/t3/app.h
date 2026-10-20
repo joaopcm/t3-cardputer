@@ -35,7 +35,7 @@ public:
 
 private:
     enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt };
-    enum class Field { None, Workspace, Mode };
+    enum class Field { None, Model, Workspace, Mode };
 
     struct Line {
         std::string text;
@@ -119,6 +119,7 @@ private:
     int projectSelected_ = 0;
     int projectTop_ = 0;
     std::string prompt_;
+    int modelStop_ = 0;
     Workspace workspace_ = Workspace::Root;
     RuntimeMode mode_ = RuntimeMode::ApprovalRequired;
     Field field_ = Field::None;
