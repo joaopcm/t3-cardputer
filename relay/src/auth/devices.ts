@@ -25,7 +25,7 @@ export class LockedOutError extends Error {
     const retry = `retry in ${Math.ceil(retryAfterMs / 1000)}s`;
     super(
       reason === "source_cap"
-        ? `auth lockout tracking full: maxTrackedSources=${lockout.maxTrackedSources}, ${retry}`
+        ? `auth lockout tracking full: authMaxTrackedSources=${lockout.maxTrackedSources}, ${retry}`
         : `auth locked out: authFailuresPerWindow=${lockout.limitPerWindow} within authWindowMs=${lockout.windowMs}, ${retry}`,
     );
     this.name = "LockedOutError";
@@ -48,10 +48,9 @@ export class DeviceAuth {
 
   constructor(
     private readonly store: SecretsStore,
-    private readonly limits: Pick<Limits, "pairingCodeTtlMs" | "authFailuresPerWindow" | "authWindowMs">,
-    maxTrackedSources?: number,
+    private readonly limits: Pick<Limits, "pairingCodeTtlMs" | "authFailuresPerWindow" | "authWindowMs" | "authMaxTrackedSources">,
   ) {
-    this.lockout = new Lockout(limits.authFailuresPerWindow, limits.authWindowMs, maxTrackedSources);
+    this.lockout = new Lockout(limits.authFailuresPerWindow, limits.authWindowMs, limits.authMaxTrackedSources);
   }
 
   createPairingCode(): { code: string; expiresAt: Date } {
@@ -90,7 +89,6 @@ export class DeviceAuth {
   }
 
   verify(token: string, source: string): DeviceRecord | null {
-    this.assertAllowed(source);
     const digest = sha256(token);
     const secrets = this.store.read();
     let match: DeviceRecord | undefined;
@@ -99,6 +97,7 @@ export class DeviceAuth {
       if (stored.length === digest.length && timingSafeEqual(stored, digest)) match = device;
     }
     if (!match) {
+      this.assertAllowed(source);
       this.lockout.recordFailure(source);
       return null;
     }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeviceAuth, LockedOutError, PairingError } from "../src/auth/devices.js";
-import { Lockout } from "../src/auth/lockout.js";
+import { Lockout, lockoutSourceKey } from "../src/auth/lockout.js";
 import { DEFAULT_LIMITS } from "../src/config.js";
 import { SecretsStore } from "../src/secrets.js";
 
@@ -171,13 +171,37 @@ describe("DeviceAuth lockout", () => {
     expect(auth.redeem(code, "c", "friend").token).toBeTruthy();
   });
 
-  it("bad tokens count as failures and then lock the source out", () => {
+  it("bad tokens count as failures and then lock the source out for bad tokens only", () => {
     const auth = new DeviceAuth(new SecretsStore(tmpPath()), limits);
-    const { code } = auth.createPairingCode();
-    const { token } = auth.redeem(code, "c", "friend");
+    const { token } = auth.redeem(auth.createPairingCode().code, "c", "friend");
     for (let i = 0; i < 3; i++) expect(auth.verify("bad", "evil")).toBeNull();
-    expect(() => auth.verify(token, "evil")).toThrow(LockedOutError);
+    expect(() => auth.verify("bad", "evil")).toThrow(LockedOutError);
+    expect(auth.verify(token, "evil")).not.toBeNull();
     expect(auth.verify(token, "friend")).not.toBeNull();
+  });
+
+  it("a valid token is never refused, even with the source locked out and the tracker full", () => {
+    const full = { ...limits, authMaxTrackedSources: 1 };
+    const auth = new DeviceAuth(new SecretsStore(tmpPath()), full);
+    const { token } = auth.redeem(auth.createPairingCode().code, "c", "friend");
+    for (let i = 0; i < 3; i++) auth.verify("bad", "shared");
+    expect(() => auth.verify("bad", "shared")).toThrow(LockedOutError);
+    expect(auth.verify(token, "shared")).not.toBeNull();
+    expect(auth.verify(token, "brand-new-source")).not.toBeNull();
+  });
+
+  it("redeem still fails closed when the tracker is full", () => {
+    const full = { ...limits, authMaxTrackedSources: 1 };
+    const auth = new DeviceAuth(new SecretsStore(tmpPath()), full);
+    auth.verify("bad", "a");
+    const { code } = auth.createPairingCode();
+    try {
+      auth.redeem(code, "c", "new-source");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(LockedOutError);
+      expect((error as LockedOutError).reason).toBe("source_cap");
+    }
   });
 
   it("successful verifies never count", () => {
@@ -202,7 +226,7 @@ describe("DeviceAuth lockout", () => {
 
 describe("Lockout", () => {
   it("lockout blocks after limit failures within window and reports retryAfterMs", () => {
-    const lockout = new Lockout(3, 60_000);
+    const lockout = new Lockout(3, 60_000, 100);
     expect(lockout.check("a")).toEqual({ allowed: true });
     lockout.recordFailure("a");
     lockout.recordFailure("a");
@@ -214,7 +238,7 @@ describe("Lockout", () => {
   });
 
   it("lockout window slides", () => {
-    const lockout = new Lockout(3, 60_000);
+    const lockout = new Lockout(3, 60_000, 100);
     lockout.recordFailure("a");
     vi.advanceTimersByTime(30_000);
     lockout.recordFailure("a");
@@ -228,7 +252,7 @@ describe("Lockout", () => {
   });
 
   it("failures while blocked do not extend the lockout", () => {
-    const lockout = new Lockout(2, 60_000);
+    const lockout = new Lockout(2, 60_000, 100);
     lockout.recordFailure("a");
     lockout.recordFailure("a");
     vi.advanceTimersByTime(30_000);
@@ -268,7 +292,7 @@ describe("Lockout", () => {
 
   it("the cap reaches the caller as a LockedOutError naming the budget", () => {
     const limits = { ...DEFAULT_LIMITS, authFailuresPerWindow: 3, authWindowMs: 60_000 };
-    const auth = new DeviceAuth(new SecretsStore(tmpPath()), limits, 1);
+    const auth = new DeviceAuth(new SecretsStore(tmpPath()), { ...limits, authMaxTrackedSources: 1 });
     auth.verify("bad", "a");
     try {
       auth.verify("bad", "b");
@@ -276,7 +300,7 @@ describe("Lockout", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(LockedOutError);
       expect((error as LockedOutError).reason).toBe("source_cap");
-      expect((error as Error).message).toContain("maxTrackedSources=1");
+      expect((error as Error).message).toContain("authMaxTrackedSources=1");
     }
   });
 });
@@ -289,5 +313,45 @@ describe("Lockout at the cap", () => {
     for (let i = 0; i < 50; i++) expect(lockout.check(`new-${i}`).allowed).toBe(false);
     expect(scans.mock.calls.length).toBeLessThanOrEqual(1);
     scans.mockRestore();
+  });
+});
+
+describe("lockoutSourceKey", () => {
+  it("keeps IPv4 as is", () => {
+    expect(lockoutSourceKey("203.0.113.7")).toBe("203.0.113.7");
+  });
+
+  it("unwraps IPv4-mapped IPv6 in dotted and hex form", () => {
+    expect(lockoutSourceKey("::ffff:203.0.113.7")).toBe("203.0.113.7");
+    expect(lockoutSourceKey("::FFFF:cb00:7107")).toBe("203.0.113.7");
+  });
+
+  it("reduces a full IPv6 address to its /64", () => {
+    expect(lockoutSourceKey("2001:0db8:85a3:0001:aaaa:bbbb:cccc:dddd")).toBe("2001:db8:85a3:1::/64");
+  });
+
+  it("reduces compressed IPv6 addresses to the same /64", () => {
+    const key = "2001:db8:85a3:1::/64";
+    expect(lockoutSourceKey("2001:db8:85a3:1::1")).toBe(key);
+    expect(lockoutSourceKey("2001:db8:85a3:1:0:0:0:ffff")).toBe(key);
+    expect(lockoutSourceKey("2001:DB8:85A3:1::")).toBe(key);
+  });
+
+  it("handles compression inside the prefix and the unspecified address", () => {
+    expect(lockoutSourceKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(lockoutSourceKey("::1")).toBe("0:0:0:0::/64");
+    expect(lockoutSourceKey("::")).toBe("0:0:0:0::/64");
+  });
+
+  it("drops a zone id", () => {
+    expect(lockoutSourceKey("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
+  });
+
+  it("different /64s get different keys", () => {
+    expect(lockoutSourceKey("2001:db8:0:1::1")).not.toBe(lockoutSourceKey("2001:db8:0:2::1"));
+  });
+
+  it("passes a non-IP string through unchanged", () => {
+    expect(lockoutSourceKey("unix-socket")).toBe("unix-socket");
   });
 });

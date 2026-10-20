@@ -13,6 +13,7 @@ export const limitsSchema = z.strictObject({
   pollIntervalMs: positiveInt,
   authFailuresPerWindow: positiveInt,
   authWindowMs: positiveInt,
+  authMaxTrackedSources: positiveInt,
   pairingCodeTtlMs: positiveInt,
   mcpRequestTimeoutMs: positiveInt,
   mcpWaitGraceMs: positiveInt,
@@ -55,6 +56,8 @@ export const DEFAULT_LIMITS: Limits = {
   authFailuresPerWindow: 20,
   // receipt: sized with authFailuresPerWindow, a 10 min window holds a revoked device's backoff retries to a throttle, backoff cadence pending plan 2
   authWindowMs: 10 * 60 * 1000,
+  // receipt: 10_000 sources x 20 failures held 6.79 MB heap (no gc, upper bound), far past any single-user homelab and still cheap
+  authMaxTrackedSources: 10_000,
   // receipt: pending plan 2 — time to type the code on the ADV keyboard
   pairingCodeTtlMs: 10 * 60 * 1000,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), slowest MCP call measured was 114 ms, so 30 s only trips on a hung server

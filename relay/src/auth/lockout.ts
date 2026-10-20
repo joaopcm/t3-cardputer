@@ -1,5 +1,4 @@
-// receipt: 10_000 sources x 20 failures held 6.79 MB heap (ungced upper bound), far past any single-user homelab and still cheap
-export const MAX_TRACKED_SOURCES = 10_000;
+import { isIPv4, isIPv6 } from "node:net";
 
 export type LockoutReason = "too_many_failures" | "source_cap";
 
@@ -17,7 +16,7 @@ export class Lockout {
   constructor(
     readonly limitPerWindow: number,
     readonly windowMs: number,
-    readonly maxTrackedSources: number = MAX_TRACKED_SOURCES,
+    readonly maxTrackedSources: number,
   ) {}
 
   check(source: string): LockoutDecision {
@@ -76,4 +75,34 @@ export class Lockout {
     }
     this.nextEvictionAt = soonest;
   }
+}
+
+function ipv4FromGroups(high: number, low: number): string {
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+function ipv6Groups(address: string): number[] {
+  const [head = "", tail] = address.split("::") as [string, string?];
+  const parse = (part: string): number[] =>
+    part === ""
+      ? []
+      : part.split(":").flatMap((group) => {
+          if (!group.includes(".")) return [parseInt(group, 16)];
+          const [a, b, c, d] = group.split(".").map(Number) as [number, number, number, number];
+          return [(a << 8) | b, (c << 8) | d];
+        });
+  const headGroups = parse(head);
+  if (tail === undefined) return headGroups;
+  const tailGroups = parse(tail);
+  return [...headGroups, ...new Array<number>(8 - headGroups.length - tailGroups.length).fill(0), ...tailGroups];
+}
+
+export function lockoutSourceKey(remoteAddress: string): string {
+  const address = remoteAddress.split("%")[0]!;
+  if (isIPv4(address)) return address;
+  if (!isIPv6(address)) return remoteAddress;
+  const groups = ipv6Groups(address);
+  const isV4Mapped = groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff;
+  if (isV4Mapped) return ipv4FromGroups(groups[6]!, groups[7]!);
+  return `${groups.slice(0, 4).map((g) => g.toString(16)).join(":")}::/64`;
 }
