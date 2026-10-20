@@ -455,8 +455,11 @@ const stats = (samples: { ms: number; bytes: number }[]) => {
   };
 };
 
+const MEASURE_RECEIPT = "docs/receipts/2026-10-20-approvals-spike.measure.json";
+
 const measure = async () => {
   const mcp = await mcpClient(await mcpToken("read-only"));
+  const sample = (c: McpCall) => ({ ms: +c.ms.toFixed(2), bytes: c.bytes });
   const projectSamples: McpCall[] = [];
   for (let i = 0; i < 10; i++) projectSamples.push(await mcp.call("t3_project_list", {}));
   writeOut("mcp-project-list.raw.json", projectSamples[0].result);
@@ -465,20 +468,34 @@ const measure = async () => {
   for (const [index, project] of projects.entries()) {
     const samples: McpCall[] = [];
     for (let i = 0; i < 10; i++) samples.push(await mcp.call("t3_thread_list", { projectId: project.projectId ?? project.id }));
-    const threads = samples[0].result?.threads ?? [];
-    perProject.push({ project: `<project-${index + 1}>`, threadsReturned: threads.length, total: samples[0].result?.total, hasMore: samples[0].result?.nextCursor != null, ...stats(samples) });
+    perProject.push({
+      project: `<project-${index + 1}>`,
+      threadsReturned: samples[0].result?.threads?.length ?? 0,
+      total: samples[0].result?.total,
+      hasMore: samples[0].result?.nextCursor != null,
+      ...stats(samples),
+      samples: samples.map(sample),
+    });
   }
   const result = {
     measuredAt: new Date().toISOString(),
-    projectList: { projects: projects.length, ...stats(projectSamples) },
+    method: "10 sequential MCP tools/call over loopback, read-only token, default arguments; p95 is nearest-rank over 10 samples (= max)",
+    projectList: { projects: projects.length, ...stats(projectSamples), samples: projectSamples.map(sample) },
     threadListPerProject: perProject,
   };
   writeOut("measure.json", result);
+  writeFileSync(join(process.cwd(), MEASURE_RECEIPT), `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify(result, null, 2));
 };
 
 const models = async () => {
   const mcp = await mcpClient(await mcpToken("approval-required"));
+  const capabilities = await mcp.call("orchestrator_capabilities", {});
+  const catalog = (capabilities.result?.providers ?? []).map((p: Json) => ({
+    providerInstanceId: p.providerInstanceId,
+    usable: (p.constraints ?? []).length === 0,
+    models: p.models.map((m: Json) => m.id),
+  }));
   const results: Json[] = [];
   for (const [name, modelSelection] of [
     ["repair", REPAIR_MODEL],
@@ -486,18 +503,22 @@ const models = async () => {
   ] as const) {
     const { launched, threadId } = await launchScratch(
       mcp,
-      { title: `t3-cardputer canary (model ${name})`, runtimeMode: "approval-required", modelSelection },
+      { title: `t3-cardputer canary (model ${name})`, message: "Reply with the single word ok.", runtimeMode: "approval-required", modelSelection },
       `model ${name}`,
     );
     const entry: Json = { name, modelSelection, launchError: launched.isError ? launched.result ?? launched.error : undefined };
     if (threadId) {
+      entry.wait = (await mcp.call("t3_thread_wait", { threadId, timeoutMs: 180_000 })).result;
       entry.configuration = (await mcp.call("t3_thread_configuration", { threadId })).result;
+      const activity = (await mcp.call("t3_thread_read", { threadId, view: "activity", limit: 50 })).result;
+      entry.runs = activity?.recentRuns?.map((r: Json) => ({ status: r.status, providerInstanceId: r.providerInstanceId, model: r.model }));
+      entry.items = activity?.items?.map((i: Json) => ({ type: i.type, status: i.status, text: i.text }));
       entry.cleanup = await settleAndArchive(mcp, threadId);
     }
     results.push(entry);
   }
-  writeOut("models.json", results);
-  console.log(JSON.stringify(results, null, 2));
+  writeOut("models.json", { catalog, results });
+  console.log(JSON.stringify({ catalog, results }, null, 2));
 };
 
 const verifyCleanup = async () => {

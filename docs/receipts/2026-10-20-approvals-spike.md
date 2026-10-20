@@ -134,25 +134,43 @@ Each level was tested with a `t3_thread_launch {scratch:true, runtimeMode:"full-
 
 ## (e) MCP list sizes and latency
 
-10 calls each, loopback, read-only MCP token. p95 is nearest-rank over 10 samples, so it equals the max.
+10 calls each, loopback, read-only MCP token, default arguments. p95 is nearest-rank over 10 samples, so it equals the max. Raw per-call samples (`ms`, `bytes`, projects labelled `<project-N>`) are in `2026-10-20-approvals-spike.measure.json`, next to this receipt. The table is that run (2026-10-20 13:3x UTC).
 
 | Call | Items | Bytes | Median ms | p95 ms |
 |---|---|---|---|---|
-| `t3_project_list` | 8 projects | 11,427 | 4.8 | 43.8 (first call cold) |
-| `t3_thread_list {projectId}`, busiest project | 50 of 57 (page cap, `nextCursor` set) | 73,590 | 16.7 | 18.5 |
-| `t3_thread_list {projectId}`, scratch project | 8 | 11,928 | 10.1 | 12.1 |
-| `t3_thread_list {projectId}`, 6 projects | 0 | 356 | 6.7-8.7 | 7.7-23.1 |
+| `t3_project_list` | 8 projects | 11,427 | 6.1 | 113.9 (one cold outlier; min 4.5) |
+| `t3_thread_list {projectId}`, busiest project (`<project-3>`) | 50 of 57 (page cap, `nextCursor` set) | 73,590 | 17.6 | 21.5 |
+| `t3_thread_list {projectId}`, scratch project (`<project-8>`) | 9 | 13,478 | 9.8 | 10.9 |
+| `t3_thread_list {projectId}`, 6 projects | 0 | 356 | 6.6-8.2 | 6.7-9.8 |
 
-- About **1.47 KB per thread** in the MCP list. That is twice the spec's ~700 B estimate, which needs updating.
+- About **1.47 KB per thread** in the MCP list (73,590 B / 50). That is twice the spec's ~700 B estimate, which needs updating.
 - About 1.4 KB per project.
 - `t3_thread_list` without `projectId` fails for an MCP client outside a T3 thread (`target_required`), so the relay must iterate projects.
+- An earlier run gave the same sizes, with latencies within a few ms (project list median 4.8, p95 43.8).
 
 ## (f) `modelSelection` defaults
 
-Available models come from `orchestrator_capabilities`. Enabled providers: `claudeAgent` (5 models). `cursor` is unauthenticated, and the rest are disabled.
+The model catalog, by model id, from MCP `orchestrator_capabilities` (2026-10-20):
 
-- **repair:** `{"instanceId":"claudeAgent","model":"claude-opus-5-5"}`. Accepted by `t3_thread_launch` and echoed by `t3_thread_configuration`. This was an idle thread; no turn was run.
-- **canary** (cheapest available, Haiku at low effort): `{"instanceId":"claudeAgent","model":"claude-haiku-5-5","options":[{"id":"effort","value":"low"}]}`. Every approval canary in this spike ran on it.
+| providerInstanceId | usable | model ids |
+|---|---|---|
+| `claudeAgent` | yes | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `claude-haiku-5-5` |
+| `cursor` | no (not authenticated) | `grok-4.7`, `composer-2.5`, `gemini-4-argon`, `muse-wonder-1.0`, `gpt-5.6-sol`, `gpt-5.6-terra`, `claude-sonnet-5-5`, `gpt-5.6-luna`, `claude-haiku-5-5`, `glm-5p3`, `glm-5p3-flash`, `condor` |
+| `grok` | no (disabled) | `grok-build` |
+| `pi` | no (disabled) | `default` |
+| `codex`, `opencode`, `antigravity`, `muse` | no (disabled) | none |
+
+Project defaults such as `claude-opus-5` (seen in `mcp-project-list.json`) are stored per project. They are not catalog entries.
+
+Both defaults were proven with a real turn. Each launched a scratch thread with the selection below and the message "Reply with the single word ok." (`models` phase). Then `t3_thread_wait` returned `completed`, and the run and reply were checked as follows:
+
+- **repair:** `{"instanceId":"claudeAgent","model":"claude-opus-5-5"}`.
+  - Run: `{status:"completed", providerInstanceId:"claudeAgent", model:"claude-opus-5-5"}`.
+  - Reply: assistant message `ok`, with no error items.
+- **canary** (cheapest usable: Haiku at low effort): `{"instanceId":"claudeAgent","model":"claude-haiku-5-5","options":[{"id":"effort","value":"low"}]}`.
+  - Run: `{status:"completed", model:"claude-haiku-5-5"}`.
+  - Reply: assistant message `ok`.
+  - Every approval canary in this spike also ran on it.
 
 `provider` is accepted as an alias for `instanceId` (`modelSelection.ts`). `options` is an array of `{id, value}`, and a legacy object form is also decoded.
 
@@ -167,23 +185,36 @@ Available models come from `orchestrator_capabilities`. Enabled providers: `clau
 7. approval: acceptAlways
 8. pending question (answered "Blue" via `t3_pending_request_respond`)
 9. access: full-access (the other four levels were refused before creating a thread)
-10. model: repair (idle)
-11. model: canary (idle)
+10. model: repair (idle, first round)
+11. model: canary (idle, first round)
 12. approval: approve (the run the fixtures come from)
+13. model: repair, `claude-opus-5-5`, one "ok" turn (fix round 1)
+14. model: canary, `claude-haiku-5-5`, one "ok" turn (fix round 1)
+15. approval: approve (fix round 1: re-run check of the sequence below, in a scratch copy of the repo)
+16. pending question (fix round 1: same re-run check, answered "Blue")
 
 ## Re-running
 
-From the repo root, Node 22, no install. Raw captures and the token cache go to `$SPIKE_OUT` (default `/tmp/t3-spike/out`, mode 0700/0600). Override the server and CLI with `T3_BASE_URL` and `T3_BIN`.
+From the repo root, Node 22, no install. Raw captures and the token cache go to `$SPIKE_OUT` (default `/tmp/t3-spike/out`, mode 0700/0600). Override the server and CLI with `T3_BASE_URL` and `T3_BIN`. Each step mints pairing codes through the `t3` CLI and creates real scratch threads; every phase settles and archives what it creates.
+
+To regenerate the fixtures, run these in this exact order. `fixtures` reads what the earlier steps leave in `$SPIKE_OUT`.
 
 ```
-npx -y tsx relay/spikes/approvals-spike.ts approvals [approve|deny|deny-reason|always|accept-always]
-npx -y tsx relay/spikes/approvals-spike.ts question          # prints the pending requestId
-npx -y tsx relay/spikes/approvals-spike.ts answer-question <requestId> '{"Red or blue?":"Blue"}'
-npx -y tsx relay/spikes/approvals-spike.ts access | measure | models | probe | verify-cleanup
-npx -y tsx relay/spikes/approvals-spike.ts fixtures          # rewrites relay/test/fixtures/t3 (needs the cached tokens)
-npx -y tsx relay/spikes/approvals-spike.ts revoke            # revokes every t3-cardputer-spike* session, deletes the token cache
+S=relay/spikes/approvals-spike.ts
+npx -y tsx $S approvals approve    # writes approval-approve.json, ws-approve.jsonl, appends created-threads.jsonl
+npx -y tsx $S measure              # writes mcp-project-list.raw.json (project ids for redaction) + docs/receipts/…measure.json
+npx -y tsx $S question             # writes question.json; waits for the agent's question
+RID=$(node -p 'require((process.env.SPIKE_OUT ?? "/tmp/t3-spike/out") + "/question.json").list.result.requestIds[0]')
+                                   # same id is printed by `question` under list.result.requestIds[0]
+npx -y tsx $S answer-question "$RID" '{"Red or blue?":"Blue"}'   # writes question-answer.json, settles/archives
+npx -y tsx $S fixtures             # rewrites relay/test/fixtures/t3; needs the cached tokens for its leak check
+npx -y tsx $S revoke               # revokes every t3-cardputer-spike* session, deletes the token cache
 ```
 
-- Each run mints pairing codes through the `t3` CLI and creates real scratch threads. Every phase settles and archives what it creates.
+The sequence was verified end to end on 2026-10-20, from a clean `$SPIKE_OUT` in a scratch copy of the repo root. All six steps exited 0, and the regenerated fixtures had the same files and line counts as the committed ones.
+
+- If `question` prints no `list` (the agent did not ask within 90 s), re-run it with the thread id from `created-threads.jsonl`: `question <threadId>`.
+- Answers (a)-(f) also use these optional phases, run before `revoke`: `approvals [deny|deny-reason|always|accept-always]`, `access`, `models`, `probe`, `verify-cleanup`.
+- `rm -rf "$SPIKE_OUT"` afterwards: it holds unredacted captures.
 - `relay/spikes/` must be excluded from the relay build (Task 2).
-- The internal protocol is unversioned beyond `orchestrationProtocol=2`. Re-run `approvals approve` + `fixtures` after every T3 update.
+- The internal protocol is unversioned beyond `orchestrationProtocol=2`. Re-run the sequence above after every T3 update.

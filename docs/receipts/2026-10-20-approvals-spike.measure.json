@@ -1,0 +1,534 @@
+{
+  "measuredAt": "2026-10-20T13:16:24.817Z",
+  "method": "10 sequential MCP tools/call over loopback, read-only token, default arguments; p95 is nearest-rank over 10 samples (= max)",
+  "projectList": {
+    "projects": 8,
+    "n": 10,
+    "ms": {
+      "median": 6.1,
+      "p95": 113.9,
+      "min": 4.5,
+      "max": 113.9
+    },
+    "bytes": {
+      "median": 11427,
+      "p95": 11428
+    },
+    "samples": [
+      {
+        "ms": 113.91,
+        "bytes": 8769
+      },
+      {
+        "ms": 27.56,
+        "bytes": 10685
+      },
+      {
+        "ms": 6.33,
+        "bytes": 11427
+      },
+      {
+        "ms": 5.47,
+        "bytes": 11427
+      },
+      {
+        "ms": 6.23,
+        "bytes": 11427
+      },
+      {
+        "ms": 6.12,
+        "bytes": 11427
+      },
+      {
+        "ms": 8.81,
+        "bytes": 11427
+      },
+      {
+        "ms": 4.47,
+        "bytes": 11427
+      },
+      {
+        "ms": 4.52,
+        "bytes": 11428
+      },
+      {
+        "ms": 5.26,
+        "bytes": 11428
+      }
+    ]
+  },
+  "threadListPerProject": [
+    {
+      "project": "<project-1>",
+      "threadsReturned": 0,
+      "total": 0,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 7.1,
+        "p95": 8.9,
+        "min": 5.9,
+        "max": 8.9
+      },
+      "bytes": {
+        "median": 356,
+        "p95": 356
+      },
+      "samples": [
+        {
+          "ms": 8.53,
+          "bytes": 356
+        },
+        {
+          "ms": 5.98,
+          "bytes": 356
+        },
+        {
+          "ms": 5.88,
+          "bytes": 356
+        },
+        {
+          "ms": 6.89,
+          "bytes": 356
+        },
+        {
+          "ms": 7.08,
+          "bytes": 356
+        },
+        {
+          "ms": 7.74,
+          "bytes": 356
+        },
+        {
+          "ms": 7.82,
+          "bytes": 356
+        },
+        {
+          "ms": 7.21,
+          "bytes": 356
+        },
+        {
+          "ms": 6.92,
+          "bytes": 356
+        },
+        {
+          "ms": 8.9,
+          "bytes": 356
+        }
+      ]
+    },
+    {
+      "project": "<project-2>",
+      "threadsReturned": 0,
+      "total": 0,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 8.2,
+        "p95": 9.8,
+        "min": 6.6,
+        "max": 9.8
+      },
+      "bytes": {
+        "median": 356,
+        "p95": 356
+      },
+      "samples": [
+        {
+          "ms": 6.64,
+          "bytes": 356
+        },
+        {
+          "ms": 7.26,
+          "bytes": 356
+        },
+        {
+          "ms": 8.43,
+          "bytes": 356
+        },
+        {
+          "ms": 8.69,
+          "bytes": 356
+        },
+        {
+          "ms": 9.79,
+          "bytes": 356
+        },
+        {
+          "ms": 9.31,
+          "bytes": 356
+        },
+        {
+          "ms": 8.9,
+          "bytes": 356
+        },
+        {
+          "ms": 7.7,
+          "bytes": 356
+        },
+        {
+          "ms": 7.95,
+          "bytes": 356
+        },
+        {
+          "ms": 8.25,
+          "bytes": 356
+        }
+      ]
+    },
+    {
+      "project": "<project-3>",
+      "threadsReturned": 50,
+      "total": 57,
+      "hasMore": true,
+      "n": 10,
+      "ms": {
+        "median": 17.6,
+        "p95": 21.5,
+        "min": 16.3,
+        "max": 21.5
+      },
+      "bytes": {
+        "median": 73590,
+        "p95": 73590
+      },
+      "samples": [
+        {
+          "ms": 18.98,
+          "bytes": 73590
+        },
+        {
+          "ms": 18.42,
+          "bytes": 73590
+        },
+        {
+          "ms": 18.21,
+          "bytes": 73590
+        },
+        {
+          "ms": 21.51,
+          "bytes": 73590
+        },
+        {
+          "ms": 17.63,
+          "bytes": 73590
+        },
+        {
+          "ms": 17.36,
+          "bytes": 73590
+        },
+        {
+          "ms": 16.89,
+          "bytes": 73590
+        },
+        {
+          "ms": 17.91,
+          "bytes": 73590
+        },
+        {
+          "ms": 16.94,
+          "bytes": 73590
+        },
+        {
+          "ms": 16.34,
+          "bytes": 73590
+        }
+      ]
+    },
+    {
+      "project": "<project-4>",
+      "threadsReturned": 0,
+      "total": 0,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 6.8,
+        "p95": 7.2,
+        "min": 6.7,
+        "max": 7.2
+      },
+      "bytes": {
+        "median": 356,
+        "p95": 356
+      },
+      "samples": [
+        {
+          "ms": 7.24,
+          "bytes": 356
+        },
+        {
+          "ms": 6.79,
+          "bytes": 356
+        },
+        {
+          "ms": 6.71,
+          "bytes": 356
+        },
+        {
+          "ms": 6.83,
+          "bytes": 356
+        },
+        {
+          "ms": 7.19,
+          "bytes": 356
+        },
+        {
+          "ms": 6.94,
+          "bytes": 356
+        },
+        {
+          "ms": 6.75,
+          "bytes": 356
+        },
+        {
+          "ms": 6.67,
+          "bytes": 356
+        },
+        {
+          "ms": 6.76,
+          "bytes": 356
+        },
+        {
+          "ms": 6.74,
+          "bytes": 356
+        }
+      ]
+    },
+    {
+      "project": "<project-5>",
+      "threadsReturned": 0,
+      "total": 0,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 6.7,
+        "p95": 9.4,
+        "min": 6.6,
+        "max": 9.4
+      },
+      "bytes": {
+        "median": 356,
+        "p95": 356
+      },
+      "samples": [
+        {
+          "ms": 9.42,
+          "bytes": 356
+        },
+        {
+          "ms": 7.33,
+          "bytes": 356
+        },
+        {
+          "ms": 6.61,
+          "bytes": 356
+        },
+        {
+          "ms": 6.9,
+          "bytes": 356
+        },
+        {
+          "ms": 6.67,
+          "bytes": 356
+        },
+        {
+          "ms": 6.67,
+          "bytes": 356
+        },
+        {
+          "ms": 6.63,
+          "bytes": 356
+        },
+        {
+          "ms": 6.68,
+          "bytes": 356
+        },
+        {
+          "ms": 6.68,
+          "bytes": 356
+        },
+        {
+          "ms": 6.83,
+          "bytes": 356
+        }
+      ]
+    },
+    {
+      "project": "<project-6>",
+      "threadsReturned": 0,
+      "total": 0,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 6.6,
+        "p95": 7,
+        "min": 5.6,
+        "max": 7
+      },
+      "bytes": {
+        "median": 356,
+        "p95": 356
+      },
+      "samples": [
+        {
+          "ms": 6.7,
+          "bytes": 356
+        },
+        {
+          "ms": 6.57,
+          "bytes": 356
+        },
+        {
+          "ms": 6.57,
+          "bytes": 356
+        },
+        {
+          "ms": 6.59,
+          "bytes": 356
+        },
+        {
+          "ms": 6.66,
+          "bytes": 356
+        },
+        {
+          "ms": 5.6,
+          "bytes": 356
+        },
+        {
+          "ms": 6.49,
+          "bytes": 356
+        },
+        {
+          "ms": 6.66,
+          "bytes": 356
+        },
+        {
+          "ms": 7.04,
+          "bytes": 356
+        },
+        {
+          "ms": 5.85,
+          "bytes": 356
+        }
+      ]
+    },
+    {
+      "project": "<project-7>",
+      "threadsReturned": 0,
+      "total": 0,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 6.6,
+        "p95": 6.7,
+        "min": 5.5,
+        "max": 6.7
+      },
+      "bytes": {
+        "median": 356,
+        "p95": 356
+      },
+      "samples": [
+        {
+          "ms": 6.66,
+          "bytes": 356
+        },
+        {
+          "ms": 6.6,
+          "bytes": 356
+        },
+        {
+          "ms": 6.58,
+          "bytes": 356
+        },
+        {
+          "ms": 6.6,
+          "bytes": 356
+        },
+        {
+          "ms": 6.67,
+          "bytes": 356
+        },
+        {
+          "ms": 6.61,
+          "bytes": 356
+        },
+        {
+          "ms": 6.61,
+          "bytes": 356
+        },
+        {
+          "ms": 6.62,
+          "bytes": 356
+        },
+        {
+          "ms": 5.5,
+          "bytes": 356
+        },
+        {
+          "ms": 6.62,
+          "bytes": 356
+        }
+      ]
+    },
+    {
+      "project": "<project-8>",
+      "threadsReturned": 9,
+      "total": 9,
+      "hasMore": false,
+      "n": 10,
+      "ms": {
+        "median": 9.8,
+        "p95": 10.9,
+        "min": 9.3,
+        "max": 10.9
+      },
+      "bytes": {
+        "median": 13478,
+        "p95": 13478
+      },
+      "samples": [
+        {
+          "ms": 9.53,
+          "bytes": 13478
+        },
+        {
+          "ms": 9.34,
+          "bytes": 13478
+        },
+        {
+          "ms": 9.78,
+          "bytes": 13478
+        },
+        {
+          "ms": 10.88,
+          "bytes": 13478
+        },
+        {
+          "ms": 10.7,
+          "bytes": 13478
+        },
+        {
+          "ms": 9.77,
+          "bytes": 13478
+        },
+        {
+          "ms": 9.79,
+          "bytes": 13478
+        },
+        {
+          "ms": 9.48,
+          "bytes": 13478
+        },
+        {
+          "ms": 10.48,
+          "bytes": 13478
+        },
+        {
+          "ms": 9.69,
+          "bytes": 13478
+        }
+      ]
+    }
+  ]
+}
