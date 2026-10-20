@@ -139,7 +139,7 @@ void App::drawHint(Grid &grid, std::string_view hint)
     grid.put(kHintRow, 0, hint, Color::Dim);
 }
 
-App::Out App::onKey(Key key)
+App::Out App::onKey(Key key, uint32_t nowMs)
 {
     notice_.clear();
     switch (screen_) {
@@ -150,7 +150,7 @@ App::Out App::onKey(Key key)
     case Screen::Thread:
         return threadKey(key);
     case Screen::Request:
-        return requestKey(key);
+        return requestKey(key, nowMs);
     case Screen::Projects:
         return projectsKey(key);
     case Screen::Prompt:
@@ -159,7 +159,7 @@ App::Out App::onKey(Key key)
     return {};
 }
 
-App::Out App::onFrame(std::string_view json)
+App::Out App::onFrame(std::string_view json, uint32_t nowMs)
 {
     std::string err;
     const std::optional<RelayMsg> msg = parseRelay(json, caps_, err);
@@ -167,10 +167,10 @@ App::Out App::onFrame(std::string_view json)
         inform(err);
         return {};
     }
-    return onRelay(*msg);
+    return onRelay(*msg, nowMs);
 }
 
-App::Out App::onRelay(const RelayMsg &msg)
+App::Out App::onRelay(const RelayMsg &msg, uint32_t nowMs)
 {
     if (const Ack *ack = std::get_if<Ack>(&msg)) {
         onAck(*ack);
@@ -181,7 +181,7 @@ App::Out App::onRelay(const RelayMsg &msg)
             page_ = *page;
         }
     } else if (const Request *request = std::get_if<Request>(&msg)) {
-        onRequest(*request);
+        onRequest(*request, nowMs);
     } else if (const Projects *projects = std::get_if<Projects>(&msg); projects && screen_ == Screen::Projects) {
         projects_ = *projects;
         projectSelected_ = 0;
@@ -208,26 +208,51 @@ App::Out App::onLinkStatus(std::string_view status)
     return out;
 }
 
+std::string App::threadTitle(std::string_view threadId) const
+{
+    if (page_ && page_->threadId == threadId) {
+        return page_->header.title;
+    }
+    if (const HomeRow *row = homeRow(threadId)) {
+        return row->title;
+    }
+    return std::string(threadId);
+}
+
 void App::onAck(const Ack &ack)
 {
+    const bool launch = !launchId_.empty() && ack.id == launchId_;
+    if (launch) {
+        launchId_.clear();
+    }
     if (ack.ok) {
-        if (ack.id == launchId_) {
+        if (launch) {
             prompt_.clear();
-            screen_ = Screen::Home;
+            if (screen_ == Screen::Prompt) {
+                screen_ = Screen::Home;
+            }
             inform("task launched", Color::Ok);
         }
         return;
     }
+    const std::string why = ack.error.value_or("no reason given");
     if (ack.id == respondId_ && responded_) {
-        request_ = responded_;
-        typingFor_.reset();
-        screen_ = Screen::Request;
-    } else if (ack.id == replyId_ && reply_.empty()) {
+        const bool onThatThread = (screen_ == Screen::Thread || screen_ == Screen::Request) && threadId_ == responded_->threadId;
+        if (!onThatThread) {
+            inform("answer to " + threadTitle(responded_->threadId) + " failed: " + why);
+            return;
+        }
+        showRequest(*responded_);
+    } else if (ack.id == replyId_) {
+        if (screen_ != Screen::Thread || threadId_ != replyThreadId_ || !reply_.empty()) {
+            inform("reply to " + threadTitle(replyThreadId_) + " failed: " + why);
+            return;
+        }
         reply_ = replySent_;
     } else if (ack.id == openId_ && screen_ == Screen::Thread) {
         screen_ = Screen::Home;
     }
-    inform("refused: " + ack.error.value_or("no reason given"));
+    inform("refused: " + why);
 }
 
 void App::draw(Grid &grid) const

@@ -1,11 +1,11 @@
 new task                             2/2
 resend-api                              
-Tab: Opus 5.5 - new worktree - auto     
+model     Opus 5.5                      
+workspace new worktree                  
+mode      auto                          
                                         
 > the bounce webhook drops events when  
   the payload has no tags. find why and 
   open a PR_                            
-                                        
-                                        
                                         
 Enter start  Tab options  Esc back      

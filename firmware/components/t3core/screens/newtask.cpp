@@ -12,8 +12,11 @@ namespace {
 
 constexpr int kListTop = 2;
 constexpr int kListRows = kBodyBottom - kListTop + 1;
-constexpr int kOptionsRow = 2;
-constexpr int kPromptTop = 4;
+constexpr int kModelRow = 2;
+constexpr int kWorkspaceRow = 3;
+constexpr int kModeRow = 4;
+constexpr int kPromptTop = 6;
+constexpr int kFieldLabelCols = 10;
 constexpr int kPromptRows = kBodyBottom - kPromptTop + 1;
 
 constexpr std::array<RuntimeMode, 4> kModes = {RuntimeMode::ApprovalRequired, RuntimeMode::AutoAcceptEdits, RuntimeMode::Auto, RuntimeMode::FullAccess};
@@ -30,9 +33,10 @@ std::string workspaceLabel(Workspace workspace)
     return workspace == Workspace::Worktree ? "new worktree" : std::string(workspaceName(workspace));
 }
 
-std::string field(std::string text, bool focused)
+std::string field(std::string label, std::string_view value, bool focused)
 {
-    return focused ? "[" + text + "]" : text;
+    label.resize(kFieldLabelCols, ' ');
+    return label + (focused ? "[" + std::string(value) + "]" : std::string(value));
 }
 
 }
@@ -98,6 +102,10 @@ App::Out App::promptKey(Key key)
         }
         break;
     case KeyName::Enter: {
+        if (!launchId_.empty()) {
+            inform("starting...", Color::Ok);
+            break;
+        }
         if (prompt_.empty()) {
             inform("type a prompt first", Color::Warn);
             break;
@@ -169,9 +177,9 @@ void App::drawPrompt(Grid &grid) const
 {
     const ProjectItem &project = projects_->items[projectSelected_];
     grid.put(1, 0, project.name, Color::Hdr);
-    const std::string options = "Tab: " + project.defaults.model + " - " + field(workspaceLabel(workspace_), field_ == Field::Workspace) + " - " +
-                                field(std::string(runtimeModeName(mode_)), field_ == Field::Mode);
-    grid.put(kOptionsRow, 0, options, field_ == Field::None ? Color::Dim : Color::Text);
+    grid.put(kModelRow, 0, field("model", project.defaults.model, false), Color::Dim);
+    grid.put(kWorkspaceRow, 0, field("workspace", workspaceLabel(workspace_), field_ == Field::Workspace), field_ == Field::Workspace ? Color::Text : Color::Dim);
+    grid.put(kModeRow, 0, field("mode", runtimeModeName(mode_), field_ == Field::Mode), field_ == Field::Mode ? Color::Text : Color::Dim);
 
     const std::vector<std::string> wrapped = wrapWords(prompt_ + std::string(kCursor), Grid::Cols - static_cast<int>(kPrompt.size()));
     const int first = std::max(0, static_cast<int>(wrapped.size()) - kPromptRows);

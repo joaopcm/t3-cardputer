@@ -39,6 +39,7 @@ App::Out App::openThread(std::string threadId)
     if (threadId != threadId_) {
         page_.reset();
         reply_.clear();
+        waiting_.reset();
     }
     threadId_ = std::move(threadId);
     request_.reset();
@@ -62,6 +63,7 @@ App::Out App::threadKey(Key key)
             return;
         }
         replyId_ = id;
+        replyThreadId_ = threadId_;
         replySent_ = std::move(reply_);
         reply_.clear();
         inform(std::string("reply sent: ") + std::string(modeName(mode)), Color::Ok);
@@ -93,6 +95,8 @@ App::Out App::threadKey(Key key)
     case KeyName::Esc:
         screen_ = Screen::Home;
         break;
+    case KeyName::Tab:
+        return showWaiting();
     case KeyName::Char:
         type(reply_, key.ch, kReplyTextMax, "reply_text_max", "reply");
         break;
@@ -138,7 +142,11 @@ void App::drawThread(Grid &grid) const
         grid.put(inputRow, 0, inputLine(reply_));
         grid.selectRow(inputRow);
     }
-    drawHint(grid, reply_.empty() ? "type to reply  ^v page  Bksp back" : "Enter queue  Fn+Enter steer");
+    if (waiting_) {
+        drawHint(grid, reply_.empty() ? "Tab request  type to reply  Bksp back" : "Tab request  Enter queue  Fn+Enter steer");
+    } else {
+        drawHint(grid, reply_.empty() ? "type to reply  ^v page  Bksp back" : "Enter queue  Fn+Enter steer");
+    }
 
     if (loaded) {
         drawBar(grid, page_->header.project + " - " + page_->header.title, page_->header.status, statusColor(page_->header.status));

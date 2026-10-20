@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "t3/app.h"
@@ -27,6 +28,11 @@ void log_heap(const char *label)
 // why: demo only until Task 8 sends hello with measured values; maxHomeRows 16 fits the canned home (10 rows), frames use the protocol device cap
 constexpr t3::HelloCaps kDemoCaps{t3::Grid::Cols, 8, t3::kDeviceFrameBytesMax, 16};
 
+uint32_t now_ms()
+{
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
+
 void draw(const t3::App &app)
 {
     t3::Grid grid;
@@ -38,7 +44,7 @@ void feed(t3::App &app, const t3::App::Out &out)
 {
     for (const std::string &frame : out.send) {
         for (const std::string &answer : demo_relay_answer(frame)) {
-            feed(app, app.onFrame(answer));
+            feed(app, app.onFrame(answer, now_ms()));
         }
     }
 }
@@ -54,7 +60,7 @@ extern "C" void app_main(void)
     log_heap("sprite");
     static t3::App app(kDemoCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random());
     app.onLinkStatus("");
-    feed(app, app.onFrame(kDemoHome));
+    feed(app, app.onFrame(kDemoHome, now_ms()));
     draw(app);
     debug_serial_start();
     log_heap("ready");
@@ -64,7 +70,7 @@ extern "C" void app_main(void)
         t3::Key key;
         while (debug_serial_poll_key(&key)) {
             ESP_LOGI(TAG, "key %s", t3::keyNameString(key).c_str());
-            feed(app, app.onKey(key));
+            feed(app, app.onKey(key, now_ms()));
             draw(app);
             ESP_LOGI(TAG, "screen %.*s", static_cast<int>(app.screenName().size()), app.screenName().data());
         }

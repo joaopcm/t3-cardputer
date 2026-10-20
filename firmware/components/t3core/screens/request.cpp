@@ -85,24 +85,51 @@ App::RequestLayout App::requestLayout() const
     return layout;
 }
 
-void App::onRequest(const Request &request)
+void App::onRequest(const Request &request, uint32_t nowMs)
 {
     if (request.threadId != threadId_ || (screen_ != Screen::Thread && screen_ != Screen::Request)) {
         inform("request waiting: " + (request.lines.empty() ? request.requestId : request.lines.front()), Color::Warn);
         return;
     }
     const bool alreadyShown = screen_ == Screen::Request && request_ && request_->requestId == request.requestId && request_->lines == request.lines;
-    request_ = request;
     if (alreadyShown) {
+        request_ = request;
         return;
     }
+    const bool typingReply = screen_ == Screen::Thread && !reply_.empty();
+    const bool typingAnswer = screen_ == Screen::Request && typingFor_ && !answer_.empty();
+    if (typingReply || typingAnswer) {
+        waiting_ = request;
+        inform("request waiting: Tab opens it", Color::Warn);
+        return;
+    }
+    showRequest(request);
+    pushedAtMs_ = nowMs;
+}
+
+void App::showRequest(const Request &request)
+{
+    if (waiting_ && waiting_->requestId == request.requestId) {
+        waiting_.reset();
+    }
+    request_ = request;
     requestTop_ = 0;
     answer_.clear();
     typingFor_.reset();
+    pushedAtMs_.reset();
     if (request.options.empty()) {
         typingFor_ = Option{'T', "Type answer", "text"};
     }
     screen_ = Screen::Request;
+}
+
+App::Out App::showWaiting()
+{
+    if (waiting_) {
+        const Request request = *waiting_;
+        showRequest(request);
+    }
+    return {};
 }
 
 App::Out App::respond(Option option, std::optional<std::string> text)
@@ -126,8 +153,20 @@ App::Out App::respond(Option option, std::optional<std::string> text)
     return out;
 }
 
-App::Out App::requestKey(Key key)
+App::Out App::requestKey(Key key, uint32_t nowMs)
 {
+    const bool typed = key.name == KeyName::Char || key.name == KeyName::Enter || key.name == KeyName::FnEnter;
+    if (pushedAtMs_ && nowMs - *pushedAtMs_ < kRequestGuardMs) {
+        if (typed) {
+            inform("request just arrived, press again", Color::Warn);
+            return {};
+        }
+    } else {
+        pushedAtMs_.reset();
+    }
+    if (key.name == KeyName::Tab && waiting_) {
+        return showWaiting();
+    }
     const Request &request = *request_;
     const RequestLayout layout = requestLayout();
     const int maxTop = std::max(0, static_cast<int>(layout.scroll.size()) - layout.scrollRows);
@@ -224,7 +263,7 @@ void App::drawRequest(Grid &grid) const
     if (typingFor_) {
         grid.put(kBodyBottom, 0, inputLine(answer_));
         grid.selectRow(kBodyBottom);
-        drawHint(grid, scrollable ? "Enter send  ^v more  Bksp back" : "Enter send  Bksp back");
+        drawHint(grid, waiting_ ? "Tab request  Enter send  Bksp back" : scrollable ? "Enter send  ^v more  Bksp back" : "Enter send  Bksp back");
     } else {
         drawHint(grid, keyList(request.options) + (scrollable ? "  ^v more  Enter thread" : "  Enter thread  Bksp back"));
     }

@@ -47,6 +47,28 @@ const char *kProjects = R"({"type":"projects","items":[
  {"projectId":"proj_resend","name":"resend-api","defaults":{"model":"Opus 5.5","workspace":"worktree","runtimeMode":"auto"}},
  {"projectId":"proj_weaver","name":"weaver","defaults":{"model":"Opus 5.5","workspace":"root","runtimeMode":"approval-required"}}]})";
 
+uint32_t tick()
+{
+    static uint32_t now = 0;
+    now += 1000;
+    return now;
+}
+
+App::Out press(App &app, Key key)
+{
+    return app.onKey(key, tick());
+}
+
+App::Out push(App &app, const t3::RelayMsg &msg)
+{
+    return app.onRelay(msg, tick());
+}
+
+App::Out pushFrame(App &app, std::string_view json)
+{
+    return app.onFrame(json, tick());
+}
+
 t3::RelayMsg relay(const std::string &json)
 {
     std::string err;
@@ -126,7 +148,7 @@ Key named(KeyName name)
 void type(App &app, const std::string &text)
 {
     for (char c : text) {
-        App::Out out = app.onKey(ch(c));
+        App::Out out = press(app, ch(c));
         CHECK(out.send.empty());
     }
 }
@@ -168,32 +190,32 @@ App live()
 App onApproval()
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    const App::Out out = app.onKey(named(KeyName::Enter));
+    push(app, relay(kHome));
+    const App::Out out = press(app, named(KeyName::Enter));
     const Frame open(only(out));
     CHECK(open.str("type") == "open_thread");
     CHECK(open.str("threadId") == "thr_bounce");
-    app.onRelay(relay(kBouncePage));
-    app.onRelay(relay(kBounceRequest));
+    push(app, relay(kBouncePage));
+    push(app, relay(kBounceRequest));
     return app;
 }
 
 App onWeaverThread()
 {
     App app = live();
-    app.onRelay(relay(kWeaverHome));
-    app.onKey(named(KeyName::Enter));
-    app.onRelay(relay(kWeaverPage));
+    push(app, relay(kWeaverHome));
+    press(app, named(KeyName::Enter));
+    push(app, relay(kWeaverPage));
     return app;
 }
 
 App onQuestion(const std::string &request)
 {
     App app = live();
-    app.onRelay(relay(R"({"type":"home","rows":[{"threadId":"thr_q","kind":"question","project":"weaver","title":"pick files","age":"1m"}],
+    push(app, relay(R"({"type":"home","rows":[{"threadId":"thr_q","kind":"question","project":"weaver","title":"pick files","age":"1m"}],
  "counts":{"needs":1,"running":0,"done":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})"));
-    app.onKey(named(KeyName::Enter));
-    app.onRelay(relay(request));
+    press(app, named(KeyName::Enter));
+    push(app, relay(request));
     return app;
 }
 
@@ -234,7 +256,7 @@ struct FailingAllocator {
 TEST_CASE("home matches mockup 1 for its example home")
 {
     App app = live();
-    app.onRelay(relay(kHome));
+    push(app, relay(kHome));
     CHECK(app.screenName() == "home");
     checkGolden(app, "home");
     CHECK(selectedRow(app) == 2);
@@ -258,12 +280,12 @@ TEST_CASE("thread matches mockup 3")
 TEST_CASE("new task matches mockup 5")
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    const Frame list(only(app.onKey(ch('N'))));
+    push(app, relay(kHome));
+    const Frame list(only(press(app, ch('N'))));
     CHECK(list.str("type") == "list_projects");
-    app.onRelay(relay(kProjects));
+    push(app, relay(kProjects));
     CHECK(app.screenName() == "projects");
-    CHECK(app.onKey(named(KeyName::Enter)).send.empty());
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
     CHECK(app.screenName() == "new_task");
     type(app, "the bounce webhook drops events when the payload has no tags. find why and open a PR");
     checkGolden(app, "newtask");
@@ -272,7 +294,7 @@ TEST_CASE("new task matches mockup 5")
 TEST_CASE("Y on approval sends respond allow_once with a fresh id")
 {
     App app = onApproval();
-    const Frame first(only(app.onKey(ch('Y'))));
+    const Frame first(only(press(app, ch('Y'))));
     CHECK(first.str("type") == "respond");
     CHECK(first.str("threadId") == "thr_bounce");
     CHECK(first.str("requestId") == "req_1");
@@ -282,9 +304,9 @@ TEST_CASE("Y on approval sends respond allow_once with a fresh id")
 
     std::string next = kBounceRequest;
     next.replace(next.find("req_1"), 5, "req_2");
-    app.onRelay(relay(next));
+    push(app, relay(next));
     CHECK(app.screenName() == "approval");
-    const Frame second(only(app.onKey(ch('y'))));
+    const Frame second(only(press(app, ch('y'))));
     CHECK(second.str("requestId") == "req_2");
     CHECK(second.str("value") == "allow_once");
     CHECK(second.str("id") != first.str("id"));
@@ -295,14 +317,14 @@ TEST_CASE("Fn+Enter sends reply mode steer")
     App app = onWeaverThread();
     type(app, "ship it");
     CHECK(row(app, 8).rfind("> ship it_", 0) == 0);
-    const Frame steer(only(app.onKey(named(KeyName::FnEnter))));
+    const Frame steer(only(press(app, named(KeyName::FnEnter))));
     CHECK(steer.str("type") == "reply");
     CHECK(steer.str("threadId") == "thr_weaver");
     CHECK(steer.str("text") == "ship it");
     CHECK(steer.str("mode") == "steer");
 
     type(app, "and add a test");
-    const Frame queue(only(app.onKey(named(KeyName::Enter))));
+    const Frame queue(only(press(app, named(KeyName::Enter))));
     CHECK(queue.str("text") == "and add a test");
     CHECK(queue.str("mode") == "queue");
     CHECK(queue.str("id") != steer.str("id"));
@@ -327,7 +349,7 @@ TEST_CASE("12-option multiSelect question scrolls body and keeps all options rea
         for (const std::string &r : rows(app)) {
             seen.insert(r.substr(0, r.find_last_not_of(' ') + 1));
         }
-        CHECK(app.onKey(named(KeyName::Down)).send.empty());
+        CHECK(press(app, named(KeyName::Down)).send.empty());
         scrolled = scrolled || row(app, 1).rfind("Which files", 0) != 0;
     }
     CHECK(scrolled);
@@ -339,11 +361,11 @@ TEST_CASE("12-option multiSelect question scrolls body and keeps all options rea
     CHECK(seen.count("(pick one)") == 1);
 
     for (int i = 0; i < 20; ++i) {
-        app.onKey(named(KeyName::Up));
+        press(app, named(KeyName::Up));
     }
     CHECK(row(app, 1).rfind("Which files should I touch?", 0) == 0);
 
-    const Frame pick(only(app.onKey(ch('9'))));
+    const Frame pick(only(press(app, ch('9'))));
     CHECK(pick.str("value") == "f9");
     CHECK(pick.str("requestId") == "req_q");
 }
@@ -351,9 +373,9 @@ TEST_CASE("12-option multiSelect question scrolls body and keeps all options rea
 TEST_CASE("an approval taller than the screen scrolls its body and keeps every option pinned")
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    app.onKey(named(KeyName::Enter));
-    app.onRelay(relay(R"({"type":"request","threadId":"thr_bounce","requestId":"req_t","kind":"approval",
+    push(app, relay(kHome));
+    press(app, named(KeyName::Enter));
+    push(app, relay(R"({"type":"request","threadId":"thr_bounce","requestId":"req_t","kind":"approval",
  "lines":["line 1","line 2","line 3","line 4","line 5","line 6","line 7","line 8"],
  "options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},
  {"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]})"));
@@ -368,7 +390,7 @@ TEST_CASE("an approval taller than the screen scrolls its body and keeps every o
         for (int r = 1; r <= 5; ++r) {
             lines.insert(shown[r].substr(0, shown[r].find_last_not_of(' ') + 1));
         }
-        app.onKey(named(KeyName::Down));
+        press(app, named(KeyName::Down));
     }
     for (int i = 1; i <= 8; ++i) {
         CHECK_MESSAGE(lines.count("line " + std::to_string(i)) == 1, "line " << i);
@@ -378,7 +400,7 @@ TEST_CASE("an approval taller than the screen scrolls its body and keeps every o
 TEST_CASE("home with 30 rows scrolls and needs stay on top")
 {
     App app = live();
-    app.onRelay(relay(homeJson(10, 10, 10, 10, 10, 10)));
+    push(app, relay(homeJson(10, 10, 10, 10, 10, 10)));
     CHECK(row(app, 1).rfind("NEEDS YOU (10)", 0) == 0);
     CHECK(selectedRow(app) == 2);
     CHECK(row(app, 2).rfind("! p needs-1 ", 0) == 0);
@@ -392,7 +414,7 @@ TEST_CASE("home with 30 rows scrolls and needs stay on top")
         REQUIRE(sel >= 1);
         REQUIRE(sel <= 9);
         selected.insert(shown[sel].substr(4, shown[sel].find(' ', 4) - 4));
-        app.onKey(named(KeyName::Down));
+        press(app, named(KeyName::Down));
     }
     CHECK(selected.size() == 30);
     CHECK(selected.count("done-10") == 1);
@@ -407,16 +429,16 @@ TEST_CASE("home with 30 rows scrolls and needs stay on top")
     CHECK(seenHeader("RUNNING (10)"));
     CHECK(seenHeader("DONE TODAY (10)"));
 
-    const Frame open(only(app.onKey(named(KeyName::Enter))));
+    const Frame open(only(press(app, named(KeyName::Enter))));
     CHECK(open.str("threadId") == "thr_done-10");
 
     App back = live();
-    back.onRelay(relay(homeJson(10, 10, 10, 10, 10, 10)));
+    push(back, relay(homeJson(10, 10, 10, 10, 10, 10)));
     for (int i = 0; i < 29; ++i) {
-        back.onKey(named(KeyName::Down));
+        press(back, named(KeyName::Down));
     }
     for (int i = 0; i < 29; ++i) {
-        back.onKey(named(KeyName::Up));
+        press(back, named(KeyName::Up));
     }
     CHECK(row(back, 1).rfind("NEEDS YOU (10)", 0) == 0);
     CHECK(selectedRow(back) == 2);
@@ -425,16 +447,16 @@ TEST_CASE("home with 30 rows scrolls and needs stay on top")
 TEST_CASE("a home update keeps the selection on the same thread")
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    app.onKey(named(KeyName::Down));
-    app.onKey(named(KeyName::Down));
+    push(app, relay(kHome));
+    press(app, named(KeyName::Down));
+    press(app, named(KeyName::Down));
     CHECK(contains(row(app, selectedRow(app)), "nightly backup cron"));
     std::string moved = kHome;
     moved.insert(moved.find(R"({"threadId":"thr_bounce")"), R"({"threadId":"thr_new","kind":"approval","project":"api","title":"new approval","age":"0s"},)");
     moved.replace(moved.find(R"("needs":2)"), 9, R"("needs":3)");
-    app.onRelay(relay(moved));
+    push(app, relay(moved));
     CHECK(contains(row(app, selectedRow(app)), "nightly backup cron"));
-    app.onRelay(relay(homeJson(3, 0, 0, 3, 0, 0)));
+    push(app, relay(homeJson(3, 0, 0, 3, 0, 0)));
     CHECK(contains(row(app, selectedRow(app)), "needs-3"));
 }
 
@@ -442,11 +464,11 @@ TEST_CASE("home counts that exceed the rows name maxHomeRows")
 {
     App app(t3::HelloCaps{40, 8, 65536, 8}, 7);
     app.onLinkStatus("");
-    app.onRelay(relay(homeJson(2, 3, 3, 2, 3, 5)));
+    push(app, relay(homeJson(2, 3, 3, 2, 3, 5)));
     std::string seen;
     for (int i = 0; i < 10; ++i) {
         seen += allText(app);
-        app.onKey(named(KeyName::Down));
+        press(app, named(KeyName::Down));
     }
     CHECK(contains(seen, "DONE TODAY (5)"));
     CHECK(contains(seen, "maxHomeRows=8, home needed 10"));
@@ -455,10 +477,10 @@ TEST_CASE("home counts that exceed the rows name maxHomeRows")
 TEST_CASE("R sends refresh")
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    const Frame upper(only(app.onKey(ch('R'))));
+    push(app, relay(kHome));
+    const Frame upper(only(press(app, ch('R'))));
     CHECK(upper.str("type") == "refresh");
-    const Frame lower(only(app.onKey(ch('r'))));
+    const Frame lower(only(press(app, ch('r'))));
     CHECK(lower.str("type") == "refresh");
     CHECK(lower.str("id") != upper.str("id"));
 }
@@ -466,10 +488,10 @@ TEST_CASE("R sends refresh")
 TEST_CASE("T on approval sends respond with text")
 {
     App app = onApproval();
-    CHECK(app.onKey(ch('T')).send.empty());
+    CHECK(press(app, ch('T')).send.empty());
     type(app, "use staging");
     CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
-    const Frame respond(only(app.onKey(named(KeyName::Enter))));
+    const Frame respond(only(press(app, named(KeyName::Enter))));
     CHECK(respond.str("type") == "respond");
     CHECK(respond.str("value") == "deny_with_reason");
     CHECK(respond.str("text") == "use staging");
@@ -481,7 +503,7 @@ TEST_CASE("a question with no options takes free text")
     App app = onQuestion(R"({"type":"request","threadId":"thr_q","requestId":"req_f","kind":"question","lines":["Why did the test fail?"],"options":[]})");
     CHECK(row(app, 9).rfind("> _", 0) == 0);
     type(app, "flaky clock");
-    const Frame respond(only(app.onKey(named(KeyName::Enter))));
+    const Frame respond(only(press(app, named(KeyName::Enter))));
     CHECK(respond.str("value") == "text");
     CHECK(respond.str("text") == "flaky clock");
 }
@@ -489,9 +511,9 @@ TEST_CASE("a question with no options takes free text")
 TEST_CASE("a refused respond goes back to the request and says why")
 {
     App app = onApproval();
-    const Frame sent(only(app.onKey(ch('N'))));
+    const Frame sent(only(press(app, ch('N'))));
     CHECK(app.screenName() == "thread");
-    app.onRelay(t3::Ack{sent.str("id"), false, std::string("request no longer pending")});
+    push(app, t3::Ack{sent.str("id"), false, std::string("request no longer pending")});
     CHECK(app.screenName() == "approval");
     CHECK(row(app, 0).rfind("refused: request no longer pending", 0) == 0);
 }
@@ -499,34 +521,34 @@ TEST_CASE("a refused respond goes back to the request and says why")
 TEST_CASE("thread pages with up and down, backspace on an empty line goes home")
 {
     App app = onWeaverThread();
-    CHECK(app.onKey(named(KeyName::Up)).send.empty());
-    const Frame page(only(app.onKey(named(KeyName::Down))));
+    CHECK(press(app, named(KeyName::Up)).send.empty());
+    const Frame page(only(press(app, named(KeyName::Down))));
     CHECK(page.str("type") == "page");
     CHECK(page.str("threadId") == "thr_weaver");
     CHECK(page.num("page") == 2);
     type(app, "ab");
-    app.onKey(named(KeyName::Backspace));
-    app.onKey(named(KeyName::Backspace));
+    press(app, named(KeyName::Backspace));
+    press(app, named(KeyName::Backspace));
     CHECK(app.screenName() == "thread");
-    app.onKey(named(KeyName::Backspace));
+    press(app, named(KeyName::Backspace));
     CHECK(app.screenName() == "home");
 }
 
 TEST_CASE("a truncated reply names its budget")
 {
     App app = live();
-    app.onRelay(relay(kWeaverHome));
-    app.onKey(named(KeyName::Enter));
-    app.onRelay(relay(R"({"type":"thread_page","threadId":"thr_weaver","header":{"project":"weaver","title":"layout engine","model":"Opus 5.5","status":"done"},"page":32,"pages":32,"lines":["...end of what fits..."],"truncated":{"budget":"max_reply_pages","limit":32,"actual":57}})"));
+    push(app, relay(kWeaverHome));
+    press(app, named(KeyName::Enter));
+    push(app, relay(R"({"type":"thread_page","threadId":"thr_weaver","header":{"project":"weaver","title":"layout engine","model":"Opus 5.5","status":"done"},"page":32,"pages":32,"lines":["...end of what fits..."],"truncated":{"budget":"max_reply_pages","limit":32,"actual":57}})"));
     CHECK(contains(row(app, 1), "max_reply_pages=32, reply needed 57"));
 }
 
 TEST_CASE("new task cycles workspace and mode with tab and launches with them")
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    app.onKey(ch('n'));
-    app.onRelay(relay(R"({"type":"projects","items":[
+    push(app, relay(kHome));
+    press(app, ch('n'));
+    push(app, relay(R"({"type":"projects","items":[
  {"projectId":"proj_resend","name":"resend-api","defaults":{"model":"Opus 5.5","workspace":"worktree","runtimeMode":"auto"}}],
  "truncated":{"budget":"maxHomeRows","limit":1,"actual":40,"hidden":39}})"));
     std::string shown;
@@ -535,20 +557,20 @@ TEST_CASE("new task cycles workspace and mode with tab and launches with them")
     }
     CHECK(contains(shown, "+39 more projects: maxHomeRows=1, needed 40"));
 
-    app.onKey(named(KeyName::Enter));
-    app.onKey(named(KeyName::Tab));
-    CHECK(contains(row(app, 2), "[new worktree]"));
-    app.onKey(named(KeyName::Right));
-    CHECK(contains(row(app, 2), "[root]"));
-    app.onKey(named(KeyName::Tab));
-    CHECK(contains(row(app, 2), "[auto]"));
-    app.onKey(named(KeyName::Right));
-    CHECK(contains(row(app, 2), "[full-access]"));
+    press(app, named(KeyName::Enter));
+    press(app, named(KeyName::Tab));
+    CHECK(contains(row(app, 3), "[new worktree]"));
+    press(app, named(KeyName::Right));
+    CHECK(contains(row(app, 3), "[root]"));
+    press(app, named(KeyName::Tab));
+    CHECK(contains(row(app, 4), "[auto]"));
+    press(app, named(KeyName::Right));
+    CHECK(contains(row(app, 4), "[full-access]"));
 
-    CHECK(app.onKey(named(KeyName::Enter)).send.empty());
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
     CHECK(contains(row(app, 0), "prompt"));
     type(app, "go");
-    const Frame launch(only(app.onKey(named(KeyName::Enter))));
+    const Frame launch(only(press(app, named(KeyName::Enter))));
     CHECK(launch.str("type") == "launch");
     CHECK(launch.str("projectId") == "proj_resend");
     CHECK(launch.str("text") == "go");
@@ -556,7 +578,7 @@ TEST_CASE("new task cycles workspace and mode with tab and launches with them")
     CHECK(launch.str("runtimeMode") == "full-access");
     CHECK_FALSE(launch.has("model"));
 
-    app.onRelay(t3::Ack{launch.str("id"), true, std::nullopt});
+    push(app, t3::Ack{launch.str("id"), true, std::nullopt});
     CHECK(app.screenName() == "home");
     CHECK(row(app, 0).rfind("task launched", 0) == 0);
 }
@@ -564,9 +586,9 @@ TEST_CASE("new task cycles workspace and mode with tab and launches with them")
 TEST_CASE("every parse failure reaches the status bar")
 {
     App app = live();
-    app.onFrame(kHome);
+    pushFrame(app, kHome);
     CHECK(app.screenName() == "home");
-    app.onFrame("{not json");
+    pushFrame(app, "{not json");
     CHECK(row(app, 0).rfind("frame: not valid json", 0) == 0);
     CHECK(app.screenName() == "home");
 }
@@ -574,7 +596,7 @@ TEST_CASE("every parse failure reaches the status bar")
 TEST_CASE("an unknown home kind draws a ? row instead of blanking home")
 {
     App app = live();
-    app.onRelay(relay(R"({"type":"home","rows":[{"threadId":"thr_x","kind":"paused","project":"api","title":"later","age":"1m"}],
+    push(app, relay(R"({"type":"home","rows":[{"threadId":"thr_x","kind":"paused","project":"api","title":"later","age":"1m"}],
  "counts":{"needs":1,"running":0,"done":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})"));
     CHECK(contains(allText(app), "? api later"));
 }
@@ -582,15 +604,15 @@ TEST_CASE("an unknown home kind draws a ? row instead of blanking home")
 TEST_CASE("an encoder out of memory sends nothing, says so, and keeps the screen usable")
 {
     App app = live();
-    app.onRelay(relay(kHome));
+    push(app, relay(kHome));
     {
         FailingAllocator failing;
-        CHECK(app.onKey(ch('R')).send.empty());
+        CHECK(press(app, ch('R')).send.empty());
     }
     CHECK(contains(row(app, 0), "refresh"));
     CHECK(contains(row(app, 0), "memory"));
     CHECK(app.screenName() == "home");
-    CHECK(Frame(only(app.onKey(ch('R')))).str("type") == "refresh");
+    CHECK(Frame(only(press(app, ch('R')))).str("type") == "refresh");
 }
 
 TEST_CASE("row 0 shows the link status until welcome and when the link drops")
@@ -602,7 +624,7 @@ TEST_CASE("row 0 shows the link status until welcome and when the link drops")
     app.onLinkStatus("");
     CHECK(app.screenName() == "connecting");
     CHECK(contains(allText(app), "waiting for home"));
-    app.onRelay(relay(kHome));
+    push(app, relay(kHome));
     CHECK(row(app, 0).rfind("T3", 0) == 0);
     app.onLinkStatus("relay unreachable: closed 1006");
     CHECK(row(app, 0).rfind("relay unreachable: closed 1006", 0) == 0);
@@ -623,13 +645,13 @@ TEST_CASE("approvals down: row 0 says so, home shows the reason, approval keys s
     std::string home = kHome;
     home.replace(home.find(R"("approvals":{"available":true})"), 30, R"("approvals":{"available":false,"reason":"approvals down: adapter broken"})");
     App app = live();
-    app.onRelay(relay(home));
+    push(app, relay(home));
     CHECK(contains(row(app, 0), "approvals down"));
     CHECK(contains(allText(app), "approvals down: adapter broken"));
-    app.onKey(named(KeyName::Enter));
-    app.onRelay(relay(kBouncePage));
-    app.onRelay(relay(kBounceRequest));
-    CHECK(app.onKey(ch('Y')).send.empty());
+    press(app, named(KeyName::Enter));
+    push(app, relay(kBouncePage));
+    push(app, relay(kBounceRequest));
+    CHECK(press(app, ch('Y')).send.empty());
     CHECK(contains(row(app, 0), "approvals down: adapter broken"));
 }
 
@@ -639,7 +661,7 @@ TEST_CASE("warnings, T3 state and error frames show as given")
     home.replace(home.find(R"("warnings":[])"), 13, R"("warnings":["T3 token expires in 3 days, run t3-cardputer-relay login on the relay host"])");
     home.replace(home.find(R"("t3":"ok")"), 9, R"("t3":"unreachable")");
     App app = live();
-    app.onRelay(relay(home));
+    push(app, relay(home));
     CHECK(contains(row(app, 0), "T3 unreachable"));
     std::string body;
     for (const std::string &r : rows(app)) {
@@ -648,7 +670,7 @@ TEST_CASE("warnings, T3 state and error frames show as given")
     CHECK(contains(body, "T3 token expires in 3 days, run t3-cardputer-relay login on the relay host"));
 
     const std::string message = "max_frame_bytes=4096, request for thr_bounce needed 5120 bytes, the relay sent this error instead";
-    app.onRelay(t3::Error{t3::ErrorCode::Internal, message});
+    push(app, t3::Error{t3::ErrorCode::Internal, message});
     const std::vector<std::string> wrapped = t3::wrapWords(message, t3::Grid::Cols);
     REQUIRE(wrapped.size() == 3);
     for (size_t i = 0; i < wrapped.size(); ++i) {
@@ -659,9 +681,9 @@ TEST_CASE("warnings, T3 state and error frames show as given")
 TEST_CASE("a refused request says why on row 0")
 {
     App app = live();
-    app.onRelay(relay(kHome));
-    const Frame refresh(only(app.onKey(ch('R'))));
-    app.onRelay(t3::Ack{refresh.str("id"), false, std::string("T3 unreachable")});
+    push(app, relay(kHome));
+    const Frame refresh(only(press(app, ch('R'))));
+    push(app, t3::Ack{refresh.str("id"), false, std::string("T3 unreachable")});
     CHECK(row(app, 0).rfind("refused: T3 unreachable", 0) == 0);
 }
 
@@ -675,8 +697,134 @@ TEST_CASE("wrapWords breaks at spaces and hard-cuts long words")
 TEST_CASE("the same request sent again keeps a half-typed reason")
 {
     App app = onApproval();
-    app.onKey(ch('T'));
+    press(app, ch('T'));
     type(app, "abc");
-    app.onRelay(relay(kBounceRequest));
+    push(app, relay(kBounceRequest));
     CHECK(row(app, 9).rfind("> abc_", 0) == 0);
+}
+
+TEST_CASE("a request pushed while a reply is being typed waits for Tab")
+{
+    App app = onWeaverThread();
+    type(app, "go ");
+    std::string request = kBounceRequest;
+    request.replace(request.find("thr_bounce"), 10, "thr_weaver");
+    push(app, relay(request));
+    CHECK(app.screenName() == "thread");
+    type(app, "ahead");
+    CHECK(row(app, 8).rfind("> go ahead_", 0) == 0);
+    CHECK(contains(row(app, 10), "Tab request"));
+    CHECK(press(app, named(KeyName::Tab)).send.empty());
+    CHECK(app.screenName() == "approval");
+    const Frame respond(only(press(app, ch('Y'))));
+    CHECK(respond.str("value") == "allow_once");
+    press(app, named(KeyName::Esc));
+}
+
+TEST_CASE("a different request pushed while a reason is being typed waits, the reason stays")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "abc");
+    std::string next = kBounceRequest;
+    next.replace(next.find("req_1"), 5, "req_2");
+    push(app, relay(next));
+    CHECK(row(app, 9).rfind("> abc_", 0) == 0);
+    CHECK(contains(row(app, 10), "Tab request"));
+    const Frame respond(only(press(app, named(KeyName::Enter))));
+    CHECK(respond.str("requestId") == "req_1");
+    CHECK(respond.str("text") == "abc");
+}
+
+TEST_CASE("option keys wait kRequestGuardMs after a pushed request replaces the screen")
+{
+    App app = live();
+    app.onRelay(relay(kHome), 0);
+    app.onKey(named(KeyName::Enter), 10);
+    app.onRelay(relay(kBouncePage), 20);
+    app.onRelay(relay(kBounceRequest), 1000);
+    CHECK(app.screenName() == "approval");
+    CHECK(app.onKey(ch('Y'), 1000 + t3::kRequestGuardMs - 1).send.empty());
+    CHECK(contains(row(app, 0), "just arrived"));
+    CHECK(app.onKey(named(KeyName::Enter), 1100).send.empty());
+    CHECK(app.screenName() == "approval");
+    const Frame respond(only(app.onKey(ch('Y'), 1000 + t3::kRequestGuardMs)));
+    CHECK(respond.str("value") == "allow_once");
+}
+
+TEST_CASE("a failed reply goes back only to its own thread")
+{
+    App app = live();
+    push(app, relay(kHome));
+    for (int i = 0; i < 4; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    press(app, named(KeyName::Enter));
+    type(app, "hello");
+    const Frame reply(only(press(app, named(KeyName::Enter))));
+    CHECK(reply.str("threadId") == "thr_arena");
+    press(app, named(KeyName::Backspace));
+    press(app, named(KeyName::Up));
+    press(app, named(KeyName::Enter));
+    push(app, t3::Ack{reply.str("id"), false, std::string("T3 down")});
+    CHECK(row(app, 0).rfind("reply to measure arena sizes failed: T3", 0) == 0);
+    CHECK(row(app, 1).rfind("down ", 0) == 0);
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+
+    App same = onWeaverThread();
+    type(same, "again");
+    const Frame first(only(press(same, named(KeyName::Enter))));
+    push(same, t3::Ack{first.str("id"), false, std::string("T3 down")});
+    CHECK(row(same, 8).rfind("> again_", 0) == 0);
+}
+
+TEST_CASE("a failed respond for a thread no longer open is a notice, not a screen change")
+{
+    App app = onApproval();
+    const Frame sent(only(press(app, ch('N'))));
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Down));
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "thread");
+    push(app, t3::Ack{sent.str("id"), false, std::string("request no longer pending")});
+    CHECK(app.screenName() == "thread");
+    CHECK(row(app, 0).rfind("answer to fix bounce webhook failed:", 0) == 0);
+    CHECK(row(app, 1).rfind("request no longer pending", 0) == 0);
+}
+
+TEST_CASE("enter twice on new task launches once, a refused launch keeps the prompt")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, ch('N'));
+    push(app, relay(kProjects));
+    press(app, named(KeyName::Enter));
+    type(app, "go");
+    const Frame launch(only(press(app, named(KeyName::Enter))));
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+    CHECK(row(app, 0).rfind("starting...", 0) == 0);
+    push(app, t3::Ack{launch.str("id"), false, std::string("T3 down")});
+    CHECK(app.screenName() == "new_task");
+    CHECK(row(app, 6).rfind("> go_", 0) == 0);
+    const Frame retry(only(press(app, named(KeyName::Enter))));
+    CHECK(retry.str("text") == "go");
+    CHECK(retry.str("id") != launch.str("id"));
+}
+
+TEST_CASE("new task shows every workspace and mode value in full")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, ch('N'));
+    push(app, relay(R"({"type":"projects","items":[
+ {"projectId":"proj_long","name":"a-project-name-that-is-long","defaults":{"model":"claude-opus-4-5-20251101","workspace":"worktree","runtimeMode":"approval-required"}}]})"));
+    press(app, named(KeyName::Enter));
+    CHECK(row(app, 2).rfind("model     claude-opus-4-5-20251101", 0) == 0);
+    press(app, named(KeyName::Tab));
+    CHECK(row(app, 3).rfind("workspace [new worktree]", 0) == 0);
+    press(app, named(KeyName::Tab));
+    for (const char *mode : {"approval-required", "auto-accept-edits", "auto", "full-access"}) {
+        CHECK(row(app, 4).rfind(std::string("mode      [") + mode + "]", 0) == 0);
+        press(app, named(KeyName::Right));
+    }
 }

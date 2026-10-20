@@ -12,6 +12,9 @@
 
 namespace t3 {
 
+// why: simple visual reaction time is about 200-250 ms, so a key already on its way when a pushed request replaces the screen lands inside 400 ms; option keys wait that long
+inline constexpr uint32_t kRequestGuardMs = 400;
+
 std::vector<std::string> wrapWords(std::string_view text, int width);
 
 class App {
@@ -23,9 +26,9 @@ public:
 
     App(const HelloCaps &caps, uint64_t idSeed);
 
-    Out onKey(Key key);
-    Out onRelay(const RelayMsg &msg);
-    Out onFrame(std::string_view json);
+    Out onKey(Key key, uint32_t nowMs);
+    Out onRelay(const RelayMsg &msg, uint32_t nowMs);
+    Out onFrame(std::string_view json, uint32_t nowMs);
     Out onLinkStatus(std::string_view status);
     void draw(Grid &grid) const;
     std::string_view screenName() const;
@@ -56,7 +59,9 @@ private:
     void drawBar(Grid &grid, std::string_view left, std::string_view right, Color rightColor = Color::Text) const;
     static void drawHint(Grid &grid, std::string_view hint);
     void onAck(const Ack &ack);
-    void onRequest(const Request &request);
+    void onRequest(const Request &request, uint32_t nowMs);
+    void showRequest(const Request &request);
+    std::string threadTitle(std::string_view threadId) const;
 
     void onHome(const Home &home);
     Out homeKey(Key key);
@@ -67,9 +72,10 @@ private:
 
     Out openThread(std::string threadId);
     Out threadKey(Key key);
+    Out showWaiting();
     void drawThread(Grid &grid) const;
 
-    Out requestKey(Key key);
+    Out requestKey(Key key, uint32_t nowMs);
     RequestLayout requestLayout() const;
     Out respond(Option option, std::optional<std::string> text);
     void drawRequest(Grid &grid) const;
@@ -96,9 +102,12 @@ private:
     std::string reply_;
     std::string replyId_;
     std::string replySent_;
+    std::string replyThreadId_;
     std::string openId_;
 
     std::optional<Request> request_;
+    std::optional<Request> waiting_;
+    std::optional<uint32_t> pushedAtMs_;
     int requestTop_ = 0;
     std::optional<Option> typingFor_;
     std::string answer_;
