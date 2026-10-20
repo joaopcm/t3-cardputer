@@ -25,7 +25,7 @@ function wavFile(pcm: Buffer, { rate = 16000, channels = 1, bits = 16 } = {}): B
 
 type Frame = { binary: true; bytes: number } | { binary: false; msg: Record<string, unknown> };
 
-const HOME = { type: "home", rows: [{ threadId: "t1", kind: "running", project: "api", title: "migrate", ageSec: 5 }], counts: { needs: 0, running: 1, done: 0 }, approvals: { available: true }, warnings: [], t3: "ok" };
+const HOME = { type: "home", rows: [{ threadId: "t1", kind: "running", project: "api", title: "migrate", age: "5s" }], counts: { needs: 0, running: 1, done: 0 }, approvals: { available: true }, warnings: [], t3: "ok" };
 const PAGE = { type: "thread_page", threadId: "t1", header: { project: "api", title: "migrate", model: "m", status: "running" }, page: 1, pages: 1, lines: ["hello"] };
 
 const servers: WebSocketServer[] = [];

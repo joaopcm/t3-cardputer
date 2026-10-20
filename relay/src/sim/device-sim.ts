@@ -643,18 +643,11 @@ function nonPrintable(value: unknown, path: string): string | undefined {
 
 function homeLine(row: Of<"home">["rows"][number], cols: number): string {
   const head = `${MARKERS[row.kind]} ${row.project} ${row.title}`;
-  return `${head.padEnd(cols - 5)} ${drawnAge(row.ageSec).padStart(4)}`;
+  return `${head.padEnd(cols - 5)} ${row.age.padStart(4)}`;
 }
 
 function spread(left: string, right: string, cols: number): string {
   return `${left.slice(0, Math.max(0, cols - right.length - 1)).padEnd(cols - right.length)}${right}`;
-}
-
-function drawnAge(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86_400) return `${Math.floor(sec / 3600)}h`;
-  return `${Math.floor(sec / 86_400)}d`;
 }
 
 function wrapHard(text: string, cols: number): string[] {

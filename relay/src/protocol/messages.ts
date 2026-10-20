@@ -41,6 +41,9 @@ export const DEVICE_NAME_MAX = LABEL_MAX;
 // receipt: the largest valid pair body is {"code":<8>,"name":<64 chars JSON-escaped at 6 bytes each>} at about 410 bytes
 export const PAIR_BODY_BYTES_MAX = 1024;
 
+// receipt: docs/protocol.md home row layout, the age column is 4 wide (42s, 59m, 23h, 999d)
+export const HOME_AGE_COLS = 4;
+
 export const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-access"] as const;
 export const WORKSPACES = ["root", "worktree"] as const;
 export const HOME_KINDS = ["approval", "question", "failed", "running", "done"] as const;
@@ -100,7 +103,7 @@ const homeRow = z.strictObject({
   kind: z.enum(HOME_KINDS),
   project: z.string(),
   title: z.string(),
-  ageSec: count,
+  age: z.string().min(1).max(HOME_AGE_COLS),
 });
 
 const requestOption = z.strictObject({

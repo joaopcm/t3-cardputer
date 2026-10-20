@@ -23,7 +23,7 @@ import { AudioBuffer, BudgetError } from "./stt/audio-buffer.js";
 import type { Stt } from "./stt/types.js";
 import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
 import { toDeviceAscii } from "./text/device-text.js";
-import { buildHome, type HomeMessage } from "./views/home.js";
+import { buildHome } from "./views/home.js";
 import { buildProjects } from "./views/projects.js";
 import { buildRequest } from "./views/request.js";
 import { buildThreadPage, type ThreadPageMessage } from "./views/thread.js";
@@ -405,7 +405,7 @@ export class Session {
       warnings: [...snapshot.warnings, ...this.hub.warnings()].map(clipText),
       t3: snapshot.t3,
     });
-    const key = homeKey(home);
+    const key = JSON.stringify(home);
     if (key === this.lastHomeKey) return;
     this.lastHomeKey = key;
     this.send(home);
@@ -741,16 +741,4 @@ function definedLaunchOptions(msg: Of<"launch">): Partial<ProjectDefaults> {
   if (msg.workspace !== undefined) out.workspace = msg.workspace;
   if (msg.runtimeMode !== undefined) out.runtimeMode = msg.runtimeMode;
   return out;
-}
-
-// receipt: docs/protocol.md home row layout, the device draws ageSec as 42s, 5m, 3h or 12d, so a home whose ages draw the same is the same screen
-function drawnAge(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86_400) return `${Math.floor(sec / 3600)}h`;
-  return `${Math.floor(sec / 86_400)}d`;
-}
-
-function homeKey(home: HomeMessage): string {
-  return JSON.stringify({ ...home, rows: home.rows.map((row) => ({ ...row, ageSec: drawnAge(row.ageSec) })) });
 }

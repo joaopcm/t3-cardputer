@@ -299,18 +299,18 @@ Result of one device message.
 
 ### home
 
-The home screen: threads that need attention first. Sent after `welcome` and again whenever it changes as drawn: ages count as changed only when their drawn text (`42s`, `5m`, `3h`, `12d`) changes.
+The home screen: threads that need attention first. Sent after `welcome` and again whenever anything in it changes, including an `age` text (so the device never needs a clock to keep ages current).
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"home"` | yes | |
 | `rows` | HomeRow[] | yes | at most `hello.maxHomeRows`, already in display order |
-| `counts` | object | yes | `{needs, running, done}`, ints >= 0, counts over all threads, not just `rows` |
+| `counts` | object | yes | `{needs, running, done}`, ints >= 0, counts over all threads, not just `rows` (see buckets below) |
 | `approvals` | object | yes | `{available: bool, reason?: string}`; when `available` is false the device must not offer approvals and shows `reason` |
 | `warnings` | string[] | yes | short printable ASCII notices for the status bar, may be empty |
 | `t3` | `"ok"` or `"unreachable"` | yes | whether the relay can reach T3 right now |
 
-HomeRow: `{threadId, kind, project, title, ageSec}`
+HomeRow: `{threadId, kind, project, title, age}`
 
 | Field | Type | Constraint |
 | --- | --- | --- |
@@ -318,12 +318,18 @@ HomeRow: `{threadId, kind, project, title, ageSec}`
 | `kind` | string | `"approval"`, `"question"`, `"failed"`, `"running"`, or `"done"` |
 | `project` | string | printable ASCII, already shortened to fit |
 | `title` | string | printable ASCII, already shortened to fit |
-| `ageSec` | int | >= 0, seconds since the last activity |
+| `age` | string | 1-4 printable ASCII chars, time since the last activity, already drawn (see below) |
 
-Row layout, shared by firmware and relay: the device draws one row per line as `<marker> <project> <title> <age>`. `marker` is 1 column (a symbol for `kind`), `age` is right-aligned in 4 columns (for example `42s`, `5m`, `3h`, `12d`), and there are 3 single-space separators, so 8 columns are fixed. The relay clips `project` to at most `floor(cols / 3)` columns and `title` to `cols - 8 - len(project)` columns, both at least 1. Clipped text ends with `~`, so a row never needs the device to cut it.
+Buckets and `counts`: `needs` counts rows of kind `approval`, `question`, and `failed` (T3 statuses `failed`, `interrupted`, `cancelled`, plus any status the relay does not know, which also adds a warning). `running` counts kind `running` (T3 statuses `preparing`, `queued`, `starting`, `running` with nothing pending). `done` counts kind `done` (status `completed`, last activity within 24 hours; older completed threads are not on home at all). `rows` lists `needs` first: approvals, then questions, then failures, each oldest first so the longest wait is on top. Then `running`, then `done`, both newest first.
+
+Kind markers, all ASCII: `approval` is `!`, `question` is `?`, `failed` is `x`, `running` is `*`, `done` is `-`. The device draws no section headers inside `rows`; if it wants headers like the mockup's `NEEDS YOU (2)` / `RUNNING (3)` / `DONE (5)`, it takes the numbers from `counts` and must leave room for them when it declares `maxHomeRows` (`bodyRows - 3` leaves room for all three).
+
+Age format: the relay draws it, so device and relay can never disagree about when the text changes (the relay re-sends home exactly then). With `s` the whole seconds since the last activity: `s < 60` draws `<s>s` (`0s` to `59s`); `s < 3600` draws `<floor(s/60)>m` (`1m` to `59m`); `s < 86400` draws `<floor(s/3600)>h` (`1h` to `23h`); otherwise `<floor(s/86400)>d`, capped at `999d`. It is never wider than 4 columns.
+
+Row layout, shared by firmware and relay: the device draws one row per line as `<marker> <project> <title> <age>`. `marker` is 1 column, `age` is right-aligned in 4 columns, and there are 3 single-space separators, so 8 columns are fixed. The relay clips `project` to at most `floor(cols / 3)` columns and `title` to `cols - 8 - len(project)` columns, both at least 1. Clipped text ends with `~`, so a row never needs the device to cut it.
 
 ```json relay
-{"type":"home","rows":[{"threadId":"thr_01","kind":"approval","project":"api","title":"run migration","ageSec":42},{"threadId":"thr_02","kind":"running","project":"web","title":"fix flaky test","ageSec":310}],"counts":{"needs":1,"running":1,"done":6},"approvals":{"available":true},"warnings":[],"t3":"ok"}
+{"type":"home","rows":[{"threadId":"thr_01","kind":"approval","project":"api","title":"run migration","age":"42s"},{"threadId":"thr_02","kind":"running","project":"web","title":"fix flaky test","age":"5m"}],"counts":{"needs":1,"running":1,"done":6},"approvals":{"available":true},"warnings":[],"t3":"ok"}
 ```
 
 ### thread_page

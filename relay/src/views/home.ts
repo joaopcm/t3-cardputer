@@ -67,7 +67,7 @@ export function buildHome(input: HomeInput): HomeMessage {
         kind,
         project,
         title: clip(oneLine(thread.title), titleCols),
-        ageSec: Math.max(0, Math.floor((nowMs - updatedMs) / 1000)),
+        age: drawnAge(Math.max(0, Math.floor((nowMs - updatedMs) / 1000))),
       },
     });
   }
@@ -95,6 +95,16 @@ export function buildHome(input: HomeInput): HomeMessage {
     warnings,
     t3: input.t3,
   };
+}
+
+// receipt: docs/protocol.md home row layout, age is right-aligned in 4 columns, so days stop at 999d (2.7 years) and anything older draws the same
+const MAX_DRAWN_DAYS = 999;
+
+export function drawnAge(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86_400) return `${Math.floor(sec / 3600)}h`;
+  return `${Math.min(Math.floor(sec / 86_400), MAX_DRAWN_DAYS)}d`;
 }
 
 function bucketOf(kind: HomeRow["kind"]): "needs" | "running" | "done" {

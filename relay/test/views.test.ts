@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PendingApproval } from "../src/approvals/index.js";
 import { relayMessageSchema } from "../src/protocol/messages.js";
 import type { T3Question, T3ThreadSummary } from "../src/t3/mcp.js";
-import { buildHome } from "../src/views/home.js";
+import { drawnAge, buildHome } from "../src/views/home.js";
 import { buildProjects } from "../src/views/projects.js";
 import { buildRequest } from "../src/views/request.js";
 import { buildThreadPage } from "../src/views/thread.js";
@@ -134,13 +134,13 @@ describe("buildHome", () => {
     expect(home.counts).toEqual({ needs: 1, running: 0, done: 0 });
   });
 
-  it("computes ageSec and cleans text to device ascii", () => {
+  it("sends the age already drawn, and cleans text to device ascii", () => {
     const home = buildHome({
       ...baseHome,
       threads: [{ ...thread("t", "running", hoursAgo(1), "café 🚀\nfix"), project: "müller api" }],
     });
 
-    expect(home.rows[0]?.ageSec).toBe(3600);
+    expect(home.rows[0]?.age).toBe("1h");
     expect(home.rows[0]?.title).toBe("cafe ? fix");
     expect(home.rows[0]?.project).toBe("muller api");
   });
@@ -303,6 +303,23 @@ describe("buildThreadPage", () => {
 
 const screen = (cols: number, bodyRows = 11, maxFrameBytes = 4096) => ({ cols, bodyRows, maxFrameBytes });
 const frameBytes = (msg: unknown) => Buffer.byteLength(JSON.stringify(msg));
+
+describe("drawnAge", () => {
+  it.each([
+    [0, "0s"],
+    [59, "59s"],
+    [60, "1m"],
+    [3599, "59m"],
+    [3600, "1h"],
+    [86_399, "23h"],
+    [86_400, "1d"],
+    [999 * 86_400, "999d"],
+    [5000 * 86_400, "999d"],
+  ])("%i seconds draws as %s, never over 4 columns", (sec, drawn) => {
+    expect(drawnAge(sec)).toBe(drawn);
+    expect(drawn.length).toBeLessThanOrEqual(4);
+  });
+});
 
 describe("buildRequest", () => {
   it("a 120-line heredoc approval fits bodyRows and maxFrameBytes, keeps every option, and says how much was cut", () => {
