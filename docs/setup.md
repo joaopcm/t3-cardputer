@@ -15,8 +15,11 @@ git clone https://github.com/joaopcm/t3-cardputer.git ~/.local/share/t3-cardpute
 cd ~/.local/share/t3-cardputer/deploy/relay
 pnpm install --frozen-lockfile
 pnpm build
-scripts/install-whisper.sh
+~/.local/share/t3-cardputer/deploy/relay/scripts/install-whisper.sh
+ln -sf ~/.local/share/t3-cardputer/deploy/relay/dist/cli.js ~/.local/bin/t3-cardputer-relay
 ```
+
+the symlink puts `t3-cardputer-relay` on PATH for the commands below.
 
 node 22 and pnpm go in `~/.local/bin`. the unit puts that dir on its PATH.
 
@@ -26,7 +29,7 @@ the relay's self-repair runs `git pull --ff-only origin main` in this clone, so 
 
 ## 2. config
 
-optional. defaults are in `relay/src/config.ts`, `relay/relay.example.json` shows every key. the file is `~/.config/t3-cardputer/relay.json`, only set what you change:
+optional. defaults are in `~/.local/share/t3-cardputer/deploy/relay/src/config.ts`, `~/.local/share/t3-cardputer/deploy/relay/relay.example.json` shows every key. the file is `~/.config/t3-cardputer/relay.json`, only set what you change:
 
 ```json
 { "port": 8787, "repair": { "projectId": "<t3 project id>" } }
@@ -100,7 +103,7 @@ JSON
 
 ```
 mkdir -p ~/.config/systemd/user
-cp relay/deploy/t3-cardputer-relay.service ~/.config/systemd/user/
+cp ~/.local/share/t3-cardputer/deploy/relay/deploy/t3-cardputer-relay.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now t3-cardputer-relay
 loginctl enable-linger $USER
@@ -141,11 +144,11 @@ t3-cardputer-relay pair
 
 type the printed code on the ADV. it expires after `pairingCodeTtlMs` (10 min).
 
-without the device, drive the relay from a laptop (same build there):
+without the device, drive the relay from a laptop (clone, build and symlink as in section 1; `jfk.wav` is in the whisper clone's `samples/`, adjust the path if the laptop's differs):
 
 ```
 t3-cardputer-relay sim pair https://<homelab>.<tailnet>.ts.net <code>
-t3-cardputer-relay sim --wav <whisper dir>/samples/jfk.wav
+t3-cardputer-relay sim --wav ~/.local/share/t3-cardputer/whisper/samples/jfk.wav
 ```
 
 `pair` saves the token to `~/.config/t3-cardputer/sim.json`. `sim` opens a simulated device, shows home, and streams the wav for transcription.
