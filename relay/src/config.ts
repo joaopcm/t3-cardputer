@@ -30,6 +30,7 @@ export const limitsSchema = z.strictObject({
   heartbeatIntervalMs: positiveInt,
   heartbeatMaxMissed: positiveInt,
   canaryTimeoutMs: positiveInt,
+  canaryRetryMaxMs: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -101,6 +102,8 @@ export const DEFAULT_LIMITS: Limits = {
   heartbeatMaxMissed: 2,
   // receipt: docs/receipts/2026-10-20-canary.md, 4 live runs took 5.6-6.4 s, so 5x the slowest (6433 ms) is 32165 ms and only trips a broken or hung run
   canaryTimeoutMs: 32_165,
+  // receipt: docs/receipts/2026-10-20-canary.md, a canary is one 5.6-6.4 s Haiku turn, so backing off from the 20 s version check to 1 h caps a persistent no-verdict failure (revoked token, T3 down) at 24 turns a day after the first few
+  canaryRetryMaxMs: 3_600_000,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

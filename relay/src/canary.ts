@@ -1,4 +1,4 @@
-import { AdapterBrokenError, type ApprovalsAdapter } from "./approvals/index.js";
+import { AdapterBrokenError, type ApprovalsAdapter, type PendingApproval } from "./approvals/index.js";
 import { DEFAULT_LIMITS } from "./config.js";
 import type { T3Mcp } from "./t3/mcp.js";
 
@@ -9,8 +9,8 @@ const CANARY_MESSAGE = "Run the shell command `touch t3-cardputer-canary.txt` an
 const CANARY_TITLE = "t3-cardputer canary";
 
 export type CanaryStage = "launch" | "approval_seen" | "respond" | "completed";
-export type CanaryResult = { ok: true; ms: number } | { ok: false; stage: CanaryStage; reason: string };
-export type CanaryFailure = Extract<CanaryResult, { ok: false }>;
+export type CanaryFailure = { ok: false; stage: CanaryStage; kind: "broken" | "transient"; reason: string };
+export type CanaryResult = { ok: true; ms: number } | CanaryFailure;
 export type CanaryDeps = {
   t3: Pick<T3Mcp, "launch" | "waitForRun" | "settleThread">;
   approvals: Pick<ApprovalsAdapter, "listPending" | "respond">;
@@ -28,7 +28,7 @@ export async function runCanary(deps: CanaryDeps, opts: CanaryOptions): Promise<
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_LIMITS.pollIntervalMs;
   const startedAt = Date.now();
   const deadline = startedAt + opts.timeoutMs;
-  const fail = (stage: CanaryStage, reason: string): CanaryFailure => ({ ok: false, stage, reason });
+  const fail = (stage: CanaryStage, kind: CanaryFailure["kind"], reason: string): CanaryFailure => ({ ok: false, stage, kind, reason });
   let stage: CanaryStage = "launch";
   let threadId: string | undefined;
 
@@ -44,11 +44,25 @@ export async function runCanary(deps: CanaryDeps, opts: CanaryOptions): Promise<
     }));
 
     stage = "approval_seen";
-    let approval = (await deps.approvals.listPending([threadId]))[0];
+    let approval: PendingApproval | undefined;
+    let adapterAnswered = false;
+    let lastError: unknown;
     while (approval === undefined) {
-      if (Date.now() >= deadline) return fail(stage, `no approval appeared for thread ${threadId}: canaryTimeoutMs=${opts.timeoutMs}, waited ${Date.now() - startedAt} ms`);
+      try {
+        approval = (await deps.approvals.listPending([threadId]))[0];
+        adapterAnswered = true;
+      } catch (error) {
+        if (error instanceof AdapterBrokenError) throw error;
+        lastError = error;
+      }
+      if (approval !== undefined) break;
+      if (Date.now() >= deadline) {
+        const waited = `canaryTimeoutMs=${opts.timeoutMs}, waited ${Date.now() - startedAt} ms`;
+        return adapterAnswered
+          ? fail(stage, "broken", `no approval appeared for thread ${threadId}: ${waited}`)
+          : fail(stage, "transient", `the approvals adapter never answered for thread ${threadId}: ${waited}, last error: ${reasonOf(lastError)}`);
+      }
       await sleep(pollIntervalMs);
-      approval = (await deps.approvals.listPending([threadId]))[0];
     }
 
     stage = "respond";
@@ -56,40 +70,18 @@ export async function runCanary(deps: CanaryDeps, opts: CanaryOptions): Promise<
 
     stage = "completed";
     const remaining = deadline - Date.now();
-    if (remaining <= 0) return fail(stage, `approval answered but the run was not awaited: canaryTimeoutMs=${opts.timeoutMs} used up`);
+    if (remaining <= 0) return fail(stage, "broken", `approval answered but the run was not awaited: canaryTimeoutMs=${opts.timeoutMs} used up`);
     const run = await deps.t3.waitForRun(threadId, remaining);
-    if (run.timedOut) return fail(stage, `run timed out after the approval: canaryTimeoutMs=${opts.timeoutMs}, status=${run.status}`);
-    if (run.status !== "completed") return fail(stage, `run ended with status ${run.status} after the approval`);
+    if (run.timedOut) return fail(stage, "broken", `run timed out after the approval: canaryTimeoutMs=${opts.timeoutMs}, status=${run.status}`);
+    if (run.status !== "completed") return fail(stage, "broken", `run ended with status ${run.status} after the approval`);
     return { ok: true, ms: Date.now() - startedAt };
   } catch (error) {
-    return fail(stage, reasonOf(error));
+    return fail(stage, error instanceof AdapterBrokenError ? "broken" : "transient", reasonOf(error));
   } finally {
     if (threadId !== undefined) {
       await deps.t3.settleThread(threadId).catch((error: unknown) => {
         console.error(`canary could not settle scratch thread ${threadId}: ${reasonOf(error)}`, error);
       });
     }
-  }
-}
-
-export type CanaryReactions = {
-  markApprovalsUp(): void;
-  markApprovalsDown(reason: string): void;
-  onCanaryFailed?(failure: CanaryFailure, versions: { from?: string; to: string }): void;
-};
-
-export function reactToCanary(result: CanaryResult, versions: { from?: string; to: string }, reactions: CanaryReactions): void {
-  if (result.ok) {
-    console.log(`canary passed in ${result.ms} ms on T3 ${versions.to}`);
-    reactions.markApprovalsUp();
-    return;
-  }
-  console.error(`canary failed at ${result.stage} on T3 ${versions.to}: ${result.reason}`);
-  if (result.stage === "launch") return;
-  reactions.markApprovalsDown(`canary ${result.stage}: ${result.reason}`);
-  try {
-    reactions.onCanaryFailed?.(result, versions);
-  } catch (error) {
-    console.error("onCanaryFailed threw, approvals stay marked down", error);
   }
 }

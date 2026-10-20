@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminRequest } from "../src/admin.js";
+import { SecretsStore } from "../src/secrets.js";
 import { startRelay } from "../src/serve.js";
 import { Device } from "./helpers/relay-fixture.js";
 import { relayEnvironment } from "./helpers/relay-env.js";
@@ -138,5 +140,39 @@ describe("startRelay", () => {
     await vi.waitFor(() => expect(error.mock.calls.some(([line]) => String(line).includes("canary skipped") && String(line).includes("T3 MCP token"))).toBe(true));
     await relay.close();
     expect(existsSync(join(env.stateDir, "t3-version.json"))).toBe(false);
+  });
+
+  it("restart with a saved broken verdict shows approvals down on devices at once, before any rerun finishes", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const environment = createHttpServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/.well-known/t3/environment") return void res.writeHead(200).end(JSON.stringify({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, capabilities: {} }));
+      res.writeHead(404).end("{}");
+    });
+    await new Promise<void>((resolve) => environment.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { environment.closeAllConnections(); environment.close(() => resolve()); }));
+    const env = await relayEnvironment();
+    const config = JSON.parse(readFileSync(env.configPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(env.configPath, JSON.stringify({ ...config, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` }));
+    const expiresAt = new Date(Date.now() + 86_400_000).toISOString();
+    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt }, t3InternalToken: { token: "i", expiresAt } });
+    mkdirSync(env.stateDir, { recursive: true });
+    writeFileSync(join(env.stateDir, "t3-version.json"), JSON.stringify({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, verdict: "broken", stage: "respond", reason: "decision not accepted" }));
+
+    const relay = await startRelay(env);
+    cleanups.push(() => relay.close());
+    const paired = await adminRequest(env.socketPath, { op: "pair" }, 2000);
+    if (!("code" in paired)) throw new Error(JSON.stringify(paired));
+    const response = await fetch(`http://127.0.0.1:${env.port}/v1/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: paired.code, name: "adv" }),
+    });
+    const { token } = (await response.json()) as { token: string };
+    const device = await Device.open(env.port);
+    cleanups.push(() => device.close());
+    device.hello(token);
+    const home = await device.next("home", (h) => !h.approvals.available);
+    expect(home.approvals.reason).toContain("canary respond: decision not accepted");
   });
 });

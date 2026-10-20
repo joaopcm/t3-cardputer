@@ -10,10 +10,12 @@ import { runCanary, type CanaryDeps } from "./canary.js";
 import { DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, loadConfig, type RelayConfig } from "./config.js";
 import { readSecret, type SecretInput } from "./read-secret.js";
 import { SecretsStore, type TokenRecord } from "./secrets.js";
-import { ADMIN_SOCKET_NAME, connectT3, startRelay } from "./serve.js";
+import { ADMIN_SOCKET_NAME, VERSION_STATE_NAME, connectT3, startRelay } from "./serve.js";
 import { main as simMain } from "./sim/main.js";
 import { DEFAULT_SIM_CONFIG_PATH } from "./sim/sim-config.js";
+import { getEnvironment } from "./t3/environment.js";
 import { pairT3Mcp } from "./t3/mcp-oauth.js";
+import { VersionWatch, verdictOf, type VersionCheck } from "./version-watch.js";
 
 export type CliContext = {
   configPath: string;
@@ -147,6 +149,13 @@ async function secrets(ctx: CliContext, args: string[]): Promise<number> {
 async function canary(ctx: CliContext, args: string[]): Promise<number> {
   parse(args, {}, 0);
   const config = loadConfig(ctx.configPath);
+  const watch = new VersionWatch(() => getEnvironment(config.t3BaseUrl), join(config.stateDir, VERSION_STATE_NAME));
+  let check: VersionCheck | undefined;
+  try {
+    check = await watch.check();
+  } catch (error) {
+    ctx.stderr(`verdict not recorded, could not read T3's version: ${(error as Error).message}`);
+  }
   const connection = (ctx.openCanary ?? connectT3)(config, secretsOf(ctx));
   let result;
   try {
@@ -154,11 +163,13 @@ async function canary(ctx: CliContext, args: string[]): Promise<number> {
   } finally {
     await connection.close();
   }
+  const verdict = verdictOf(result);
+  if (check !== undefined && verdict !== undefined) watch.record(check.current, verdict);
   if (result.ok) {
     ctx.stdout(`canary passed in ${result.ms} ms`);
     return 0;
   }
-  ctx.stderr(`canary failed at ${result.stage}: ${result.reason}`);
+  ctx.stderr(`canary failed at ${result.stage} (${result.kind}): ${result.reason}`);
   return 1;
 }
 

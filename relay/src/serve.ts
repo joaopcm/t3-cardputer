@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { startAdminServer } from "./admin.js";
 import { createApprovalsAdapter, type ApprovalsAdapter } from "./approvals/index.js";
 import { DeviceAuth } from "./auth/devices.js";
-import { reactToCanary, runCanary, type CanaryFailure } from "./canary.js";
+import { runCanary, type CanaryFailure } from "./canary.js";
 import { loadConfig, type RelayConfig } from "./config.js";
 import { DefaultsStore } from "./defaults-store.js";
 import { SecretsStore } from "./secrets.js";
@@ -16,7 +16,7 @@ import { VersionWatch, startVersionLoop } from "./version-watch.js";
 export type RelayPaths = { configPath: string; secretsPath: string };
 
 export const ADMIN_SOCKET_NAME = "admin.sock";
-const VERSION_STATE_NAME = "t3-version.json";
+export const VERSION_STATE_NAME = "t3-version.json";
 const PAIR_T3_HINT = "run `t3-cardputer-relay pair-t3`";
 // receipt: docs/receipts/2026-10-20-canary.md, one version check is a single GET of the environment document that took 2.3-21.4 ms over 10 calls, so every pollIntervalMs x 10 (20 s) is negligible
 const VERSION_CHECK_EVERY_POLLS = 10;
@@ -103,14 +103,11 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       watch: new VersionWatch(() => getEnvironment(config.t3BaseUrl), join(stateDir, VERSION_STATE_NAME)),
       intervalMs: limits.pollIntervalMs * VERSION_CHECK_EVERY_POLLS,
       blocked: canaryBlocked,
-      onChange: async (versions) => {
-        const result = await runCanary({ t3, approvals }, { model: config.canary.model, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs });
-        reactToCanary(result, versions, {
-          markApprovalsUp: server.markApprovalsUp,
-          markApprovalsDown: server.markApprovalsDown,
-          ...(hooks.onCanaryFailed ? { onCanaryFailed: hooks.onCanaryFailed } : {}),
-        });
-      },
+      retryMaxMs: limits.canaryRetryMaxMs,
+      canary: () => runCanary({ t3, approvals }, { model: config.canary.model, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs }),
+      markApprovalsUp: server.markApprovalsUp,
+      markApprovalsDown: server.markApprovalsDown,
+      ...(hooks.onCanaryFailed ? { onCanaryFailed: hooks.onCanaryFailed } : {}),
     });
     closers.push(versionLoop.stop);
     return { port: server.port, close };

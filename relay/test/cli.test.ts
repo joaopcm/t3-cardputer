@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -405,5 +405,41 @@ describe("canary", () => {
     const { run, err } = await setup({ openCanary: fakeCanary().open });
     expect(await run("canary", "--bogus")).toBe(2);
     expect(err()).toContain("--bogus");
+  });
+
+  const environmentStub = () =>
+    listen((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/.well-known/t3/environment") return void res.writeHead(200).end(JSON.stringify({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, capabilities: {} }));
+      res.writeHead(404).end("{}");
+    });
+  const verdictFile = (env: Env) => join(loadConfig(env.configPath).stateDir, "t3-version.json");
+
+  it("records a pass verdict for the current T3 version, the file serve reads on its next tick", async () => {
+    const { env, run } = await setup({ openCanary: fakeCanary().open });
+    withConfig(env, { t3BaseUrl: await environmentStub() });
+    expect(await run("canary")).toBe(0);
+    expect(JSON.parse(readFileSync(verdictFile(env), "utf8"))).toEqual({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, verdict: "pass" });
+  });
+
+  it("records a broken verdict with its stage and reason, and exits 1", async () => {
+    const { env, run } = await setup({ openCanary: fakeCanary({ approvals: false }).open });
+    withConfig(env, { t3BaseUrl: await environmentStub(), limits: { pollIntervalMs: 5, canaryTimeoutMs: 30 } });
+    expect(await run("canary")).toBe(1);
+    expect(JSON.parse(readFileSync(verdictFile(env), "utf8"))).toMatchObject({ verdict: "broken", stage: "approval_seen", reason: expect.stringContaining("canaryTimeoutMs=30") });
+  });
+
+  it("a transient failure exits 1 and records nothing", async () => {
+    const { env, run, err } = await setup();
+    withConfig(env, { t3BaseUrl: await environmentStub() });
+    expect(await run("canary")).toBe(1);
+    expect(err()).toContain("canary failed at launch");
+    expect(existsSync(verdictFile(env))).toBe(false);
+  });
+
+  it("when T3's version cannot be read the canary still runs and says the verdict was not recorded", async () => {
+    const { run, err } = await setup({ openCanary: fakeCanary().open });
+    expect(await run("canary")).toBe(0);
+    expect(err()).toContain("verdict not recorded");
   });
 });
