@@ -37,6 +37,8 @@ class FakeT3 implements T3Client {
   launches: T3LaunchInput[] = [];
   answers: { threadId: string; requestId: string; answers: Record<string, unknown> }[] = [];
   sendGate: Promise<void> | undefined;
+  replies = new Map<string, string>();
+  reads = 0;
 
   private guard(): void {
     if (this.down) throw new T3UnavailableError("T3 unreachable at test");
@@ -65,7 +67,8 @@ class FakeT3 implements T3Client {
   }
   async latestAssistantMessage(threadId: string) {
     this.guard();
-    return { text: `reply on ${threadId}`, model: "claude-opus-5", at: HOURS_AGO(2) };
+    this.reads++;
+    return { text: this.replies.get(threadId) ?? `reply on ${threadId}`, model: "claude-opus-5", at: HOURS_AGO(2) };
   }
   async send(threadId: string, text: string, mode: "queue" | "steer", clientRequestId: string) {
     this.guard();
@@ -118,8 +121,8 @@ class Device {
     this.closed = new Promise((resolve) => ws.on("close", (code, reason) => resolve({ code, reason: reason.toString() })));
   }
 
-  static async open(port: number): Promise<Device> {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/device`);
+  static async open(port: number, options: WebSocket.ClientOptions = {}): Promise<Device> {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/device`, options);
     await new Promise((resolve, reject) => {
       ws.once("open", resolve);
       ws.once("error", reject);
@@ -187,8 +190,8 @@ async function setup(limits: Partial<Limits> = {}) {
     onAdapterBroken: (reason) => brokenReasons.push(reason),
   });
   cleanups.push(() => server.close());
-  const connect = async () => {
-    const device = await Device.open(server.port);
+  const connect = async (options: WebSocket.ClientOptions = {}) => {
+    const device = await Device.open(server.port, options);
     cleanups.push(() => device.close());
     return device;
   };
@@ -424,6 +427,45 @@ describe("device session", () => {
     expect(home.rows.map((r) => [r.threadId, r.kind])).toEqual([["t6", "running"], ["t5", "done"]]);
   });
 
+  it("pushes the open thread's page when it changes, without the device asking", async () => {
+    const { t3, connected } = await setup();
+    t3.threads = [summary("t1", "running", HOURS_AGO(3))];
+    const device = await connected();
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    expect((await device.next("thread_page")).header.status).toBe("running");
+    await pause(POLL_MS * 4);
+    expect(t3.reads).toBe(1);
+
+    t3.replies.set("t1", "all done");
+    t3.threads = [summary("t1", "completed", HOURS_AGO(2))];
+    const page = await device.next("thread_page", (p) => p.header.status === "completed");
+    expect(page.lines).toEqual(["all done"]);
+    await pause(POLL_MS * 4);
+    expect(t3.reads).toBe(2);
+    expect(device.received.filter((m) => m.type === "thread_page")).toHaveLength(2);
+  });
+
+  it("trusts only the last X-Forwarded-For hop from a loopback peer", async () => {
+    const { connect, auth } = await setup({ authFailuresPerWindow: 1 });
+    const device = await connect({ headers: { "x-forwarded-for": "203.0.113.9, 198.51.100.77" } });
+    device.hello("not-a-token");
+    expect((await device.closed).code).toBe(4401);
+    expect(auth.lockout.check("198.51.100.77").allowed).toBe(false);
+    expect(auth.lockout.check("203.0.113.9").allowed).toBe(true);
+  });
+
+  it("terminates a device that stops answering pings and keeps one that answers", async () => {
+    const { connected, token, connect } = await setup({ heartbeatIntervalMs: 20, heartbeatMaxMissed: 2 });
+    const silent = await connect({ autoPong: false });
+    silent.hello(token);
+    await silent.next("welcome");
+    expect((await silent.closed).code).toBe(1006);
+
+    const alive = await connected();
+    await pause(20 * 8);
+    expect(alive.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
   it("acks a bad request with ok false naming the field and keeps the socket open", async () => {
     const { connected } = await setup();
     const device = await connected();
@@ -435,6 +477,27 @@ describe("device session", () => {
 });
 
 describe("watcher", () => {
+  it("a throwing listener neither stops polling nor starves the other listeners", async () => {
+    const watcher = new Watcher(new FakeT3(), new FakeApprovals(), 5);
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    let seen = 0;
+    watcher.onChange(() => {
+      throw new Error("listener blew up");
+    });
+    watcher.onChange(() => seen++);
+    try {
+      watcher.start();
+      await pause(60);
+    } finally {
+      watcher.stop();
+      console.error = original;
+    }
+    expect(seen).toBeGreaterThanOrEqual(3);
+    expect(errors.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("stop releases callers still waiting for the first snapshot", async () => {
     const watcher = new Watcher(new FakeT3(), new FakeApprovals(), 60_000);
     const waiting = watcher.current();

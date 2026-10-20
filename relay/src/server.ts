@@ -131,6 +131,7 @@ function isLoopback(address: string): boolean {
 function sourceOf(req: IncomingMessage): string {
   const peer = req.socket.remoteAddress ?? "";
   const forwarded = req.headers["x-forwarded-for"];
-  const firstHop = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
-  return lockoutSourceKey(isLoopback(peer) && firstHop ? firstHop : peer);
+  // the local proxy appends the address it saw; earlier hops are whatever the client claimed
+  const lastHop = (Array.isArray(forwarded) ? forwarded.at(-1) : forwarded)?.split(",").at(-1)?.trim();
+  return lockoutSourceKey(isLoopback(peer) && lastHop ? lastHop : peer);
 }

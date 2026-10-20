@@ -22,6 +22,8 @@ export const limitsSchema = z.strictObject({
   helloTimeoutMs: positiveInt,
   idempotencyTtlMs: positiveInt,
   idempotencyMaxEntries: positiveInt,
+  heartbeatIntervalMs: positiveInt,
+  heartbeatMaxMissed: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -77,6 +79,10 @@ export const DEFAULT_LIMITS: Limits = {
   idempotencyTtlMs: 24 * 60 * 60 * 1000,
   // receipt: 10_000 entries held 6.69 MB heap measured with 120-char errors on every ack (upper bound), far past a day of one person's replies
   idempotencyMaxEntries: 10_000,
+  // receipt: pending plan 2 (ADV over a phone hotspot); a ping is ~2 bytes each way, and 30 s finds a dead device well inside the minutes a carrier NAT keeps an idle mapping
+  heartbeatIntervalMs: 30_000,
+  // receipt: pending plan 2; one lost pong on a lossy hotspot is normal, two in a row (60 s silent) is a dead or half-open socket
+  heartbeatMaxMissed: 2,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

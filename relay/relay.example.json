@@ -26,6 +26,8 @@
     "approvalsRpcTimeoutMs": 10000,
     "helloTimeoutMs": 10000,
     "idempotencyTtlMs": 86400000,
-    "idempotencyMaxEntries": 10000
+    "idempotencyMaxEntries": 10000,
+    "heartbeatIntervalMs": 30000,
+    "heartbeatMaxMissed": 2
   }
 }

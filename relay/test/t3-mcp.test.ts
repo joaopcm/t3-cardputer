@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS } from "../src/config.js";
@@ -11,6 +14,7 @@ import type { Secrets } from "../src/secrets.js";
 import { getEnvironment } from "../src/t3/environment.js";
 import { pairT3Mcp } from "../src/t3/mcp-oauth.js";
 import { T3AuthError, T3Mcp, T3UnavailableError } from "../src/t3/mcp.js";
+import { Watcher, type WatchSnapshot } from "../src/watcher.js";
 
 const fixture = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "t3", name), "utf8"));
 
@@ -350,5 +354,72 @@ describe("pairT3Mcp", () => {
       res.writeHead(400).end(JSON.stringify({ error: "invalid_pairing_code" }));
     });
     await expect(pairT3Mcp(base, "bad")).rejects.toThrow(/oauth\/mcp\/decision.*400.*invalid_pairing_code/);
+  });
+});
+
+describe("T3Mcp over HTTP when T3 restarts", () => {
+  function restartableT3() {
+    let sessions = new Map<string, StreamableHTTPServerTransport>();
+    const handler = async (req: IncomingMessage, res: ServerResponse) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+      const sessionId = req.headers["mcp-session-id"];
+      if (typeof sessionId === "string") {
+        const transport = sessions.get(sessionId);
+        if (!transport) {
+          res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null }));
+          return;
+        }
+        await transport.handleRequest(req, res, body);
+        return;
+      }
+      const live = sessions;
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID, onsessioninitialized: (id) => void live.set(id, transport) });
+      const server = new Server({ name: "fake-t3", version: "0.0.0" }, { capabilities: { tools: {} } });
+      server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
+      server.setRequestHandler(CallToolRequestSchema, async (request) => {
+        const result =
+          request.params.name === "t3_project_list"
+            ? { projects: [{ id: "p1", title: "api" }], nextCursor: null }
+            : request.params.name === "t3_thread_list"
+              ? { projectId: "p1", threads: [thread("t1")], nextCursor: null }
+              : { requestIds: [] };
+        return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+      });
+      await server.connect(transport as Transport);
+      await transport.handleRequest(req, res, body);
+    };
+    return { handler, restart: () => (sessions = new Map()) };
+  }
+
+  it("a restarted T3 shows as unreachable for one poll, then the watcher reconnects", async () => {
+    const t3 = restartableT3();
+    const base = await listen((req, res) => void t3.handler(req, res));
+    const mcp = new T3Mcp({ baseUrl: base, secrets: secretsWith(validToken), limits: DEFAULT_LIMITS });
+    const watcher = new Watcher(mcp, { listPending: async () => [] }, 5);
+    const states: WatchSnapshot["t3"][] = [];
+    const reached = (want: (s: WatchSnapshot["t3"][]) => boolean) =>
+      new Promise<void>((resolve) => {
+        const off = watcher.onChange((snapshot) => {
+          states.push(snapshot.t3);
+          if (want(states)) {
+            off();
+            resolve();
+          }
+        });
+      });
+    try {
+      watcher.start();
+      await reached((s) => s.includes("ok"));
+      t3.restart();
+      await reached((s) => s.lastIndexOf("ok") > s.indexOf("unreachable") && s.includes("unreachable"));
+    } finally {
+      watcher.stop();
+      await mcp.close();
+    }
+    expect(states[0]).toBe("ok");
+    expect(states).toContain("unreachable");
+    expect(states.at(-1)).toBe("ok");
   });
 });

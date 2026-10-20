@@ -48,12 +48,21 @@ export class Watcher {
     if (this.running) return;
     const generation = ++this.generation;
     const tick = async () => {
-      const snapshot = await this.poll();
-      if (generation !== this.generation) return;
-      this.latest = snapshot;
-      this.flushWaiters(snapshot);
-      for (const listener of this.listeners) listener(snapshot);
-      this.timer = setTimeout(tick, this.intervalMs);
+      try {
+        const snapshot = await this.poll();
+        if (generation !== this.generation) return;
+        this.latest = snapshot;
+        this.flushWaiters(snapshot);
+        for (const listener of this.listeners) {
+          try {
+            listener(snapshot);
+          } catch (error) {
+            console.error("watcher: a snapshot listener threw, polling continues", error);
+          }
+        }
+      } finally {
+        if (generation === this.generation) this.timer = setTimeout(tick, this.intervalMs);
+      }
     };
     this.timer = setTimeout(tick, 0);
   }

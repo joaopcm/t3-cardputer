@@ -7,6 +7,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 - One secure WebSocket (`wss`) to path `/v1/device`.
 - Text frames: one JSON object per frame, UTF-8, with a string `type` field. Unknown `type`, unknown fields, missing required fields, or wrong types are rejected with `error {code:"bad_message"}`.
 - Binary frames: raw audio, see "Audio".
+- The relay sends a WebSocket ping every `heartbeatIntervalMs` (30 s by default) and drops a socket that leaves `heartbeatMaxMissed` (2) pings in a row without a pong. Answer pings with pongs (most WebSocket clients do this on their own); the drop looks like a network close, so reconnect with backoff.
 - A device frame (text or binary) over 65536 bytes (`DEVICE_FRAME_BYTES_MAX`) closes the socket with 1009. No valid text frame comes near it.
 - Relay text frames never exceed the `maxFrameBytes` the device declared in `hello`. If a view does not fit, the relay shrinks it (for example `thread_page.truncated`) or sends `error {code:"internal"}`; it never sends an oversize frame.
 - Device-bound text (`lines`, `title`, `label`, `message`, ...) is printable ASCII only (0x20-0x7E), with `\n` allowed only where stated. The device font needs nothing else.
@@ -16,7 +17,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 
 1. Device opens the socket and sends `hello` as its first frame, within `helloTimeoutMs` (10 s by default) or it gets `error {code:"auth"}` and close 4401. A first frame that is not a `hello` (including garbage) gets `error {code:"auth"}` and close 4401. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400.
 2. Relay answers `welcome`, then immediately `home`. Nothing else is sent before `welcome`.
-3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted.
+3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted. `thread_page` is pushed for the thread last opened with `open_thread` or `page`, at the page the device is on (clamped if the reply got shorter), whenever that thread's status or latest activity changes.
 4. Every device message with an `id` gets exactly one `ack` with the same `id`. If the message fails validation but still has a usable `id` (a string of 1 to 16 characters), the ack is `ack {ok:false, error}` and `error` names the field. Only a malformed frame with no usable `id` gets a bare `error {code:"bad_message"}`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
 5. On reconnect the device sends `hello` again and gets `welcome` then `home`. Nothing is replayed, the relay sends full state.
 

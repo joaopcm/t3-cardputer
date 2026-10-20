@@ -127,7 +127,11 @@ export class Hub {
     if (this.brokenReason === reason) return;
     this.brokenReason = reason;
     console.error(`approvals adapter broken: ${reason}`);
-    this.deps.onAdapterBroken?.(reason);
+    try {
+      this.deps.onAdapterBroken?.(reason);
+    } catch (error) {
+      console.error("onAdapterBroken threw, approvals stay marked down", error);
+    }
   }
 
   answersFor(threadId: string, requestId: string): Record<string, string> {
@@ -161,6 +165,11 @@ export class Session {
   private lastHomeKey: string | undefined;
   private openThreadId: string | undefined;
   private shownRequestKey: string | undefined;
+  private openPage = 1;
+  private shownPageVersion: string | undefined;
+  private refreshingPage = false;
+  private heartbeat: NodeJS.Timeout | undefined;
+  private missedPongs = 0;
   private readonly messages = new Map<string, { updatedAt: string; message: Awaited<ReturnType<T3Client["latestAssistantMessage"]>> }>();
   private readonly helloTimer: NodeJS.Timeout;
 
@@ -194,11 +203,13 @@ export class Session {
   onSnapshot(snapshot: WatchSnapshot): void {
     if (this.closed || !this.hello) return;
     this.pushHome(snapshot);
+    this.refreshOpenPage(snapshot);
     this.showOpenRequest(snapshot);
   }
 
   private onClose(): void {
     clearTimeout(this.helloTimer);
+    clearInterval(this.heartbeat);
     this.closed = true;
     if (this.deviceId !== undefined) this.hub.release(this.deviceId, this);
   }
@@ -262,6 +273,7 @@ export class Session {
     this.hello = msg;
     this.deviceId = device.id;
     this.hub.claim(device.id, this);
+    this.startHeartbeat();
     this.send({ type: "welcome", v: PROTOCOL_VERSION, relay: this.hub.deps.relayVersion });
     const snapshot = await this.hub.watcher.current();
     if (this.closed) return false;
@@ -462,8 +474,48 @@ export class Session {
     this.send(view);
     if (this.openThreadId !== threadId) this.shownRequestKey = undefined;
     this.openThreadId = threadId;
+    this.openPage = view.page;
+    this.shownPageVersion = pageVersion(summary);
     this.showOpenRequest(snapshot);
     return ok(id);
+  }
+
+  private refreshOpenPage(snapshot: WatchSnapshot): void {
+    const threadId = this.openThreadId;
+    const page = this.openPage;
+    if (threadId === undefined || this.refreshingPage) return;
+    const summary = snapshot.threads.find((t) => t.threadId === threadId);
+    if (!summary || pageVersion(summary) === this.shownPageVersion) return;
+    this.refreshingPage = true;
+    this.threadPage(summary, page)
+      .then((view) => {
+        if (this.closed || this.openThreadId !== threadId || this.openPage !== page) return;
+        this.openPage = view.page;
+        this.shownPageVersion = pageVersion(summary);
+        this.send(view);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof T3UnavailableError)) console.error(`device ${this.deviceId}: refreshing open thread ${threadId} failed`, error);
+      })
+      .finally(() => {
+        this.refreshingPage = false;
+      });
+  }
+
+  private startHeartbeat(): void {
+    const { heartbeatIntervalMs, heartbeatMaxMissed } = this.hub.deps.limits;
+    this.ws.on("pong", () => {
+      this.missedPongs = 0;
+    });
+    this.heartbeat = setInterval(() => {
+      if (this.missedPongs >= heartbeatMaxMissed) {
+        console.error(`device ${this.deviceId}: no pong to ${this.missedPongs} pings, heartbeatMaxMissed=${heartbeatMaxMissed} at heartbeatIntervalMs=${heartbeatIntervalMs}, terminating`);
+        this.ws.terminate();
+        return;
+      }
+      this.missedPongs++;
+      this.ws.ping();
+    }, heartbeatIntervalMs);
   }
 
   private async threadPage(summary: T3ThreadSummary & { project: string }, page: number): Promise<ThreadPageMessage> {
@@ -494,6 +546,10 @@ export class Session {
     this.send(view);
     return ok(id);
   }
+}
+
+function pageVersion(thread: T3ThreadSummary): string {
+  return `${thread.updatedAt}\n${thread.status}`;
 }
 
 function ok(id: string): Ack {

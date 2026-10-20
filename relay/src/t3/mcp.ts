@@ -344,6 +344,11 @@ export class T3Mcp {
       await this.close();
       return new T3UnavailableError(`T3 unreachable at ${this.options.baseUrl} (${what})`, { cause: error });
     }
+    if (error instanceof StreamableHTTPError) {
+      // a restarted T3 answers the old mcp-session-id with 404 and the SDK does not re-initialize, so drop the session and reconnect on the next call
+      await this.close();
+      return new T3UnavailableError(`T3 at ${this.options.baseUrl} answered HTTP ${error.code} (${what}), reconnecting`, { cause: error });
+    }
     if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
       return new Error(`T3 tool ${what} timed out: timeout=${timeoutMs}ms (mcpRequestTimeoutMs=${this.limits.mcpRequestTimeoutMs})`);
     }
