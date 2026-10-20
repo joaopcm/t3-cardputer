@@ -18,7 +18,7 @@ export const FW_MAX = 32;
 export const LABEL_MAX = 64;
 // receipt: pending plan 2 (firmware measures its keyboard and heap)
 export const REPLY_TEXT_MAX = 4000;
-// receipt: pending Task 9 (the session enforces against T3's real limit)
+// receipt: T3 declares no length cap on t3_thread_send.message or t3_pending_request_respond.answers (tool schemas, 2026-10-20), so the cap is the device's typing budget, pending plan 2
 export const RESPOND_TEXT_MAX = 1000;
 // receipt: pending plan 2
 export const COLS_MAX = 255;
@@ -33,6 +33,12 @@ export const REJECTION_TEXT_MAX = 120;
 export const FRAME_BYTES_MAX = 1_048_576;
 // receipt: pending plan 2
 export const HOME_ROWS_MAX = 255;
+// receipt: the largest valid text frame is a launch with 4000 chars all JSON-escaped as \uXXXX (24 KB) plus 128-char refs, so 64 KiB only trips a broken or hostile client; audio chunk size pending Task 11
+export const DEVICE_FRAME_BYTES_MAX = 65_536;
+// receipt: a device name is a short label listed by `devices`, the same budget as an option label
+export const DEVICE_NAME_MAX = LABEL_MAX;
+// receipt: the largest valid pair body is {"code":<8>,"name":<64 chars JSON-escaped at 6 bytes each>} at about 410 bytes
+export const PAIR_BODY_BYTES_MAX = 1024;
 
 export const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-access"] as const;
 export const WORKSPACES = ["root", "worktree"] as const;
@@ -217,7 +223,7 @@ export function rejectionFor(raw: string, err: ProtocolError, established: boole
   return { kind: "error", code: "bad_message", message: err.message };
 }
 
-function clipText(text: string): string {
+export function clipText(text: string): string {
   const ascii = text.replace(/[^\x20-\x7e]/g, "?");
   if (ascii.length <= REJECTION_TEXT_MAX) return ascii;
   return `${ascii.slice(0, REJECTION_TEXT_MAX - 3)}...`;

@@ -7,13 +7,14 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 - One secure WebSocket (`wss`) to path `/v1/device`.
 - Text frames: one JSON object per frame, UTF-8, with a string `type` field. Unknown `type`, unknown fields, missing required fields, or wrong types are rejected with `error {code:"bad_message"}`.
 - Binary frames: raw audio, see "Audio".
+- A device frame (text or binary) over 65536 bytes (`DEVICE_FRAME_BYTES_MAX`) closes the socket with 1009. No valid text frame comes near it.
 - Relay text frames never exceed the `maxFrameBytes` the device declared in `hello`. If a view does not fit, the relay shrinks it (for example `thread_page.truncated`) or sends `error {code:"internal"}`; it never sends an oversize frame.
 - Device-bound text (`lines`, `title`, `label`, `message`, ...) is printable ASCII only (0x20-0x7E), with `\n` allowed only where stated. The device font needs nothing else.
 - JSON numbers are integers unless stated. `?` after a field name means optional: omit it, do not send `null`.
 
 ## Ordering
 
-1. Device opens the socket and sends `hello` as its first frame. A first frame that is not a `hello` (including garbage) gets `error {code:"auth"}` and close 4401. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400.
+1. Device opens the socket and sends `hello` as its first frame, within `helloTimeoutMs` (10 s by default) or it gets `error {code:"auth"}` and close 4401. A first frame that is not a `hello` (including garbage) gets `error {code:"auth"}` and close 4401. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400.
 2. Relay answers `welcome`, then immediately `home`. Nothing else is sent before `welcome`.
 3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted.
 4. Every device message with an `id` gets exactly one `ack` with the same `id`. If the message fails validation but still has a usable `id` (a string of 1 to 16 characters), the ack is `ack {ok:false, error}` and `error` names the field. Only a malformed frame with no usable `id` gets a bare `error {code:"bad_message"}`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
@@ -21,7 +22,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 
 ## Message ids
 
-Every device message except `hello` carries `id`: a string of 1 to 16 characters. Ids are unique per device, across reconnects and reboots. The relay uses `id` as an idempotency key: a repeated `id` gets the original `ack` again and the action is not run twice. Do not reuse an id for a different request. A counter that restarts at boot will collide; use random characters (8+ hex digits is plenty).
+Every device message except `hello` carries `id`: a string of 1 to 16 characters. Ids are unique per device, across reconnects and reboots. For `reply`, `respond`, and `launch` the relay uses `id` as an idempotency key: a repeated `id` gets the original `ack` again and the action is not run twice, even when the repeat arrives on a new connection while the first is still running. The relay remembers an id for `idempotencyTtlMs` (24 h by default) and forgets everything when it restarts. `open_thread`, `page`, and `list_projects` only read, so a repeat runs again and sends a fresh view. Do not reuse an id for a different request. A counter that restarts at boot will collide; use random characters (8+ hex digits is plenty).
 
 ## Versioning
 
@@ -42,6 +43,22 @@ These stay as they are in every protocol version, so any device can reach this e
 - The mismatch reply is `{"type":"error","code":"protocol_version","message":<string>}`, then close 4400.
 - Every frame the relay sends before `welcome` is at most 256 bytes (`PRE_WELCOME_FRAME_BYTES`), because the relay does not know the device's `maxFrameBytes` yet. The relay enforces this in code. A device's `maxFrameBytes` is never below 256, so these frames always fit.
 - Error `message` text is cut to 120 characters and mapped to printable ASCII, so it fits that limit.
+
+## Pairing
+
+Before its first connection the device trades a one-time code (shown by `t3-cardputer-relay pair` on the relay host) for a token over plain HTTPS on the same host:
+
+```json
+POST /v1/pair
+{"code":"7KQ2M9XA","name":"cardputer"}
+```
+
+- `200 {"token":"<device-token>"}`: store the token and send it in every `hello`.
+- `401 {"error":"pairing failed"}`: the code is unknown, expired, already used, or the body is malformed. The relay does not say which.
+- `429 {"error":"auth locked out: ..."}`: too many failures from this address; the message names the budget and when to retry.
+- `413`: the body is over 1024 bytes (`PAIR_BODY_BYTES_MAX`).
+
+`code` is the 8 characters as shown (case does not matter). `name` is 1-64 characters, the label `devices` lists.
 
 ## Close codes
 
@@ -228,7 +245,7 @@ Close the audio window and throw the audio away. No transcript follows.
 
 ### Audio
 
-Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty and an even number of bytes. Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`; any other binary frame gets `error {code:"bad_audio"}` and is dropped. Chunk size is the device's choice; the relay's upper bound on a chunk and on total audio length is added here when the voice session lands.
+Until the voice session lands, the relay answers `audio_start`, `audio_end`, and `audio_cancel` with `ack {ok:false}`. Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty and an even number of bytes. Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`; any other binary frame gets `error {code:"bad_audio"}` and is dropped. Chunk size is the device's choice; the relay's upper bound on a chunk and on total audio length is added here when the voice session lands.
 
 ## Relay to device
 
@@ -267,7 +284,7 @@ Result of one device message.
 
 ### home
 
-The home screen: threads that need attention first. Sent after `welcome` and again whenever it changes.
+The home screen: threads that need attention first. Sent after `welcome` and again whenever it changes as drawn: ages count as changed only when their drawn text (`42s`, `5m`, `3h`, `12d`) changes.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
@@ -319,6 +336,8 @@ One page of a thread, already wrapped to `cols` and cut to at most `bodyRows` li
 ### request
 
 A thread is waiting on the user. The device shows `lines` and the `options`, then answers with `respond`.
+
+The relay sends `request` after the `thread_page` of an `open_thread` when that thread is waiting, and again whenever a new request shows up on the open thread. A T3 question can hold several questions under one `requestId`: the relay sends them one at a time with the same `requestId`, each `respond` answers the question on screen, and T3 gets all the answers after the last one.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |

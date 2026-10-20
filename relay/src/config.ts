@@ -19,6 +19,9 @@ export const limitsSchema = z.strictObject({
   mcpWaitGraceMs: positiveInt,
   mcpMaxPages: positiveInt,
   approvalsRpcTimeoutMs: positiveInt,
+  helloTimeoutMs: positiveInt,
+  idempotencyTtlMs: positiveInt,
+  idempotencyMaxEntries: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -42,7 +45,7 @@ export type RelayConfig = z.infer<typeof configSchema>;
 const dataDir = join(homedir(), ".local", "share", "t3-cardputer");
 
 export const DEFAULT_LIMITS: Limits = {
-  // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), one poll (project list + a thread list per project, 8 projects) is ~80 ms serial, so 2000 ms is ~4% duty
+  // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), one poll (project list + a thread list per project, 8 projects) is ~80 ms serial on T3, so 2000 ms is ~4% duty; the relay's own side measured 1.41 ms CPU per poll (Task 9, receipt-sized 73.7 KB list, 3 running threads, fake MCP in-process)
   pollIntervalMs: 2000,
   // receipt: pending plan 2
   maxReplyPages: 32,
@@ -68,6 +71,12 @@ export const DEFAULT_LIMITS: Limits = {
   mcpMaxPages: 50,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (b), respond answered in 7-17 ms and the snapshot in 7 ms, so 10 s only trips on a hung or changed server
   approvalsRpcTimeoutMs: 10_000,
+  // receipt: pending Task 13; a healthy device writes hello right after the upgrade, one round trip through Funnel, so 10 s only trips a stalled or idle socket
+  helloTimeoutMs: 10_000,
+  // receipt: a device retries an unacked id on its next connection, which can be the next wake after a night asleep, so 24 h covers it
+  idempotencyTtlMs: 24 * 60 * 60 * 1000,
+  // receipt: 10_000 entries held 6.69 MB heap measured with 120-char errors on every ack (upper bound), far past a day of one person's replies
+  idempotencyMaxEntries: 10_000,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

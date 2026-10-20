@@ -27,7 +27,7 @@ export const HOME_PROJECT_COLS_DIVISOR = 3;
 const CLIP_MARK = "~";
 
 const FAILED_STATUSES = new Set(["failed", "interrupted", "cancelled"]);
-const RUNNING_STATUSES = new Set(["preparing", "queued", "starting", "running"]);
+export const RUNNING_STATUSES: ReadonlySet<string> = new Set(["preparing", "queued", "starting", "running"]);
 
 const KIND_ORDER: Record<HomeRow["kind"], number> = { approval: 0, question: 1, failed: 2, running: 3, done: 4 };
 

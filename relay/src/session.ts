@@ -1,0 +1,529 @@
+import type WebSocket from "ws";
+import { AdapterBrokenError, ApprovalRejectedError, type ApprovalDecision, type ApprovalsAdapter, type PendingApproval } from "./approvals/index.js";
+import { LockedOutError, type DeviceAuth } from "./auth/devices.js";
+import type { Limits } from "./config.js";
+import type { DefaultsStore, ProjectDefaults } from "./defaults-store.js";
+import { FrameBudgetError, encodeFrame, encodePreWelcomeError } from "./protocol/frame.js";
+import {
+  CLOSE_AUTH,
+  CLOSE_REPLACED,
+  PROTOCOL_VERSION,
+  ProtocolError,
+  clipText,
+  parseDeviceMessage,
+  rejectionFor,
+  type DeviceMessage,
+  type ErrorCode,
+  type RelayMessage,
+} from "./protocol/messages.js";
+import type { Stt } from "./stt/types.js";
+import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
+import { buildHome, type HomeMessage } from "./views/home.js";
+import { buildProjects } from "./views/projects.js";
+import { buildRequest } from "./views/request.js";
+import { buildThreadPage, type ThreadPageMessage } from "./views/thread.js";
+import { T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, type WatcherT3 } from "./watcher.js";
+
+export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch">;
+export type ApprovalsState = { available: boolean; reason?: string };
+
+export type HubDeps = {
+  limits: Limits;
+  relayVersion: string;
+  t3: T3Client;
+  approvals: ApprovalsAdapter;
+  auth: Pick<DeviceAuth, "verify">;
+  defaults: Pick<DefaultsStore, "get" | "remember">;
+  stt: Stt;
+  approvalsState: () => ApprovalsState;
+  onAdapterBroken?: (reason: string) => void;
+};
+
+type Hello = Extract<DeviceMessage, { type: "hello" }>;
+type Ack = Extract<RelayMessage, { type: "ack" }>;
+type Of<T extends DeviceMessage["type"]> = Extract<DeviceMessage, { type: T }>;
+type PendingRequest = { kind: "approval"; approval: PendingApproval } | { kind: "question"; question: T3Question };
+
+// receipt: RFC 6455 7.4.1, 1011 is a server-side failure
+const CLOSE_INTERNAL = 1011;
+// T3 has no per-project runtime mode default, and approval-required is the only mode whose approvals reach the device
+const FALLBACK_RUNTIME_MODE = "approval-required";
+const NOT_DEVICE_SAFE = /[^\x20-\x7e]/;
+const NOT_DEVICE_SAFE_ALL = /[^\x20-\x7e]/g;
+
+export class AckCache {
+  private readonly entries = new Map<string, { at: number; ack: Promise<Ack> }>();
+
+  constructor(private readonly limits: Pick<Limits, "idempotencyTtlMs" | "idempotencyMaxEntries">) {}
+
+  run(key: string, work: () => Promise<Ack>): Promise<Ack> {
+    const now = Date.now();
+    for (const [k, entry] of this.entries) {
+      if (now - entry.at < this.limits.idempotencyTtlMs) break;
+      this.entries.delete(k);
+    }
+    const hit = this.entries.get(key);
+    if (hit) return hit.ack;
+    if (this.entries.size >= this.limits.idempotencyMaxEntries) {
+      const oldest = this.entries.keys().next().value!;
+      console.error(`idempotency cache full: idempotencyMaxEntries=${this.limits.idempotencyMaxEntries}, evicting ${oldest} to remember ${key}`);
+      this.entries.delete(oldest);
+    }
+    const ack = work();
+    this.entries.set(key, { at: now, ack });
+    return ack;
+  }
+}
+
+export class Hub {
+  readonly acks: AckCache;
+  private readonly sessions = new Map<string, Session>();
+  private readonly answers = new Map<string, Record<string, string>>();
+  private brokenReason: string | undefined;
+  private adapter: AdapterHealth = { state: "idle" };
+
+  constructor(
+    readonly deps: HubDeps,
+    readonly watcher: Watcher,
+  ) {
+    this.acks = new AckCache(deps.limits);
+    watcher.onChange((snapshot) => this.onSnapshot(snapshot));
+  }
+
+  accept(ws: WebSocket, source: string): void {
+    new Session(ws, source, this);
+  }
+
+  claim(deviceId: string, session: Session): void {
+    const older = this.sessions.get(deviceId);
+    this.sessions.set(deviceId, session);
+    older?.replace();
+    this.watcher.start();
+  }
+
+  release(deviceId: string, session: Session): void {
+    if (this.sessions.get(deviceId) !== session) return;
+    this.sessions.delete(deviceId);
+    if (this.sessions.size === 0) this.watcher.stop();
+  }
+
+  closeAll(): void {
+    for (const session of this.sessions.values()) session.terminate();
+    this.sessions.clear();
+    this.watcher.stop();
+  }
+
+  approvalsState(): ApprovalsState {
+    if (this.brokenReason !== undefined) return { available: false, reason: clipText(`approvals down: ${this.brokenReason}, fix in progress`) };
+    if (this.adapter.state === "unauthorized") return { available: false, reason: T3_AUTH_WARNING };
+    return this.deps.approvalsState();
+  }
+
+  adapterWorked(): void {
+    this.brokenReason = undefined;
+  }
+
+  adapterBroke(reason: string): void {
+    if (this.brokenReason === reason) return;
+    this.brokenReason = reason;
+    console.error(`approvals adapter broken: ${reason}`);
+    this.deps.onAdapterBroken?.(reason);
+  }
+
+  answersFor(threadId: string, requestId: string): Record<string, string> {
+    const key = `${threadId}\n${requestId}`;
+    let collected = this.answers.get(key);
+    if (!collected) this.answers.set(key, (collected = {}));
+    return collected;
+  }
+
+  forgetAnswers(threadId: string, requestId: string): void {
+    this.answers.delete(`${threadId}\n${requestId}`);
+  }
+
+  private onSnapshot(snapshot: WatchSnapshot): void {
+    this.adapter = snapshot.adapter;
+    if (snapshot.adapter.state === "broken") this.adapterBroke(snapshot.adapter.reason);
+    if (snapshot.adapter.state === "ok") this.adapterWorked();
+    if (snapshot.t3 === "ok") {
+      const live = new Set([...snapshot.questions].flatMap(([threadId, qs]) => qs.map((q) => `${threadId}\n${q.requestId}`)));
+      for (const key of this.answers.keys()) if (!live.has(key)) this.answers.delete(key);
+    }
+    for (const session of this.sessions.values()) session.onSnapshot(snapshot);
+  }
+}
+
+export class Session {
+  private hello: Hello | undefined;
+  private deviceId: string | undefined;
+  private established: Promise<boolean> | undefined;
+  private closed = false;
+  private lastHomeKey: string | undefined;
+  private openThreadId: string | undefined;
+  private shownRequestKey: string | undefined;
+  private readonly messages = new Map<string, { updatedAt: string; message: Awaited<ReturnType<T3Client["latestAssistantMessage"]>> }>();
+  private readonly helloTimer: NodeJS.Timeout;
+
+  constructor(
+    private readonly ws: WebSocket,
+    private readonly source: string,
+    private readonly hub: Hub,
+  ) {
+    const { helloTimeoutMs } = hub.deps.limits;
+    this.helloTimer = setTimeout(() => this.refuse("auth", `no hello within helloTimeoutMs=${helloTimeoutMs}`, CLOSE_AUTH), helloTimeoutMs);
+    ws.on("message", (data, isBinary) => {
+      this.onFrame(data.toString(), isBinary).catch((error: unknown) => {
+        console.error(`device ${this.deviceId}: frame handling failed`, error);
+        this.send({ type: "error", code: "internal", message: clipText(`relay failed: ${(error as Error).message}`) });
+      });
+    });
+    ws.on("close", () => this.onClose());
+    ws.on("error", (error) => console.error(`device socket error from ${source}`, error));
+  }
+
+  replace(): void {
+    this.closed = true;
+    this.ws.close(CLOSE_REPLACED, "replaced");
+  }
+
+  terminate(): void {
+    this.closed = true;
+    this.ws.terminate();
+  }
+
+  onSnapshot(snapshot: WatchSnapshot): void {
+    if (this.closed || !this.hello) return;
+    this.pushHome(snapshot);
+    this.showOpenRequest(snapshot);
+  }
+
+  private onClose(): void {
+    clearTimeout(this.helloTimer);
+    this.closed = true;
+    if (this.deviceId !== undefined) this.hub.release(this.deviceId, this);
+  }
+
+  private async onFrame(raw: string, isBinary: boolean): Promise<void> {
+    if (!this.established) {
+      this.established = this.onHello(raw, isBinary).catch((error: unknown) => {
+        console.error(`device hello from ${this.source} failed`, error);
+        return this.refuse("internal", "relay failed while checking hello", CLOSE_INTERNAL);
+      });
+      return;
+    }
+    if (!(await this.established) || this.closed) return;
+    if (isBinary) {
+      this.send({ type: "error", code: "bad_audio", message: "binary frame outside an audio window" });
+      return;
+    }
+    let msg: DeviceMessage;
+    try {
+      msg = parseDeviceMessage(raw);
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) throw error;
+      const rejection = rejectionFor(raw, error, true);
+      if (rejection.kind === "ack") this.send({ type: "ack", id: rejection.id, ok: false, error: rejection.error });
+      else this.send({ type: "error", code: rejection.code, message: rejection.message });
+      if (rejection.kind === "error" && rejection.close !== undefined) this.ws.close(rejection.close);
+      return;
+    }
+    if (msg.type === "hello") {
+      this.send({ type: "error", code: "bad_message", message: "hello already received on this connection" });
+      return;
+    }
+    this.send(await this.handle(msg));
+  }
+
+  private async onHello(raw: string, isBinary: boolean): Promise<boolean> {
+    clearTimeout(this.helloTimer);
+    if (isBinary) return this.refuse("auth", "first frame must be a valid hello", CLOSE_AUTH);
+    let msg: DeviceMessage;
+    try {
+      msg = parseDeviceMessage(raw);
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) throw error;
+      const rejection = rejectionFor(raw, error, false);
+      if (rejection.kind === "ack") throw new Error("rejectionFor returned an ack before welcome");
+      return this.refuse(rejection.code, rejection.message, rejection.close ?? CLOSE_AUTH);
+    }
+    if (msg.type !== "hello") return this.refuse("auth", "first frame must be a valid hello", CLOSE_AUTH);
+
+    let device;
+    try {
+      device = this.hub.deps.auth.verify(msg.token, this.source);
+    } catch (error) {
+      if (!(error instanceof LockedOutError)) throw error;
+      console.error(`device auth refused for ${this.source}: ${error.reason}, retry in ${error.retryAfterMs} ms`);
+      return this.refuse("auth", error.message, CLOSE_AUTH);
+    }
+    if (!device) return this.refuse("auth", "token rejected, re-pair this device", CLOSE_AUTH);
+    if (this.closed) return false;
+
+    this.hello = msg;
+    this.deviceId = device.id;
+    this.hub.claim(device.id, this);
+    this.send({ type: "welcome", v: PROTOCOL_VERSION, relay: this.hub.deps.relayVersion });
+    const snapshot = await this.hub.watcher.current();
+    if (this.closed) return false;
+    this.pushHome(snapshot);
+    return true;
+  }
+
+  private refuse(code: ErrorCode, message: string, closeCode: number): false {
+    this.closed = true;
+    if (this.ws.readyState === this.ws.OPEN) {
+      this.ws.send(encodePreWelcomeError(code, clipText(message)));
+      this.ws.close(closeCode);
+    }
+    return false;
+  }
+
+  private send(msg: RelayMessage): void {
+    if (this.ws.readyState !== this.ws.OPEN || !this.hello) return;
+    let frame: string;
+    try {
+      frame = encodeFrame(msg, this.hello.maxFrameBytes);
+    } catch (error) {
+      if (!(error instanceof FrameBudgetError)) throw error;
+      console.error(`device ${this.deviceId}: ${error.message}`);
+      frame = encodeFrame({ type: "error", code: "internal", message: clipText(error.message) }, this.hello.maxFrameBytes);
+    }
+    if (NOT_DEVICE_SAFE.test(frame)) {
+      console.error(`relay bug: ${msg.type} frame for device ${this.deviceId} carries non-ascii, replaced with ?: ${frame.slice(0, 200)}`);
+      frame = frame.replace(NOT_DEVICE_SAFE_ALL, "?");
+    }
+    this.ws.send(frame);
+  }
+
+  private pushHome(snapshot: WatchSnapshot): void {
+    const hello = this.hello!;
+    const home = buildHome({
+      threads: snapshot.threads,
+      approvals: snapshot.approvals,
+      questions: snapshot.questions,
+      now: new Date(),
+      maxRows: Math.min(hello.maxHomeRows, this.hub.deps.limits.maxHomeRows),
+      cols: hello.cols,
+      approvalsState: this.hub.approvalsState(),
+      warnings: snapshot.warnings.map(clipText),
+      t3: snapshot.t3,
+    });
+    const key = homeKey(home);
+    if (key === this.lastHomeKey) return;
+    this.lastHomeKey = key;
+    this.send(home);
+  }
+
+  private showOpenRequest(snapshot: WatchSnapshot): void {
+    if (this.openThreadId === undefined) return;
+    const pending = this.pendingRequest(this.openThreadId, snapshot);
+    if (!pending) {
+      this.shownRequestKey = undefined;
+      return;
+    }
+    this.showRequest(this.openThreadId, pending);
+  }
+
+  private showRequest(threadId: string, pending: PendingRequest): void {
+    const key = pending.kind === "approval" ? pending.approval.requestId : `${pending.question.requestId}\n${pending.question.questionId}`;
+    if (key === this.shownRequestKey) return;
+    this.shownRequestKey = key;
+    try {
+      this.send(pending.kind === "approval" ? buildRequest(pending.approval, this.hello!.cols) : buildRequest(pending.question, this.hello!.cols, threadId));
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      this.send({ type: "error", code: "internal", message: clipText(error.message) });
+    }
+  }
+
+  private pendingRequest(threadId: string, snapshot: WatchSnapshot): PendingRequest | undefined {
+    const approval = snapshot.approvals.find((a) => a.threadId === threadId);
+    if (approval) return { kind: "approval", approval };
+    const questions = snapshot.questions.get(threadId) ?? [];
+    const first = questions[0];
+    if (!first) return undefined;
+    const collected = this.hub.answersFor(threadId, first.requestId);
+    const question = questions.find((q) => q.requestId === first.requestId && !(q.questionId in collected));
+    return question && { kind: "question", question };
+  }
+
+  private async handle(msg: Exclude<DeviceMessage, Hello>): Promise<Ack> {
+    const key = `${this.deviceId}:${msg.id}`;
+    switch (msg.type) {
+      case "reply":
+        return this.hub.acks.run(key, () => this.guarded(msg.id, () => this.reply(msg, key)));
+      case "launch":
+        return this.hub.acks.run(key, () => this.guarded(msg.id, () => this.launch(msg)));
+      case "respond":
+        return this.hub.acks.run(key, () => this.guarded(msg.id, () => this.respond(msg, key)));
+      case "open_thread":
+        return this.guarded(msg.id, () => this.openThread(msg.id, msg.threadId, 1));
+      case "page":
+        return this.guarded(msg.id, () => this.openThread(msg.id, msg.threadId, msg.page));
+      case "list_projects":
+        return this.guarded(msg.id, () => this.listProjects(msg.id));
+      case "audio_start":
+      case "audio_end":
+      case "audio_cancel":
+        return fail(msg.id, "voice input is not available on this relay yet");
+    }
+  }
+
+  private async guarded(id: string, work: () => Promise<Ack>): Promise<Ack> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof T3UnavailableError) return fail(id, "T3 unreachable");
+      if (error instanceof T3AuthError) return fail(id, T3_AUTH_WARNING);
+      if (error instanceof ApprovalRejectedError) return fail(id, "already answered");
+      if (error instanceof AdapterBrokenError) {
+        this.hub.adapterBroke(error.reason);
+        return fail(id, `approvals down: ${error.reason}`);
+      }
+      console.error(`device ${this.deviceId}: request ${id} failed`, error);
+      return fail(id, (error as Error).message);
+    }
+  }
+
+  private async reply(msg: Of<"reply">, clientRequestId: string): Promise<Ack> {
+    await this.hub.deps.t3.send(msg.threadId, msg.text, msg.mode, clientRequestId);
+    return ok(msg.id);
+  }
+
+  private async launch(msg: Of<"launch">): Promise<Ack> {
+    const { t3, defaults } = this.hub.deps;
+    const project = (await this.hub.watcher.current()).projects.find((p) => p.projectId === msg.projectId);
+    if (!project) return fail(msg.id, `project not found: ${msg.projectId}`);
+    const used = { ...t3Defaults(project), ...defaults.get(project.projectId), ...definedLaunchOptions(msg) };
+    await t3.launch({
+      projectId: project.projectId,
+      title: msg.text.split("\n").find((line) => line.trim() !== "")?.trim() ?? msg.text,
+      message: msg.text,
+      workspace: used.workspace,
+      runtimeMode: used.runtimeMode,
+      ...(used.model !== "" && used.model !== project.defaultModel ? { model: used.model } : {}),
+    });
+    if (used.model !== "") defaults.remember(project.projectId, used);
+    return ok(msg.id);
+  }
+
+  private async respond(msg: Of<"respond">, clientRequestId: string): Promise<Ack> {
+    const snapshot = await this.hub.watcher.current();
+    const approval = snapshot.approvals.find((a) => a.threadId === msg.threadId && a.requestId === msg.requestId);
+    if (approval) return this.respondApproval(msg, approval, clientRequestId);
+    const questions = (snapshot.questions.get(msg.threadId) ?? []).filter((q) => q.requestId === msg.requestId);
+    if (questions.length > 0) return this.respondQuestion(msg, questions);
+    return fail(msg.id, "request is not pending");
+  }
+
+  private async respondApproval(msg: Of<"respond">, approval: PendingApproval, clientRequestId: string): Promise<Ack> {
+    const kind = approval.decisions.find((d) => d === msg.value);
+    if (!kind) return fail(msg.id, `value "${msg.value}" is not one of ${approval.decisions.join(", ")}`);
+    if (kind === "deny_with_reason" && msg.text === undefined) return fail(msg.id, "deny_with_reason needs text");
+    const decision: ApprovalDecision = kind === "deny_with_reason" ? { kind, reason: msg.text! } : { kind };
+    await this.hub.deps.approvals.respond(approval.threadId, approval.requestId, decision);
+    this.hub.adapterWorked();
+    if (decision.kind !== "deny_with_reason") return ok(msg.id);
+    try {
+      await this.hub.deps.t3.send(approval.threadId, decision.reason, "queue", clientRequestId);
+    } catch (error) {
+      const why = error instanceof T3UnavailableError ? "T3 unreachable" : (error as Error).message;
+      return fail(msg.id, `denied, but the reason was not sent: ${why}`);
+    }
+    return ok(msg.id);
+  }
+
+  private async respondQuestion(msg: Of<"respond">, questions: T3Question[]): Promise<Ack> {
+    const collected = this.hub.answersFor(msg.threadId, msg.requestId);
+    const current = questions.find((q) => !(q.questionId in collected));
+    if (current) {
+      const answer = msg.value === "text" ? msg.text : current.options.find((o) => o.value === msg.value)?.value;
+      if (answer === undefined) {
+        return fail(msg.id, msg.value === "text" ? "a text answer needs text" : `value "${msg.value}" is not an option`);
+      }
+      collected[current.questionId] = answer;
+      const next = questions.find((q) => !(q.questionId in collected));
+      if (next) {
+        this.showRequest(msg.threadId, { kind: "question", question: next });
+        return ok(msg.id);
+      }
+    }
+    await this.hub.deps.t3.answerQuestion(msg.threadId, msg.requestId, collected);
+    this.hub.forgetAnswers(msg.threadId, msg.requestId);
+    return ok(msg.id);
+  }
+
+  private async openThread(id: string, threadId: string, page: number): Promise<Ack> {
+    const snapshot = await this.hub.watcher.current();
+    const summary = snapshot.threads.find((t) => t.threadId === threadId);
+    if (!summary) return fail(id, `thread not found: ${threadId}`);
+    const view = await this.threadPage(summary, page);
+    if (page > view.pages) return fail(id, `page ${page} is past the last page ${view.pages}`);
+    this.send(view);
+    if (this.openThreadId !== threadId) this.shownRequestKey = undefined;
+    this.openThreadId = threadId;
+    this.showOpenRequest(snapshot);
+    return ok(id);
+  }
+
+  private async threadPage(summary: T3ThreadSummary & { project: string }, page: number): Promise<ThreadPageMessage> {
+    let cached = this.messages.get(summary.threadId);
+    if (cached?.updatedAt !== summary.updatedAt) {
+      cached = { updatedAt: summary.updatedAt, message: await this.hub.deps.t3.latestAssistantMessage(summary.threadId) };
+      this.messages.set(summary.threadId, cached);
+    }
+    return buildThreadPage({
+      summary,
+      project: summary.project,
+      message: cached.message,
+      page,
+      cols: this.hello!.cols,
+      bodyRows: this.hello!.bodyRows,
+      maxPages: this.hub.deps.limits.maxReplyPages,
+    });
+  }
+
+  private async listProjects(id: string): Promise<Ack> {
+    const projects = await this.hub.deps.t3.listProjects();
+    const byId = new Map(projects.map((p) => [p.projectId, p]));
+    const view = buildProjects(
+      projects,
+      { get: (projectId) => this.hub.deps.defaults.get(projectId) ?? t3Defaults(byId.get(projectId)) },
+      { model: "", workspace: "root", runtimeMode: FALLBACK_RUNTIME_MODE },
+    );
+    this.send(view);
+    return ok(id);
+  }
+}
+
+function ok(id: string): Ack {
+  return { type: "ack", id, ok: true };
+}
+
+function fail(id: string, error: string): Ack {
+  return { type: "ack", id, ok: false, error: clipText(error) };
+}
+
+function t3Defaults(project: T3Project | undefined): ProjectDefaults {
+  return { model: project?.defaultModel ?? "", workspace: project?.defaultWorkspace ?? "root", runtimeMode: FALLBACK_RUNTIME_MODE };
+}
+
+function definedLaunchOptions(msg: Of<"launch">): Partial<ProjectDefaults> {
+  const out: Partial<ProjectDefaults> = {};
+  if (msg.model !== undefined) out.model = msg.model;
+  if (msg.workspace !== undefined) out.workspace = msg.workspace;
+  if (msg.runtimeMode !== undefined) out.runtimeMode = msg.runtimeMode;
+  return out;
+}
+
+// receipt: docs/protocol.md home row layout, the device draws ageSec as 42s, 5m, 3h or 12d, so a home whose ages draw the same is the same screen
+function drawnAge(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86_400) return `${Math.floor(sec / 3600)}h`;
+  return `${Math.floor(sec / 86_400)}d`;
+}
+
+function homeKey(home: HomeMessage): string {
+  return JSON.stringify({ ...home, rows: home.rows.map((row) => ({ ...row, ageSec: drawnAge(row.ageSec) })) });
+}

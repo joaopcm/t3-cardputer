@@ -23,6 +23,9 @@
     "mcpRequestTimeoutMs": 30000,
     "mcpWaitGraceMs": 10000,
     "mcpMaxPages": 50,
-    "approvalsRpcTimeoutMs": 10000
+    "approvalsRpcTimeoutMs": 10000,
+    "helloTimeoutMs": 10000,
+    "idempotencyTtlMs": 86400000,
+    "idempotencyMaxEntries": 10000
   }
 }

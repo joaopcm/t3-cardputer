@@ -38,7 +38,7 @@ export function isConnectionError(error: unknown): boolean {
   return error instanceof TypeError && error.message === "fetch failed";
 }
 
-export type T3Project = { projectId: string; name: string };
+export type T3Project = { projectId: string; name: string; defaultModel?: string; defaultWorkspace?: "root" | "worktree" };
 export type T3ThreadSummary = { threadId: string; projectId: string; title: string; status: string; updatedAt: string };
 export type T3Question = {
   requestId: string;
@@ -67,7 +67,14 @@ export type T3McpOptions = {
 };
 
 const projectListSchema = z.object({
-  projects: z.array(z.object({ id: z.string(), title: z.string() })),
+  projects: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      defaultModelSelection: z.object({ model: z.string() }).nullish(),
+      defaultThreadEnvMode: z.string().nullish(),
+    }),
+  ),
   nextCursor: z.number().nullish(),
 });
 
@@ -111,6 +118,13 @@ const requestReadSchema = z.object({
 
 const waitSchema = z.object({ status: z.string(), timedOut: z.boolean().nullish() });
 
+function toProject(project: z.infer<typeof projectListSchema>["projects"][number]): T3Project {
+  const out: T3Project = { projectId: project.id, name: project.title };
+  if (project.defaultModelSelection) out.defaultModel = project.defaultModelSelection.model;
+  if (project.defaultThreadEnvMode) out.defaultWorkspace = project.defaultThreadEnvMode === "worktree" ? "worktree" : "root";
+  return out;
+}
+
 export class T3Mcp {
   private readonly limits: Pick<Limits, "mcpRequestTimeoutMs" | "mcpWaitGraceMs" | "mcpMaxPages">;
   private connection: Promise<Client> | undefined;
@@ -128,7 +142,7 @@ export class T3Mcp {
   async listProjects(): Promise<T3Project[]> {
     const projects: T3Project[] = [];
     await this.paginate("t3_project_list", {}, projectListSchema, (page) => {
-      projects.push(...page.projects.map((p) => ({ projectId: p.id, name: p.title })));
+      projects.push(...page.projects.map(toProject));
       return page.nextCursor;
     });
     return projects;
@@ -139,8 +153,14 @@ export class T3Mcp {
   }
 
   async listRecentlyCompleted(projectId: string, sinceMs: number): Promise<T3ThreadSummary[]> {
-    const threads = await this.listThreadPages(projectId, { statuses: ["completed"] });
-    return threads.filter((thread) => Date.parse(thread.updatedAt) >= sinceMs);
+    const byId = new Map<string, T3ThreadSummary>();
+    // receipt: t3_thread_list description, settled=true lists threads "the user or auto-settlement moved out of the active list"
+    for (const settled of [false, true]) {
+      for (const thread of await this.listThreadPages(projectId, { statuses: ["completed"], settled }, sinceMs)) {
+        if (Date.parse(thread.updatedAt) >= sinceMs && !byId.has(thread.threadId)) byId.set(thread.threadId, thread);
+      }
+    }
+    return [...byId.values()];
   }
 
   async latestAssistantMessage(threadId: string): Promise<{ text: string; model: string; at: string } | null> {
@@ -229,7 +249,7 @@ export class T3Mcp {
     return { status: result.status, timedOut: result.timedOut ?? false };
   }
 
-  private async listThreadPages(projectId: string, extra: Record<string, unknown>): Promise<T3ThreadSummary[]> {
+  private async listThreadPages(projectId: string, extra: Record<string, unknown>, stopBeforeMs?: number): Promise<T3ThreadSummary[]> {
     const threads: T3ThreadSummary[] = [];
     await this.paginate(
       "t3_thread_list",
@@ -237,6 +257,9 @@ export class T3Mcp {
       threadListSchema,
       (page) => {
         threads.push(...page.threads.map((t) => ({ threadId: t.threadId, projectId: page.projectId, title: t.title, status: t.status, updatedAt: t.updatedAt })));
+        const oldest = page.threads.at(-1);
+        // receipt: t3_thread_list description says it lists "newest first", so a page ending before the cutoff ends the search
+        if (stopBeforeMs !== undefined && oldest !== undefined && Date.parse(oldest.updatedAt) < stopBeforeMs) return null;
         return page.nextCursor;
       },
     );

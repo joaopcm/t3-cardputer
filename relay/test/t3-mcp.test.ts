@@ -79,7 +79,7 @@ describe("T3Mcp", () => {
     const { mcp } = fakeMcp({ t3_project_list: () => fixture("mcp-project-list.json").result });
     const projects = await mcp.listProjects();
     expect(projects).toHaveLength(8);
-    expect(projects[0]).toEqual({ projectId: "<project-id-1>", name: "project-1" });
+    expect(projects[0]).toEqual({ projectId: "<project-id-1>", name: "project-1", defaultModel: "claude-opus-5", defaultWorkspace: "worktree" });
   });
 
   it("listThreads follows nextCursor until null", async () => {
@@ -101,19 +101,35 @@ describe("T3Mcp", () => {
     await expect(mcp.listThreads("p1")).rejects.toThrow(/mcpMaxPages=3/);
   });
 
-  it("listRecentlyCompleted asks for unsettled completed threads and keeps those updated since", async () => {
+  it("listRecentlyCompleted includes auto-settled completed threads and keeps those updated since", async () => {
     const since = Date.parse("2026-10-20T13:00:00.000Z");
     const { mcp, calls } = fakeMcp({
-      t3_thread_list: () => ({
+      t3_thread_list: (args) => ({
         projectId: "p1",
-        threads: [thread("new", "2026-10-20T13:05:00.000Z", "completed"), thread("old", "2026-10-20T12:00:00.000Z", "completed")],
+        threads: args.settled
+          ? [thread("settled-new", "2026-10-20T13:02:00.000Z", "completed")]
+          : [thread("new", "2026-10-20T13:05:00.000Z", "completed"), thread("old", "2026-10-20T12:00:00.000Z", "completed")],
         nextCursor: null,
       }),
     });
     const threads = await mcp.listRecentlyCompleted("p1", since);
-    expect(threads.map((t) => t.threadId)).toEqual(["new"]);
-    expect(calls).toHaveLength(1);
+    expect(threads.map((t) => t.threadId)).toEqual(["new", "settled-new"]);
+    expect(calls).toHaveLength(2);
     expect(calls[0]?.args).toMatchObject({ projectId: "p1", statuses: ["completed"], settled: false, includeSubagents: false });
+    expect(calls[1]?.args).toMatchObject({ projectId: "p1", statuses: ["completed"], settled: true, includeSubagents: false });
+  });
+
+  it("listRecentlyCompleted stops paging once a page ends before since", async () => {
+    const since = Date.parse("2026-10-20T13:00:00.000Z");
+    const { mcp, calls } = fakeMcp({
+      t3_thread_list: (args) =>
+        args.cursor === undefined
+          ? { projectId: "p1", threads: [thread("new", "2026-10-20T13:05:00.000Z", "completed"), thread("old", "2026-10-20T12:00:00.000Z", "completed")], nextCursor: 2 }
+          : { projectId: "p1", threads: [thread("older", "2026-10-19T12:00:00.000Z", "completed")], nextCursor: null },
+    });
+    const threads = await mcp.listRecentlyCompleted("p1", since);
+    expect(threads.map((t) => t.threadId)).toEqual(["new"]);
+    expect(calls.every((call) => call.args.cursor === undefined)).toBe(true);
   });
 
   it("send passes mode and clientRequestId through to t3_thread_send", async () => {
