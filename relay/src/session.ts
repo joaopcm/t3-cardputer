@@ -25,7 +25,7 @@ import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Model, type T3Proje
 import { toDeviceAscii } from "./text/device-text.js";
 import { buildHome } from "./views/home.js";
 import { buildProjects } from "./views/projects.js";
-import { buildRequest } from "./views/request.js";
+import { buildRequest, requestHandle } from "./views/request.js";
 import { buildThreadPage, type ThreadPageMessage } from "./views/thread.js";
 import { EMPTY_SNAPSHOT, T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, type WatcherT3 } from "./watcher.js";
 
@@ -623,11 +623,13 @@ export class Session {
 
   private async respond(msg: Of<"respond">, clientRequestId: string): Promise<Ack> {
     const snapshot = await this.hub.watcher.current();
-    const approval = snapshot.approvals.find((a) => a.threadId === msg.threadId && a.requestId === msg.requestId);
+    const isHandle = (t3RequestId: string) => requestHandle(msg.threadId, t3RequestId) === msg.requestId;
+    const approval = snapshot.approvals.find((a) => a.threadId === msg.threadId && isHandle(a.requestId));
     if (approval) return this.respondApproval(msg, approval, clientRequestId);
-    const questions = (snapshot.questions.get(msg.threadId) ?? []).filter((q) => q.requestId === msg.requestId);
-    if (questions.length > 0) return this.respondQuestion(msg, questions);
-    return fail(msg.id, "request is not pending");
+    const questions = (snapshot.questions.get(msg.threadId) ?? []).filter((q) => isHandle(q.requestId));
+    const [first] = questions;
+    if (first) return this.respondQuestion(msg, first.requestId, questions);
+    return fail(msg.id, "request no longer pending, refresh");
   }
 
   private async respondApproval(msg: Of<"respond">, approval: PendingApproval, clientRequestId: string): Promise<Ack> {
@@ -647,8 +649,8 @@ export class Session {
     return ok(msg.id);
   }
 
-  private async respondQuestion(msg: Of<"respond">, questions: T3Question[]): Promise<Ack> {
-    const collected = this.hub.answersFor(msg.threadId, msg.requestId);
+  private async respondQuestion(msg: Of<"respond">, t3RequestId: string, questions: T3Question[]): Promise<Ack> {
+    const collected = this.hub.answersFor(msg.threadId, t3RequestId);
     const current = questions.find((q) => !(q.questionId in collected));
     if (current) {
       const answer = msg.value === "text" ? msg.text : current.options.find((o) => o.value === msg.value)?.value;
@@ -662,8 +664,8 @@ export class Session {
         return ok(msg.id);
       }
     }
-    await this.hub.deps.t3.answerQuestion(msg.threadId, msg.requestId, collected);
-    this.hub.forgetAnswers(msg.threadId, msg.requestId);
+    await this.hub.deps.t3.answerQuestion(msg.threadId, t3RequestId, collected);
+    this.hub.forgetAnswers(msg.threadId, t3RequestId);
     return ok(msg.id);
   }
 

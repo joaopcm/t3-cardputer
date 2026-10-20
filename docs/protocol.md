@@ -166,7 +166,7 @@ Answer a `request`. `requestId` and `value` come from the `request` message and 
 | `type` | `"respond"` | yes | |
 | `id` | string | yes | 1-16 chars |
 | `threadId` | string | yes | 1-128 chars |
-| `requestId` | string | yes | 1-128 chars, from `request.requestId` |
+| `requestId` | string | yes | 1-128 chars, the opaque handle from `request.requestId` |
 | `value` | string | yes | 1-128 chars, from `request.options[].value` |
 | `text?` | string | no | 1-1000 chars |
 
@@ -373,13 +373,13 @@ One page of a thread, already wrapped to `cols` and cut to at most `bodyRows` li
 
 A thread is waiting on the user. The device shows `lines` and the `options`, then answers with `respond`.
 
-The relay sends `request` after the `thread_page` of an `open_thread` when that thread is waiting, and again whenever a new request shows up on the open thread. A T3 question can hold several questions under one `requestId`: the relay sends them one at a time with the same `requestId`, each `respond` answers the question on screen, and T3 gets all the answers after the last one.
+The relay sends `request` after the `thread_page` of an `open_thread` when that thread is waiting, and again whenever a new request shows up on the open thread. The `requestId` is a handle the relay makes up, not T3's own id (T3 ids run past 300 characters). It stays the same while the request is pending, so a re-sent `request` carries the same value. A `respond` whose handle is no longer pending gets `ack {ok:false}` with the error `request no longer pending, refresh`. A T3 question can hold several questions under one `requestId`: the relay sends them one at a time with the same `requestId`, each `respond` answers the question on screen, and T3 gets all the answers after the last one.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"request"` | yes | |
 | `threadId` | string | yes | |
-| `requestId` | string | yes | echo it in `respond.requestId` |
+| `requestId` | string | yes | opaque handle, 1-128 chars, chosen by the relay with no shape guarantees; echo it in `respond.requestId` |
 | `kind` | `"approval"` or `"question"` | yes | |
 | `lines` | string[] | yes | wrapped to `cols`, printable ASCII |
 | `options` | Option[] | yes | |

@@ -4,7 +4,7 @@ import { MODEL_LABEL_MAX, relayMessageSchema } from "../src/protocol/messages.js
 import type { T3Question, T3ThreadSummary } from "../src/t3/mcp.js";
 import { drawnAge, buildHome } from "../src/views/home.js";
 import { buildProjects } from "../src/views/projects.js";
-import { buildRequest } from "../src/views/request.js";
+import { buildRequest, requestHandle } from "../src/views/request.js";
 import { buildThreadPage } from "../src/views/thread.js";
 
 const now = new Date("2026-10-20T12:00:00.000Z");
@@ -321,6 +321,21 @@ describe("drawnAge", () => {
   });
 });
 
+describe("requestHandle", () => {
+  const long = `runtime-request:provider:claudeAgent:${"x".repeat(300)}`;
+
+  it("is 20 lowercase hex chars however long the T3 id is", () => {
+    expect(requestHandle("t1", long)).toMatch(/^[0-9a-f]{20}$/);
+    expect(requestHandle("t1", "r")).toMatch(/^[0-9a-f]{20}$/);
+  });
+
+  it("is stable for one (thread, request) and differs across either", () => {
+    expect(requestHandle("t1", long)).toBe(requestHandle("t1", long));
+    expect(requestHandle("t2", long)).not.toBe(requestHandle("t1", long));
+    expect(requestHandle("t1", `${long}y`)).not.toBe(requestHandle("t1", long));
+  });
+});
+
 describe("buildRequest", () => {
   it("a 120-line heredoc approval fits bodyRows and maxFrameBytes, keeps every option, and says how much was cut", () => {
     const heredoc = ["cat <<'EOF' > migrate.sql", ...Array.from({ length: 118 }, (_, i) => `INSERT INTO t VALUES (${i}, 'row ${i}');`), "EOF"].join("\n");
@@ -377,7 +392,7 @@ describe("buildRequest", () => {
     ]);
     expect(request.kind).toBe("approval");
     expect(request.threadId).toBe("t1");
-    expect(request.requestId).toBe("req-t1");
+    expect(request.requestId).toBe(requestHandle("t1", "req-t1"));
     expect(relayMessageSchema.safeParse(request).success).toBe(true);
   });
 
@@ -409,7 +424,7 @@ describe("buildRequest", () => {
 
     expect(request.kind).toBe("question");
     expect(request.threadId).toBe("t3");
-    expect(request.requestId).toBe("req-q");
+    expect(request.requestId).toBe(requestHandle("t3", "req-q"));
     expect(request.lines).toEqual(["Which database should I use?"]);
     expect(request.options).toEqual([
       { key: "1", label: "Staging DB", value: "staging" },
