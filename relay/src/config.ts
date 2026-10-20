@@ -33,7 +33,7 @@ export const configSchema = z.strictObject({
 export type Limits = z.infer<typeof limitsSchema>;
 export type RelayConfig = z.infer<typeof configSchema>;
 
-const dataDir = join(homedir(), ".local", "share", "t3-cardputer-relay");
+const dataDir = join(homedir(), ".local", "share", "t3-cardputer");
 
 export const DEFAULT_LIMITS: Limits = {
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), one poll (project list + a thread list per project, 8 projects) is ~80 ms serial, so 2000 ms is ~4% duty
@@ -55,7 +55,7 @@ export const DEFAULT_LIMITS: Limits = {
 export const DEFAULT_CONFIG: RelayConfig = {
   port: 8787,
   t3BaseUrl: "http://127.0.0.1:3773",
-  stateDir: join(homedir(), ".local", "state", "t3-cardputer-relay"),
+  stateDir: join(homedir(), ".local", "state", "t3-cardputer"),
   whisper: { binDir: join(dataDir, "whisper"), model: "small.en" },
   canary: { model: "claude-haiku-5-5" },
   repair: {
@@ -68,7 +68,10 @@ export const DEFAULT_CONFIG: RelayConfig = {
   limits: DEFAULT_LIMITS,
 };
 
-export const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "t3-cardputer-relay", "relay.json");
+const configDir = join(homedir(), ".config", "t3-cardputer");
+
+export const DEFAULT_CONFIG_PATH = join(configDir, "relay.json");
+export const DEFAULT_SECRETS_PATH = join(configDir, "secrets.json");
 
 type Plain = Record<string, unknown>;
 

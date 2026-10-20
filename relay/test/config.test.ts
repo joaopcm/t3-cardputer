@@ -1,14 +1,22 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { DEFAULT_CONFIG, DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, loadConfig } from "../src/config.js";
 
 function tmpFile(contents: string): string {
   const path = join(mkdtempSync(join(tmpdir(), "relay-config-")), "relay.json");
   writeFileSync(path, contents);
   return path;
 }
+
+describe("default paths", () => {
+  it("pins config, secrets and state locations", () => {
+    expect(DEFAULT_CONFIG_PATH).toBe(join(homedir(), ".config", "t3-cardputer", "relay.json"));
+    expect(DEFAULT_SECRETS_PATH).toBe(join(homedir(), ".config", "t3-cardputer", "secrets.json"));
+    expect(DEFAULT_CONFIG.stateDir).toBe(join(homedir(), ".local", "state", "t3-cardputer"));
+  });
+});
 
 describe("loadConfig", () => {
   it("returns defaults when file missing", () => {
