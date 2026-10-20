@@ -236,6 +236,8 @@ class DeviceSim {
     } else if (msg.type === "thread_page") {
       if (msg.lines.length > bodyRows) this.problem(`thread_page has ${msg.lines.length} lines, bodyRows=${bodyRows}`);
       if (msg.lines.some((l) => l.length > cols)) this.problem(`thread_page line over ${cols} cols`);
+    } else if (msg.type === "projects") {
+      if (msg.items.length > bodyRows) this.problem(`projects has ${msg.items.length} items, maxHomeRows=${bodyRows}`);
     } else if (msg.type === "request") {
       if (msg.lines.some((l) => l.length > cols)) this.problem(`request line over ${cols} cols`);
       if (msg.lines.length + msg.options.length > bodyRows) this.problem(`request has ${msg.lines.length} lines + ${msg.options.length} options, bodyRows=${bodyRows}`);
@@ -558,6 +560,10 @@ class DeviceSim {
     const notes = [...this.home.warnings];
     if (this.home.t3 === "unreachable") notes.push("T3 unreachable");
     if (!this.home.approvals.available) notes.push(`approvals down: ${this.home.approvals.reason ?? "no reason given"}`);
+    if (this.screen.kind === "projects" && this.projects?.truncated !== undefined) {
+      const { hidden, budget, limit, actual } = this.projects.truncated;
+      notes.push(`+${hidden} more projects: ${budget}=${limit}, needed ${actual}`);
+    }
     if (this.screen.kind === "thread" && this.page?.truncated !== undefined) {
       const { budget, limit, actual } = this.page.truncated;
       notes.push(`reply truncated: ${budget}=${limit}, needed ${actual}`);

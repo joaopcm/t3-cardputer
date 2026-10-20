@@ -199,4 +199,18 @@ describe("simulator wire behavior", () => {
     const result = await runSim({ ...base, url, script: [] });
     expect(result.problems).toEqual(["request has 6 lines + 3 options, bodyRows=8"]);
   });
+
+  it("shows how many projects the relay left out and which budget did it", async () => {
+    const output: string[] = [];
+    const { url } = await stub((ws, f) => {
+      if (f.binary) return;
+      ack(ws, f.msg);
+      if (f.msg.type === "list_projects") {
+        ws.send(JSON.stringify({ type: "projects", items: [{ projectId: "p1", name: "api", defaults: { model: "m", workspace: "root", runtimeMode: "auto" } }], truncated: { budget: "maxHomeRows", limit: 1, actual: 40, hidden: 39 } }));
+      }
+    });
+    const result = await runSim({ ...base, url, write: (text) => output.push(text), script: ["N"] });
+    expect(result.problems).toEqual([]);
+    expect(output.join("")).toContain("+39 more projects: maxHomeRows=1, needed 40");
+  });
 });

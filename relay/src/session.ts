@@ -697,10 +697,17 @@ export class Session {
   private async listProjects(id: string): Promise<Ack> {
     const projects = await this.hub.deps.t3.listProjects();
     const byId = new Map(projects.map((p) => [p.projectId, p]));
+    const activity = new Map<string, number>();
+    for (const thread of (await this.hub.watcher.current()).threads) {
+      const at = Date.parse(thread.updatedAt);
+      if (at > (activity.get(thread.projectId) ?? 0)) activity.set(thread.projectId, at);
+    }
+    const hello = this.hello!;
     const view = buildProjects(
       projects,
       { get: (projectId) => this.hub.deps.defaults.get(projectId) ?? t3Defaults(byId.get(projectId)) },
       { model: "", workspace: "root", runtimeMode: FALLBACK_RUNTIME_MODE },
+      { maxRows: Math.min(hello.maxHomeRows, this.hub.deps.limits.maxHomeRows), maxFrameBytes: hello.maxFrameBytes, activity },
     );
     this.send(view);
     return ok(id);

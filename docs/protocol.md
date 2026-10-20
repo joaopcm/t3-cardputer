@@ -388,15 +388,22 @@ Fit rule: the device draws `lines`, then one row per option. The relay keeps `li
 
 ### projects
 
-Projects the device can launch into, with the defaults a `launch` gets when it omits a field.
+Projects the device can launch into, with the defaults a `launch` gets when it omits a field. Sorted most recently active first (latest thread activity in the project, else the project's own update time), already in display order.
+
+The list fits the same budgets as home: at most `hello.maxHomeRows` items (and the relay's own `maxHomeRows` limit, whichever is lower), and a frame within `maxFrameBytes`. When projects are left out, `truncated` says how many and which budget did it; the device shows it under the list, for example `+32 more projects: maxHomeRows=8, needed 40`. Left-out projects are the least recently active ones.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"projects"` | yes | |
 | `items` | object[] | yes | `{projectId, name, defaults: {model, workspace, runtimeMode}}`; `workspace` is `"root"` or `"worktree"`, `runtimeMode` is one of the four launch values |
+| `truncated?` | object | no | `{budget: string, limit: int, actual: int, hidden: int}`; present when projects were left out: `budget` is `maxHomeRows` or `maxFrameBytes`, `limit` its value, `actual` what all projects needed (a count for `maxHomeRows`, bytes for `maxFrameBytes`), `hidden` how many projects are not in `items` |
 
 ```json relay
 {"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}]}
+```
+
+```json relay
+{"type":"projects","items":[{"projectId":"proj_7","name":"web","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}},{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"root","runtimeMode":"auto"}}],"truncated":{"budget":"maxHomeRows","limit":2,"actual":40,"hidden":38}}
 ```
 
 ### transcript_partial

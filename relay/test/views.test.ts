@@ -437,6 +437,28 @@ describe("buildRequest", () => {
 
 describe("buildProjects", () => {
   const fallback = { model: "claude-opus-5", workspace: "worktree" as const, runtimeMode: "approval-required" };
+  const roomy = { maxRows: 50, maxFrameBytes: 65_536, activity: new Map<string, number>() };
+  const forty = Array.from({ length: 40 }, (_, i) => ({ projectId: `p${i}`, name: `project-${i}`, updatedAt: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString() }));
+
+  it("40 projects on a 4096-byte, 8-row device: the 8 most recent, then how many more and which budget hid them", () => {
+    const activity = new Map([["p3", Date.UTC(2026, 9, 20)], ["p7", Date.UTC(2026, 9, 19)]]);
+    const projects = buildProjects(forty, { get: () => undefined }, fallback, { maxRows: 8, maxFrameBytes: 4096, activity });
+
+    expect(projects.items.map((p) => p.projectId)).toEqual(["p3", "p7", "p39", "p38", "p37", "p36", "p35", "p34"]);
+    expect(projects.truncated).toEqual({ budget: "maxHomeRows", limit: 8, actual: 40, hidden: 32 });
+    expect(Buffer.byteLength(JSON.stringify(projects))).toBeLessThanOrEqual(4096);
+    expect(relayMessageSchema.safeParse(projects).success).toBe(true);
+  });
+
+  it("cuts to maxFrameBytes when that binds first, naming it", () => {
+    const projects = buildProjects(forty, { get: () => undefined }, fallback, { maxRows: 50, maxFrameBytes: 1024, activity: new Map() });
+
+    expect(Buffer.byteLength(JSON.stringify(projects))).toBeLessThanOrEqual(1024);
+    expect(projects.items.length).toBeGreaterThan(0);
+    expect(projects.items[0]?.projectId).toBe("p39");
+    expect(projects.truncated).toMatchObject({ budget: "maxFrameBytes", limit: 1024, hidden: 40 - projects.items.length });
+    expect(projects.truncated!.actual).toBeGreaterThan(1024);
+  });
 
   it("uses remembered defaults per project and the fallback otherwise", () => {
     const stored = { model: "m2", workspace: "root" as const, runtimeMode: "auto" };
@@ -447,6 +469,7 @@ describe("buildProjects", () => {
       ],
       { get: (id) => (id === "p1" ? stored : undefined) },
       fallback,
+      roomy,
     );
 
     expect(projects.items).toEqual([
@@ -461,6 +484,7 @@ describe("buildProjects", () => {
       [{ projectId: "p1", name: "api" }],
       { get: () => ({ model: "m2", workspace: "root", runtimeMode: "yolo" }) },
       fallback,
+      roomy,
     );
 
     expect(projects.items[0]?.defaults).toEqual({ model: "m2", workspace: "root", runtimeMode: "approval-required" });

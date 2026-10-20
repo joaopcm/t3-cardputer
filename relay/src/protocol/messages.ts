@@ -146,6 +146,7 @@ export const relayMessageSchema = z.discriminatedUnion("type", [
         defaults: z.strictObject({ model: z.string(), workspace, runtimeMode }),
       }),
     ),
+    truncated: z.strictObject({ budget: z.string(), limit: count, actual: count, hidden: count }).optional(),
   }),
   z.strictObject({ type: z.literal("transcript_partial"), text: z.string() }),
   z.strictObject({ type: z.literal("transcript_final"), text: z.string() }),

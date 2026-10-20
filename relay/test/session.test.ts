@@ -226,6 +226,19 @@ describe("device session", () => {
     expect(device.received.some((m) => m.type === "request")).toBe(false);
   });
 
+  it("list_projects with 40 projects fits a 4096-byte device: most recent first, capped to maxHomeRows, with how many more", async () => {
+    const { t3, connected } = await setup();
+    t3.projects = Array.from({ length: 40 }, (_, i) => ({ projectId: `p${i}`, name: `project-${i}`, defaultModel: "claude-opus-5", defaultWorkspace: "worktree" as const }));
+    t3.threads = [{ ...summary("t1", "running", HOURS_AGO(1)), projectId: "p12" }, { ...summary("t2", "running", HOURS_AGO(3)), projectId: "p30" }];
+    const device = await connected({ maxFrameBytes: 4096, maxHomeRows: 8 });
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect(projects.items).toHaveLength(8);
+    expect(projects.items.slice(0, 2).map((p) => p.projectId)).toEqual(["p12", "p30"]);
+    expect(projects.truncated).toEqual({ budget: "maxHomeRows", limit: 8, actual: 40, hidden: 32 });
+    expect(device.received.some((m) => m.type === "error")).toBe(false);
+  });
+
   it("respond on approval calls adapter.respond with mapped decision", async () => {
     const { t3, approvals, connected, deviceId } = await setup();
     t3.threads = [summary("t1")];

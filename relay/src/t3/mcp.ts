@@ -43,7 +43,7 @@ export function isConnectionError(error: unknown): boolean {
   return error instanceof TypeError && error.message === "fetch failed";
 }
 
-export type T3Project = { projectId: string; name: string; defaultModel?: string; defaultWorkspace?: "root" | "worktree" };
+export type T3Project = { projectId: string; name: string; defaultModel?: string; defaultWorkspace?: "root" | "worktree"; updatedAt?: string };
 export type T3ThreadSummary = { threadId: string; projectId: string; title: string; status: string; updatedAt: string };
 export type T3Question = {
   requestId: string;
@@ -79,6 +79,7 @@ const projectListSchema = z.object({
       title: z.string(),
       defaultModelSelection: z.object({ model: z.string() }).nullish(),
       defaultThreadEnvMode: z.string().nullish(),
+      updatedAt: z.string().nullish(),
     }),
   ),
   nextCursor: z.number().nullish(),
@@ -128,6 +129,7 @@ function toProject(project: z.infer<typeof projectListSchema>["projects"][number
   const out: T3Project = { projectId: project.id, name: project.title };
   if (project.defaultModelSelection) out.defaultModel = project.defaultModelSelection.model;
   if (project.defaultThreadEnvMode) out.defaultWorkspace = project.defaultThreadEnvMode === "worktree" ? "worktree" : "root";
+  if (project.updatedAt) out.updatedAt = project.updatedAt;
   return out;
 }
 

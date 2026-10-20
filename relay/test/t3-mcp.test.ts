@@ -83,7 +83,7 @@ describe("T3Mcp", () => {
     const { mcp } = fakeMcp({ t3_project_list: () => fixture("mcp-project-list.json").result });
     const projects = await mcp.listProjects();
     expect(projects).toHaveLength(8);
-    expect(projects[0]).toEqual({ projectId: "<project-id-1>", name: "project-1", defaultModel: "claude-opus-5", defaultWorkspace: "worktree" });
+    expect(projects[0]).toEqual({ projectId: "<project-id-1>", name: "project-1", defaultModel: "claude-opus-5", defaultWorkspace: "worktree", updatedAt: "2026-08-23T14:52:53.124Z" });
   });
 
   it("listThreads follows nextCursor until null", async () => {
