@@ -1,0 +1,92 @@
+{
+  "list": {
+    "tool": "t3_pending_request_list",
+    "arguments": {
+      "threadId": "mcp:<thread-id-1>"
+    },
+    "result": {
+      "requestIds": [
+        "runtime-request:provider:claudeAgent:provider-turn:provider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Aturn%253Arun-attempt%253Arun%253Arun%25253Athread%25253Amcp%2525253A<thread-id-1>%25253Aordinal%25253A1%253Aattempt%253A1:native-request:<tool-use-id-1>:<uuid-1>"
+      ]
+    }
+  },
+  "read": {
+    "tool": "t3_pending_request_read",
+    "arguments": {
+      "threadId": "mcp:<thread-id-1>",
+      "requestId": "runtime-request:provider:claudeAgent:provider-turn:provider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Aturn%253Arun-attempt%253Arun%253Arun%25253Athread%25253Amcp%2525253A<thread-id-1>%25253Aordinal%25253A1%253Aattempt%253A1:native-request:<tool-use-id-1>:<uuid-1>"
+    },
+    "result": {
+      "requestId": "runtime-request:provider:claudeAgent:provider-turn:provider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Aturn%253Arun-attempt%253Arun%253Arun%25253Athread%25253Amcp%2525253A<thread-id-1>%25253Aordinal%25253A1%253Aattempt%253A1:native-request:<tool-use-id-1>:<uuid-1>",
+      "questions": [
+        {
+          "id": "Red or blue?",
+          "header": "Color",
+          "question": "Red or blue?",
+          "options": [
+            {
+              "label": "Red",
+              "description": "Choose red"
+            },
+            {
+              "label": "Blue",
+              "description": "Choose blue"
+            }
+          ],
+          "multiSelect": false
+        }
+      ]
+    }
+  },
+  "respond": {
+    "tool": "t3_pending_request_respond",
+    "arguments": {
+      "threadId": "mcp:<thread-id-1>",
+      "requestId": "runtime-request:provider:claudeAgent:provider-turn:provider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Aturn%253Arun-attempt%253Arun%253Arun%25253Athread%25253Amcp%2525253A<thread-id-1>%25253Aordinal%25253A1%253Aattempt%253A1:native-request:<tool-use-id-1>:<uuid-1>",
+      "answers": {
+        "Red or blue?": "Blue"
+      }
+    },
+    "result": {
+      "sequence": 367070
+    }
+  },
+  "threadListWhilePending": {
+    "tool": "t3_thread_list",
+    "arguments": {
+      "projectId": "<project-id-1>",
+      "titleContains": "t3-cardputer canary (question)",
+      "limit": 5
+    },
+    "result": {
+      "projectId": "<project-id-1>",
+      "currentThreadId": null,
+      "threads": [
+        {
+          "threadId": "mcp:<thread-id-1>",
+          "title": "t3-cardputer canary (question)",
+          "createdBy": "agent",
+          "creationSource": "mcp",
+          "status": "running",
+          "latestRunId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "providerInstanceId": "claudeAgent",
+          "model": "claude-haiku-5-5",
+          "runtimeMode": "approval-required",
+          "interactionMode": "default",
+          "linkedPullRequest": null,
+          "settled": false,
+          "settledAt": null,
+          "snoozed": false,
+          "snoozedUntil": null,
+          "parentThreadId": null,
+          "relationshipToParent": null,
+          "itemCount": 6,
+          "createdAt": "2026-10-20T13:05:57.072Z",
+          "updatedAt": "2026-10-20T13:06:01.358Z"
+        }
+      ],
+      "nextCursor": null,
+      "total": 1
+    }
+  }
+}

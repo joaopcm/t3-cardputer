@@ -1,0 +1,192 @@
+{
+  "capturedWhile": "a command approval was pending for this thread (runtime request status=pending)",
+  "unfiltered": {
+    "tool": "t3_thread_list",
+    "arguments": {
+      "projectId": "<project-id-1>",
+      "titleContains": "t3-cardputer canary (approve)",
+      "limit": 5
+    },
+    "result": {
+      "projectId": "<project-id-1>",
+      "currentThreadId": null,
+      "threads": [
+        {
+          "threadId": "mcp:<thread-id-1>",
+          "title": "t3-cardputer canary (approve)",
+          "createdBy": "agent",
+          "creationSource": "mcp",
+          "status": "running",
+          "latestRunId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "providerInstanceId": "claudeAgent",
+          "model": "claude-haiku-5-5",
+          "runtimeMode": "approval-required",
+          "interactionMode": "default",
+          "linkedPullRequest": null,
+          "settled": false,
+          "settledAt": null,
+          "snoozed": false,
+          "snoozedUntil": null,
+          "parentThreadId": null,
+          "relationshipToParent": null,
+          "itemCount": 4,
+          "createdAt": "2026-10-20T13:09:45.279Z",
+          "updatedAt": "2026-10-20T13:09:47.423Z"
+        }
+      ],
+      "nextCursor": null,
+      "total": 1
+    }
+  },
+  "statusesWaiting": {
+    "tool": "t3_thread_list",
+    "arguments": {
+      "projectId": "<project-id-1>",
+      "titleContains": "t3-cardputer canary (approve)",
+      "statuses": [
+        "waiting"
+      ],
+      "limit": 5
+    },
+    "result": {
+      "projectId": "<project-id-1>",
+      "currentThreadId": null,
+      "threads": [],
+      "nextCursor": null,
+      "total": 0
+    }
+  },
+  "threadReadActivity": {
+    "tool": "t3_thread_read",
+    "arguments": {
+      "threadId": "mcp:<thread-id-1>",
+      "view": "activity",
+      "limit": 50
+    },
+    "result": {
+      "thread": {
+        "threadId": "mcp:<thread-id-1>",
+        "projectId": "<project-id-1>",
+        "title": "t3-cardputer canary (approve)",
+        "createdBy": "agent",
+        "creationSource": "mcp",
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+        "activeRunId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+        "providerInstanceId": "claudeAgent",
+        "model": "claude-haiku-5-5",
+        "runtimeMode": "approval-required",
+        "interactionMode": "default",
+        "linkedPullRequest": null,
+        "titleRegeneration": null,
+        "branch": null,
+        "worktreePath": "<home>/.t3/scratch/2026-10-20-run-the-shell-command-touch-<thread-suffix>",
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "runCount": 1,
+        "itemCount": 4,
+        "pendingRequestCount": 1,
+        "archived": false,
+        "settled": false,
+        "settledAt": null,
+        "snoozed": false,
+        "snoozedUntil": null,
+        "createdAt": "2026-10-20T13:09:45.279Z",
+        "updatedAt": "2026-10-20T13:09:47.423Z"
+      },
+      "recentRuns": [
+        {
+          "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "ordinal": 1,
+          "status": "running",
+          "providerInstanceId": "claudeAgent",
+          "model": "claude-haiku-5-5",
+          "requestedAt": "2026-10-20T13:09:45.283Z",
+          "startedAt": "2026-10-20T13:09:45.311Z",
+          "completedAt": null
+        }
+      ],
+      "items": [
+        {
+          "position": 0,
+          "visibility": "local",
+          "sourceThreadId": "mcp:<thread-id-1>",
+          "itemId": "turn-item:message:mcp%3A<thread-id-1>",
+          "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "messageId": "mcp:<thread-id-1>",
+          "createdBy": "agent",
+          "creationSource": "mcp",
+          "type": "user_message",
+          "status": "completed",
+          "title": null,
+          "text": "Run the shell command `touch t3-cardputer-canary.txt` and nothing else.",
+          "textTruncated": false,
+          "nextTextOffset": null,
+          "updatedAt": "2026-10-20T13:09:45.283Z"
+        },
+        {
+          "position": 1,
+          "visibility": "local",
+          "sourceThreadId": "mcp:<thread-id-1>",
+          "itemId": "turn-item:provider:claudeAgent:native-item:workspace-preparation%3Arun%3Athread%3Amcp%253A<thread-id-1>%3Aordinal%3A1",
+          "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "messageId": null,
+          "createdBy": null,
+          "creationSource": null,
+          "type": "command_execution",
+          "status": "completed",
+          "title": "Workspace ready",
+          "text": "$ Preparing workspace\nWorkspace preparation completed.",
+          "textTruncated": false,
+          "nextTextOffset": null,
+          "updatedAt": "2026-10-20T13:09:45.301Z"
+        },
+        {
+          "position": 2,
+          "visibility": "local",
+          "sourceThreadId": "mcp:<thread-id-1>",
+          "itemId": "turn-item:provider:claudeAgent:native-item:<tool-use-id-1>",
+          "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "messageId": null,
+          "createdBy": null,
+          "creationSource": null,
+          "type": "command_execution",
+          "status": "running",
+          "title": null,
+          "text": "$ touch t3-cardputer-canary.txt",
+          "textTruncated": false,
+          "nextTextOffset": null,
+          "updatedAt": "2026-10-20T13:09:47.390Z"
+        },
+        {
+          "position": 3,
+          "visibility": "local",
+          "sourceThreadId": "mcp:<thread-id-1>",
+          "itemId": "turn-item:runtime-request:runtime-request%3Aprovider%3AclaudeAgent%3Aprovider-turn%3Aprovider-turn%253Aprovider%253AclaudeAgent%253Anative-turn%253Aturn%25253Arun-attempt%25253Arun%25253Arun%2525253Athread%2525253Amcp%252525253A<thread-id-1>%2525253Aordinal%2525253A1%25253Aattempt%25253A1%3Anative-request%3A<tool-use-id-1>%3A<uuid-1>",
+          "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+          "messageId": null,
+          "createdBy": null,
+          "creationSource": null,
+          "type": "approval_request",
+          "status": "waiting",
+          "title": null,
+          "text": "Create empty canary file in working directory",
+          "textTruncated": false,
+          "nextTextOffset": null,
+          "updatedAt": "2026-10-20T13:09:47.419Z"
+        }
+      ],
+      "nextPosition": 3,
+      "hasMore": false
+    }
+  },
+  "pendingRequestList": {
+    "tool": "t3_pending_request_list",
+    "arguments": {
+      "threadId": "mcp:<thread-id-1>"
+    },
+    "result": {
+      "requestIds": []
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "tool": "t3_thread_read",
+  "arguments": {
+    "threadId": "mcp:<thread-id-1>",
+    "view": "messages",
+    "limit": 50
+  },
+  "result": {
+    "thread": {
+      "threadId": "mcp:<thread-id-1>",
+      "projectId": "<project-id-1>",
+      "title": "t3-cardputer canary (approve)",
+      "createdBy": "agent",
+      "creationSource": "mcp",
+      "status": "completed",
+      "latestRunId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+      "activeRunId": null,
+      "providerInstanceId": "claudeAgent",
+      "model": "claude-haiku-5-5",
+      "runtimeMode": "approval-required",
+      "interactionMode": "default",
+      "linkedPullRequest": null,
+      "titleRegeneration": null,
+      "branch": null,
+      "worktreePath": "<home>/.t3/scratch/2026-10-20-run-the-shell-command-touch-<thread-suffix>",
+      "parentThreadId": null,
+      "relationshipToParent": null,
+      "runCount": 1,
+      "itemCount": 6,
+      "pendingRequestCount": 0,
+      "archived": false,
+      "settled": false,
+      "settledAt": null,
+      "snoozed": false,
+      "snoozedUntil": null,
+      "createdAt": "2026-10-20T13:09:45.279Z",
+      "updatedAt": "2026-10-20T13:10:03.969Z"
+    },
+    "recentRuns": [
+      {
+        "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+        "ordinal": 1,
+        "status": "completed",
+        "providerInstanceId": "claudeAgent",
+        "model": "claude-haiku-5-5",
+        "requestedAt": "2026-10-20T13:09:45.283Z",
+        "startedAt": "2026-10-20T13:09:45.311Z",
+        "completedAt": "2026-10-20T13:10:03.969Z"
+      }
+    ],
+    "items": [
+      {
+        "position": 0,
+        "visibility": "local",
+        "sourceThreadId": "mcp:<thread-id-1>",
+        "itemId": "turn-item:message:mcp%3A<thread-id-1>",
+        "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+        "messageId": "mcp:<thread-id-1>",
+        "createdBy": "agent",
+        "creationSource": "mcp",
+        "type": "user_message",
+        "status": "completed",
+        "title": null,
+        "text": "Run the shell command `touch t3-cardputer-canary.txt` and nothing else.",
+        "textTruncated": false,
+        "nextTextOffset": null,
+        "updatedAt": "2026-10-20T13:09:45.283Z"
+      },
+      {
+        "position": 4,
+        "visibility": "local",
+        "sourceThreadId": "mcp:<thread-id-1>",
+        "itemId": "turn-item:provider:claudeAgent:native-item:<uuid-1>",
+        "runId": "run:thread:mcp%3A<thread-id-1>:ordinal:1",
+        "messageId": "message:provider:claudeAgent:native-item:<uuid-1>",
+        "createdBy": "agent",
+        "creationSource": "provider",
+        "type": "assistant_message",
+        "status": "completed",
+        "title": null,
+        "text": "Created `t3-cardputer-canary.txt` in the working directory with `touch`. The command produced no output.",
+        "textTruncated": false,
+        "nextTextOffset": null,
+        "updatedAt": "2026-10-20T13:10:03.915Z"
+      }
+    ],
+    "nextPosition": 4,
+    "hasMore": false
+  }
+}
