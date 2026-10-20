@@ -1,0 +1,18 @@
+[Unit]
+Description=t3-cardputer relay
+# receipt: relay start measured 0.2 s (Task 14), RestartSec=5 gives a crash loop 5 starts in ~26 s, so 5 starts in 300 s only trips a loop and lets a one-off crash age out; a repair deploy restart counts as one start
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# shebang is `env node` and a user unit's PATH has no ~/.local/bin, where node and pnpm live; deploy and repair also shell out to git, gh, pnpm and systemctl
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/share/t3-cardputer/deploy/relay/dist/cli.js serve
+Restart=on-failure
+RestartSec=5
+# receipt: worst stop waits for a staging canary, canaryTimeoutMs 32165 ms + 3 x repairStepTimeoutMs 60000 ms = 212 s (Task 14 report); mid live canary ~32 s (Task 13 report); 240 s clears the worst
+TimeoutStopSec=240
+
+[Install]
+WantedBy=default.target

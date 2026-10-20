@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: relay/pnpm-lock.yaml
+      - name: install
+        working-directory: relay
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        working-directory: relay
+        run: pnpm typecheck
+      - name: test
+        working-directory: relay
+        run: pnpm test
+      - name: build
+        working-directory: relay
+        run: pnpm build
+      - name: leak grep
+        run: |
+          if grep -rnE '[a-z0-9]\.ts\.net|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|prod-[0-9a-f]+\.t3coderelay' --exclude-dir=node_modules --exclude-dir=.git .; then
+            echo "homelab hostname, tailnet ip or relay url found in the tree" >&2
+            exit 1
+          fi
