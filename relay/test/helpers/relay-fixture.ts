@@ -13,6 +13,16 @@ import { startServer, type T3Client } from "../../src/server.js";
 import type { Stt } from "../../src/stt/types.js";
 import { T3AuthError, T3UnavailableError, type T3LaunchInput, type T3Project, type T3Question, type T3ThreadSummary } from "../../src/t3/mcp.js";
 
+function nonPrintable(value: unknown): string | undefined {
+  if (typeof value === "string") return /[^\x20-\x7e]/.test(value) ? JSON.stringify(value) : undefined;
+  if (typeof value !== "object" || value === null) return undefined;
+  for (const item of Object.values(value)) {
+    const found = nonPrintable(item);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 export const POLL_MS = 20;
 export const HOURS_AGO = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -111,8 +121,10 @@ export class Device {
     ws.on("message", (data, isBinary) => {
       if (isBinary) throw new Error("relay sent a binary frame");
       const text = data.toString();
-      if (/[^\x20-\x7e]/.test(text)) throw new Error(`relay sent non-ascii: ${text}`);
-      const msg = relayMessageSchema.parse(JSON.parse(text));
+      const json: unknown = JSON.parse(text);
+      const offender = nonPrintable(json);
+      if (offender !== undefined) throw new Error(`relay sent non-printable text: ${offender}`);
+      const msg = relayMessageSchema.parse(json);
       this.received.push(msg);
       this.unread.push(msg);
       this.wake?.();

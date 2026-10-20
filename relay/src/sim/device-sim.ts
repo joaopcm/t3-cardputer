@@ -192,7 +192,6 @@ class DeviceSim {
     const welcomed = this.received > 0;
     const limit = welcomed ? this.opts.maxFrameBytes : PRE_WELCOME_FRAME_BYTES;
     if (bytes > limit) this.problem(`frame ${bytes} bytes over ${welcomed ? "maxFrameBytes" : "PRE_WELCOME_FRAME_BYTES"}=${limit}`);
-    if (/[^\x20-\x7e]/.test(raw)) this.problem(`frame is not printable ASCII: ${raw.slice(0, 60)}`);
 
     let json: unknown;
     try {
@@ -201,6 +200,8 @@ class DeviceSim {
       this.problem(`frame is not json: ${raw.slice(0, 60)}`);
       return;
     }
+    const offender = nonPrintable(json, "");
+    if (offender !== undefined) this.problem(`text is not printable ASCII at ${offender}`);
     const parsed = relayMessageSchema.safeParse(json);
     if (!parsed.success) {
       this.problem(`frame breaks the contract: ${parsed.error.issues[0]?.path.join(".") ?? ""} ${parsed.error.issues[0]?.message ?? ""}: ${raw.slice(0, 80)}`);
@@ -405,6 +406,10 @@ class DeviceSim {
       this.screen = { kind: "thread", threadId: request.threadId };
       return;
     }
+    if (request.options.length === 0) {
+      this.respond(request, "text", line);
+      return;
+    }
     const option = request.options.find((o) => o.key.toUpperCase() === line.toUpperCase());
     if (option === undefined) {
       this.notice = `keys: ${request.options.map((o) => o.key).join("/")}`;
@@ -571,8 +576,8 @@ class DeviceSim {
       case "request":
         return {
           bar: [`${s.request.kind} ${s.request.threadId}`],
-          body: [...s.request.lines, "", ...s.request.options.map((o) => `[${o.key}] ${o.label}`)],
-          hint: "press a key  Enter thread  /b back",
+          body: [...s.request.lines, "", ...(s.request.options.length === 0 ? ["type your answer"] : s.request.options.map((o) => `[${o.key}] ${o.label}`))],
+          hint: s.request.options.length === 0 ? "type answer, Enter sends  /b back" : "press a key  Enter thread  /b back",
           numbered: false,
         };
       case "reason":
@@ -595,6 +600,22 @@ class DeviceSim {
         return { bar: ["transcript"], body: wrapHard(s.transcript, cols), hint: "Enter send  x discard  or retype", numbered: false };
     }
   }
+}
+
+function nonPrintable(value: unknown, path: string): string | undefined {
+  if (typeof value === "string") return /[^\x20-\x7e]/.test(value) ? `${path || "message"}: ${JSON.stringify(value).slice(0, 60)}` : undefined;
+  if (Array.isArray(value)) {
+    for (const [i, item] of value.entries()) {
+      const found = nonPrintable(item, `${path}[${i}]`);
+      if (found !== undefined) return found;
+    }
+  } else if (typeof value === "object" && value !== null) {
+    for (const [key, item] of Object.entries(value)) {
+      const found = nonPrintable(item, path === "" ? key : `${path}.${key}`);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
 }
 
 function homeLine(row: Of<"home">["rows"][number], cols: number): string {

@@ -153,6 +153,35 @@ describe("simulator wire behavior", () => {
     expect(output.join("")).toContain(message);
   });
 
+  it.each([
+    ["a tab", JSON.stringify({ ...PAGE, lines: ["a\tb"] }), 'lines[0]: "a\\tb"'],
+    ["a newline", JSON.stringify({ ...PAGE, lines: ["a\nb"] }), 'lines[0]: "a\\nb"'],
+    ["an escaped non-ascii char", JSON.stringify(PAGE).replace('"hello"', '"caf\\u00e9"'), 'lines[0]: "caf\u00e9"'],
+  ])("records %s in device text as a problem", async (_, frame, where) => {
+    const { url } = await stub((ws, f) => {
+      if (f.binary) return;
+      ack(ws, f.msg);
+      if (f.msg.type === "open_thread") ws.send(frame);
+    });
+    const result = await runSim({ ...base, url, script: ["1"] });
+    expect(result.problems).toEqual([`text is not printable ASCII at ${where}`]);
+  });
+
+  it("answers a question with an empty options list as free text", async () => {
+    const question = { type: "request", threadId: "t1", requestId: "q1", kind: "question", lines: ["Why?"], options: [] };
+    const { url, frames } = await stub((ws, f) => {
+      if (f.binary) return;
+      ack(ws, f.msg);
+      if (f.msg.type === "open_thread") {
+        ws.send(JSON.stringify(PAGE));
+        ws.send(JSON.stringify(question));
+      }
+    });
+    const result = await runSim({ ...base, url, script: ["1", "?type your answer", "because staging"] });
+    expect(result.problems).toEqual([]);
+    expect(frames.at(-1)).toMatchObject({ msg: { type: "respond", threadId: "t1", requestId: "q1", value: "text", text: "because staging" } });
+  });
+
   it("reports frames that break the contract", async () => {
     const wide = { ...HOME, rows: [{ ...HOME.rows[0], title: "x".repeat(60) }] };
     const { url } = await stub(() => {}, (ws) => ws.send(JSON.stringify(wide)));

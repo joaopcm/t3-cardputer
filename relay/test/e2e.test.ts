@@ -60,4 +60,27 @@ describe("simulator against the real server", () => {
     expect(shown).toContain("[Y] Allow once");
     expect(shown).toMatch(/1 \|api /);
   });
+
+  it("sim denies with a reason and answers a free-text question", async () => {
+    const { server, auth, t3, approvals } = await startRelay();
+    t3.threads = [summary("t1"), summary("t3")];
+    approvals.pending = [{ threadId: "t1", requestId: "req1", summary: "rm -rf build", detail: [], decisions: ["allow_once", "allow_always", "deny", "deny_with_reason"] }];
+    t3.questions.set("t3", [{ requestId: "q1", questionId: "why", prompt: "Why did the test fail?", options: [], multiSelect: false }]);
+
+    const url = `http://127.0.0.1:${server.port}`;
+    const result = await runSim({
+      url,
+      token: await pairDevice(url, auth.createPairingCode().code, "sim"),
+      cols: 40,
+      bodyRows: 8,
+      maxFrameBytes: 4096,
+      write: () => {},
+      script: ["2", "?[T] Type answer", "T", "it was a race in the setup", "/b", "1", "?Deny, say why", "T", "use staging instead"],
+    });
+
+    expect(result.problems).toEqual([]);
+    expect(t3.answers).toEqual([{ threadId: "t3", requestId: "q1", answers: { why: "it was a race in the setup" } }]);
+    expect(approvals.responses).toEqual([{ threadId: "t1", requestId: "req1", decision: { kind: "deny_with_reason", reason: "use staging instead" } }]);
+    expect(result.screens.join("\n")).toContain("Why did the test fail?");
+  });
 });

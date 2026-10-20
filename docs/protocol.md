@@ -352,7 +352,7 @@ The relay sends `request` after the `thread_page` of an `open_thread` when that 
 Option: `{key, label, value}`. `key` is one character, the key the user presses; `label` is 1-64 printable ASCII chars; `value` is 1-128 chars, echoed in `respond.value`.
 
 - Approval requests use keys `Y` (value `allow_once`), `A` (`allow_always`), `N` (`deny`), `T` (`deny_with_reason`). On `T` the device asks for a reason and sends it as `respond.text`.
-- Question requests use keys `1` to `9` for the choices. A question with no `options` is free text: the device collects text and sends `respond` with `value` `"text"` and the answer in `respond.text`.
+- Question requests use keys `1` to `9` for the choices. Whenever free text is allowed (a question with no choices, or more choices than fit in keys `1` to `9`), `options` carries an explicit entry `{key:"T", label:"Type answer", value:"text"}`. On `T` the device collects text and sends `respond` with `value` `"text"` and the answer in `respond.text`. A device should also treat a question whose `options` list is empty as free text, so it never shows a screen with nothing to press.
 
 ```json relay
 {"type":"request","threadId":"thr_01","requestId":"req_9","kind":"approval","lines":["Run shell command?","","  pnpm db:migrate"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]}
@@ -360,6 +360,10 @@ Option: `{key, label, value}`. `key` is one character, the key the user presses;
 
 ```json relay
 {"type":"request","threadId":"thr_03","requestId":"req_12","kind":"question","lines":["Which database should I use?"],"options":[{"key":"1","label":"staging","value":"staging"},{"key":"2","label":"local","value":"local"}]}
+```
+
+```json relay
+{"type":"request","threadId":"thr_04","requestId":"req_13","kind":"question","lines":["Why did the test fail?"],"options":[{"key":"T","label":"Type answer","value":"text"}]}
 ```
 
 ### projects
