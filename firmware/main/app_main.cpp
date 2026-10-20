@@ -1,11 +1,14 @@
 #include <cstdio>
 
 #include "debug_serial.h"
+#include "demo_relay.h"
 #include "display.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "t3/app.h"
 #include "t3/grid.h"
 #include "t3/keys.h"
 
@@ -21,23 +24,23 @@ void log_heap(const char *label)
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
 }
 
-void draw_test_grid()
+// why: demo only until Task 8 sends hello with measured values; maxHomeRows 16 fits the canned home (10 rows), frames use the protocol device cap
+constexpr t3::HelloCaps kDemoCaps{t3::Grid::Cols, 8, t3::kDeviceFrameBytesMax, 16};
+
+void draw(const t3::App &app)
 {
-    using t3::Color;
     t3::Grid grid;
-    grid.put(0, 0, "T3 - homelab");
-    grid.put(0, 32, "wifi 82%");
-    grid.put(1, 0, "NEEDS YOU (2)", Color::Warn);
-    grid.put(2, 0, "! resend-api   fix bounce webhook   3m", Color::Hdr);
-    grid.selectRow(2);
-    grid.put(3, 0, "? weaver       layout engine plan   9m", Color::Warn);
-    grid.put(4, 0, "RUNNING (3)", Color::Run);
-    grid.put(5, 0, "* homelab      nightly backup cron  12m");
-    grid.put(6, 0, "* resend-api   flaky test sweep      4m");
-    grid.put(7, 0, "* weaver       measure arena sizes   1m");
-    grid.put(8, 0, "DONE TODAY (5) >", Color::Ok);
-    grid.put(10, 0, "^v move  Enter open  N new  R refresh");
+    app.draw(grid);
     display_draw(grid);
+}
+
+void feed(t3::App &app, const t3::App::Out &out)
+{
+    for (const std::string &frame : out.send) {
+        for (const std::string &answer : demo_relay_answer(frame)) {
+            feed(app, app.onFrame(answer));
+        }
+    }
 }
 
 }
@@ -49,14 +52,21 @@ extern "C" void app_main(void)
         return;
     }
     log_heap("sprite");
-    draw_test_grid();
+    static t3::App app(kDemoCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random());
+    app.onLinkStatus("");
+    feed(app, app.onFrame(kDemoHome));
+    draw(app);
     debug_serial_start();
     log_heap("ready");
+    ESP_LOGI(TAG, "demo relay: canned home until the relay link lands");
 
     for (;;) {
         t3::Key key;
         while (debug_serial_poll_key(&key)) {
             ESP_LOGI(TAG, "key %s", t3::keyNameString(key).c_str());
+            feed(app, app.onKey(key));
+            draw(app);
+            ESP_LOGI(TAG, "screen %.*s", static_cast<int>(app.screenName().size()), app.screenName().data());
         }
         vTaskDelay(kMainPollTicks);
     }

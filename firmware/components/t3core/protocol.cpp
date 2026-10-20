@@ -356,20 +356,16 @@ bool parseOption(Parser &p, const cJSON *json, const std::string &path, Option &
     return true;
 }
 
+// why: question requests can exceed bodyRows (relay leftover, firmware design "Relay leftover"); the app scrolls them, so only the relay's own schema cap applies
 bool parseRequest(Parser &p, const cJSON *json, Request &out)
 {
-    const int bodyRows = p.caps().bodyRows;
-    const cJSON *lines = p.array(json, "lines", "", bodyRows, "body_rows");
-    const cJSON *options = lines == nullptr ? nullptr : p.array(json, "options", "", bodyRows, "body_rows");
+    const cJSON *lines = p.array(json, "lines", "", kBodyRowsMax, "body_rows_max");
+    const cJSON *options = lines == nullptr ? nullptr : p.array(json, "options", "", kBodyRowsMax, "body_rows_max");
     if (options == nullptr) {
         return false;
     }
-    const int needed = cJSON_GetArraySize(lines) + cJSON_GetArraySize(options);
-    if (needed > bodyRows) {
-        return p.fail("lines+options: body_rows=" + std::to_string(bodyRows) + ", got " + std::to_string(needed));
-    }
     if (!p.text(json, "threadId", "", kRef, out.threadId) || !p.text(json, "requestId", "", kRef, out.requestId) ||
-        !p.enumeration(json, "kind", "", kRequestKinds, out.kind) || !p.copyStrings(lines, "lines", p.cols(), bodyRows, out.lines)) {
+        !p.enumeration(json, "kind", "", kRequestKinds, out.kind) || !p.copyStrings(lines, "lines", p.cols(), kBodyRowsMax, out.lines)) {
         return false;
     }
     int index = 0;

@@ -1,0 +1,11 @@
+resend-api - Opus 5.5                 3m
+Wants to run a command:                 
+  pnpm vitest run src/webhooks/         
+  bounce.test.ts --update               
+  cwd: worktrees/fix-bounce-webhook     
+                                        
+[Y] Allow once                          
+[A] Always allow                        
+[N] Deny                                
+[T] Deny, say why                       
+Y/A/N/T  Enter thread  Bksp back        

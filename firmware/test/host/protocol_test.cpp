@@ -237,8 +237,22 @@ TEST_CASE("the device's declared caps bound the frame and every array")
     for (int i = 0; i < 6; ++i) {
         options += std::string(i == 0 ? "" : ",") + R"({"key":"1","label":"a","value":"v"})";
     }
-    CHECK(parseError(R"({"type":"request","threadId":"t","requestId":"r","kind":"question","lines":["1","2","3","4","5","6"],"options":[)" + options + "]}") ==
-          "lines+options: body_rows=11, got 12");
+    const std::string tall = R"({"type":"request","threadId":"t","requestId":"r","kind":"question","lines":["1","2","3","4","5","6"],"options":[)" + options + "]}";
+    std::string tallErr;
+    const auto tallRequest = t3::parseRelay(tall, kCaps, tallErr);
+    REQUIRE_MESSAGE(tallRequest.has_value(), tallErr);
+    CHECK(std::get<t3::Request>(*tallRequest).options.size() == 6);
+
+    std::string tooManyOptions;
+    for (int i = 0; i <= t3::kBodyRowsMax; ++i) {
+        tooManyOptions += std::string(i == 0 ? "" : ",") + R"({"key":"1","label":"a","value":"v"})";
+    }
+    t3::HelloCaps roomy = kCaps;
+    roomy.maxFrameBytes = 65536;
+    std::string roomyErr;
+    CHECK_FALSE(t3::parseRelay(R"({"type":"request","threadId":"t","requestId":"r","kind":"question","lines":[],"options":[)" + tooManyOptions + "]}", roomy, roomyErr)
+                    .has_value());
+    CHECK(roomyErr == "options: body_rows_max=64, got 65");
 
     t3::HelloCaps small = kCaps;
     small.maxFrameBytes = 64;
