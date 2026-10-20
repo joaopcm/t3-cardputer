@@ -8,7 +8,7 @@ Measured on the real ADV (ESP32-S3, no PSRAM) with the Task 8 firmware on home W
 | --- | --- | --- | --- |
 | boot (app_main entry) | 311108 | 245760 | `t3: boot` |
 | after `display_init()` | 291900 | 229376 | `t3: sprite` |
-| after `transport_init()` (2 rx slots of 8192, websocket client) | 268972 | 204800 | `t3: transport`, 22928 bytes |
+| after `transport_init()` (24 KiB rx ring, websocket client, control task) | 255252 | 192512 | `t3: transport`, 36568 bytes |
 | after `wifi_init()` | 220804 | 155648 | `t3: wifi init`, 48168 bytes for the driver |
 | ready | 212444 | 147456 | `t3: ready` |
 | WiFi up, before the TLS connect | 211336 | 147456 | `t3: wifi up` / `t3: connect` |
@@ -17,7 +17,7 @@ Measured on the real ADV (ESP32-S3, no PSRAM) with the Task 8 firmware on home W
 | live (after `welcome`) | 165276 | 100352 | `t3: live` |
 
 - TLS handshake need: 192492 - 142160 = **50332 bytes** at the peak of one handshake. The session keeps about 40.6 KB after it.
-- The 4-copy design (assembly + inbox of 2 frames + parse buffer) at 32 KiB frames left 92668 bytes free at `ready` with a 31744-byte largest block, under one handshake's need. That is why the transport hands frames over in 2 slots that the main task parses in place (`firmware/main/transport.cpp`).
+- The 4-copy design (assembly + inbox of 2 frames + parse buffer) at 32 KiB frames left 92668 bytes free at `ready` with a 31744-byte largest block, under one handshake's need. That is why the transport hands frames over in a ring the main task parses in place (`firmware/main/transport.cpp`). The `transport_init()` row is the ring build; the rows after it are from the 2-slot build, and the ring build's are in "fix round 1" below.
 
 ## relay frames for this account
 
@@ -49,7 +49,7 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 
 ## hello caps
 
-- `maxFrameBytes` = **8192**. Largest measured frame 1738 x 4 = 6952, rounded up to 8 KiB (4.7x). Heap check at 8192: an honest worst frame costs 4.1 x 8192 = 33.6 KB against 165 KB free after TLS (20%); the degenerate frame costs 16.9 x 8192 = 138 KB, which cJSON cannot always get, and the hooked allocator then reports `heap: parse needed more than available` instead of crashing. The two rx slots cost 16 KiB, allocated once at boot.
+- `maxFrameBytes` = **8192**. Largest measured frame 1738 x 4 = 6952, rounded up to 8 KiB (4.7x). Heap check at 8192: an honest worst frame costs 4.1 x 8192 = 33.6 KB against 155 KB free after TLS with the rx ring (22%); the degenerate frame costs 16.9 x 8192 = 138 KB, which cJSON cannot always get, and the hooked allocator then reports `heap: parse needed more than available` instead of crashing. The rx ring costs 24 KiB, allocated once at boot (see "fix round 1").
 - `maxHomeRows` = **32**. Today's home is 12 rows, so 32 is 2.7x. The relay does not shrink home to fit bytes (it sends `error internal` naming `max_frame_bytes`), so a full home must fit `maxFrameBytes`: a worst honest row is about 155 bytes (40-char T3 thread id, 13-col project, 31-col title, 4-col age), 32 rows are 4960 bytes, plus about 2 KB for 16 warnings of 120 chars and the counts, about 7.1 KB, inside 8192. Past 32 rows the home screen already shows `maxHomeRows=32, home needed N`.
 - `bodyRows` = 7, `cols` = 40: controller ruling and the grid.
 
@@ -85,8 +85,7 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 
 ## transport
 
-- `kSlots` = 2 rx slots of `maxFrameBytes`. The websocket task fills a free slot and wakes the main task, which parses the frame in place and frees the slot on its next poll. 100 reconnects (each with a welcome + home burst) and the end-to-end run dropped no frame; a frame with no free slot is dropped and shown as `rx_slots=2, a N byte frame needed one more`.
-- `kInboxDepth` = 8: at most 2 text events (one per slot) plus an open and a close are outstanding, so 8 is 2x.
+- `kRingFrames` = 3 and `kInboxDepth` = 16: see "fix round 1" (the first build's 2 slots were smaller than a relay refresh burst).
 - `kWsChunkBytes` = 1024 (library default): only the read chunk size; the largest frame (1738) arrives in 2 events and is reassembled in its slot.
 - `kReasonMax` = 48: the longest close reason seen is `ESP_ERR_ESP_TLS_TCP_CLOSED_FIN` (30 chars).
 - `kPairReplyMax` = 1024: a 200 reply is `{"token":...}` with a token of at most 256 chars (`TOKEN_MAX`); the 401/429 bodies are under 120 chars.
@@ -97,7 +96,8 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 | --- | --- | --- | --- |
 | main (`app_main`) | 3504 | 8192 (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`) | `t3: main_task_stack_free_min=4688`; the 3584 default would leave 80 bytes once it sends over TLS |
 | websocket task | 3684 | 6144 (`kWsTaskStackBytes`) | `transport: ws_task_stack_free_min=2460`, worst over the soak |
-| pair task | 3620 | 6144 (`kPairTaskStackBytes`) | `transport: pair_task_stack_free_min=4572 of 8192` |
+| pair task | 3620 | 6144 (`kPairTaskStackBytes`) | `transport: pair_task_stack_free_min=4572 of 8192`; at the shipped 6144 that leaves 2524 free, 1.7x the use |
+| websocket control task | 2252 | 4096 (`kControlTaskStackBytes`) | `t3_transport: ws_control_stack_free_min=1844 of 4096`; 1.8x (the first 3072 left 972) |
 
 ## Review Focus 2
 
@@ -123,3 +123,54 @@ Pass on both counts: the largest block never went under 60398, and the last heap
 ## open problem: approvals need a requestId over 128 chars
 
 T3's approval request ids are 333 chars on the live relay (`runtime-request:provider:claudeAgent:provider-turn:...:native-request:toolu_...:<uuid>`). The relay forwards them as `request.requestId`, but `respond.requestId` is `ref` (1-128) in `relay/src/protocol/messages.ts`, so no device can answer them: the firmware rejects the request frame with `requestId: ref_max=128, got 333`, and a device that accepted it would get its `respond` refused. The fix is on the relay (a short handle per pending request), not in the firmware cap.
+
+## fix round 1
+
+### rx ring (`kRingFrames` = 3, `kInboxDepth` = 16)
+
+- The relay's largest burst is `refresh`: `home`, `thread_page`, `request`, then the `ack` (`relay/src/session.ts` `refresh`). `open_thread` sends 3 frames (`thread_page`, `request`, `ack`) and a connect sends 2 (`welcome`, `home`). On top of that, the watcher can push one `home` and one `thread_page` in the same poll, so up to 6 frames can be in flight before the main task runs again.
+- Worst honest bytes for that burst at these caps:
+  - `home` about 7.1 KB (32 rows plus 16 warnings, see "hello caps")
+  - `thread_page` about 0.6 KB (7 lines of 40 plus the header; 469 measured)
+  - `request` about 2 KB (7 rows plus 4 options; 744 measured)
+  - `ack` about 0.2 KB
+  - So about 9.9 KB per refresh, or 17.6 KB with an extra home and thread_page pushed on top.
+- The ring is 3 x 8192 = 24576 bytes, 1.4x that worst case. Frames take only their own size. The websocket task writes each frame contiguously and the main task frees in arrival order. Four frames that each hit `maxFrameBytes` would need 32 KiB; one that does not fit is dropped and shown as `rx_ring_bytes=24576, a N byte frame did not fit behind the waiting ones`.
+- Why not fixed slots of `maxFrameBytes`: with 8 slots (64 KiB) the largest block once live was 49152, under the 60398 TLS line. With 6 slots (48 KiB, one allocation) it was 65536, only 8.5% over the line. The 24 KiB ring leaves 90112 (1.49x).
+- `kInboxDepth` 16 = 2x the 8 events a burst can leave queued (6 frames plus an open and a close).
+- Measured: 10 `R` presses 100 ms apart from Home, with a thread open on the relay, gave 11 home, 10 thread_page and 10 ack. Up to 6 frames were handled within one 10 ms window, with no drop and no notice on screen. No thread had a pending request to add the 4th frame.
+
+### heap with the ring
+
+| what | free | largest block |
+| --- | --- | --- |
+| ready | 198724 | 135168 |
+| WiFi up / connect | 197628 | 135168 |
+| open | 156996 | 90112 |
+| live | 155300 | 90112 |
+
+### websocket control task (`kControlTaskStackBytes` = 4096, priority 4)
+
+- `esp_websocket_client_stop` waits for the websocket task with no timeout. A stop issued mid-connect waited 5.0 s and 10.5 s in the two tests below (an upgrade read held by a stopped relay, up to `kNetworkTimeoutMs`; DNS has no bound at all). Start and stop now run on a control task. The main task only bumps the generation and records the wanted connection, so late events from the old socket are ignored.
+- Test, run twice: the relay was stopped with SIGSTOP and the device reconnected into it (TLS done, upgrade stuck). 3.5 s later the socket was dropped again mid-connect, and keys were injected straight away. The keys were handled 200 ms after the drop and 2 s later, with the selection moving on screen, while the old websocket task took 5.0 s (first run) and 10.5 s (second run) to exit. The device was live again 4.4 s after the relay continued.
+
+### host never logged
+
+`websocket_client`, `transport_ws`, `transport_base`, `transport`, `esp-tls`, `esp-tls-mbedtls` and `HTTP_CLIENT` are set to `ESP_LOG_NONE` (`transport.cpp`): they print the host or the whole upgrade request on a failed connect. The cause still reaches the screen through the close reason, which is now also kept when the websocket client's ERROR event clears the TLS error before DISCONNECTED reads it. Checks:
+
+- A build pointed at an unresolvable host showed `relay unreachable: ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME`, with 0 hits for the host in 4 failed connects.
+- The stopped-relay tests (upgrade read timeouts) and both soaks had 0 hits for the real host.
+
+### soak on the ring build
+
+100 forced reconnects:
+
+| what | value |
+| --- | --- |
+| reconnects | 100 of 100 live, no drop |
+| free heap first / last | 151288 / 151276 (-0.01%) |
+| free heap range | 149688 to 151300, alternating between two values |
+| largest block range | 81920 to 83968, 1.36x the 60398 line |
+| close to live | 4.7 to 5.4 s, two cycles at 12.1 s |
+
+A 30-reconnect run straight after the stopped-relay test settled from 154188 to 149752 over the first 18 cycles and then held flat. The 100-reconnect run that followed was flat from the start.

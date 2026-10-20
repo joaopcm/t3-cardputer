@@ -249,7 +249,9 @@ private:
             joining_ = {out.joinWifi->ssid, out.joinWifi->password};
             wifi_join(out.joinWifi->ssid, out.joinWifi->password, now_ms());
         }
-        if (out.pair) {
+        if (out.pair && !link_.canPair()) {
+            feed(app_.onPairResult(std::nullopt, "pairing refused: already paired and connected, pair after the relay asks to re-pair"));
+        } else if (out.pair) {
             const std::optional<std::string> body = t3::encodePair(out.pair->code, out.pair->name);
             const std::optional<std::string> error = body ? pair_start(*body) : std::optional<std::string>("out of memory: pair body not built");
             if (error) {
