@@ -42,6 +42,7 @@ export class FakeT3 implements T3Client {
   authBroken = false;
   projects: T3Project[] = [{ projectId: "p1", name: "api", defaultModel: "claude-opus-5", defaultWorkspace: "worktree" }];
   models: T3Model[] = [];
+  modelsError: string | undefined;
   threads: T3ThreadSummary[] = [];
   questions = new Map<string, T3Question[]>();
   sends: { threadId: string; text: string; mode: string; clientRequestId: string }[] = [];
@@ -62,6 +63,7 @@ export class FakeT3 implements T3Client {
   }
   async listModels() {
     this.guard();
+    if (this.modelsError !== undefined) throw new Error(this.modelsError);
     return this.models;
   }
   async listThreads(projectId: string) {

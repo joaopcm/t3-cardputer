@@ -53,9 +53,8 @@ function fit(items: Item[], models: Model[], budget: ProjectsBudget, minKept: nu
 }
 
 function toModel(model: T3Model): Model {
-  const ascii = oneLine(model.id) || "?";
-  const bare = ascii.replace(/^claude-/, "") || ascii;
-  return { id: model.id, label: bare.length <= MODEL_LABEL_MAX ? bare : `${bare.slice(0, MODEL_LABEL_MAX - 3)}...` };
+  const label = oneLine(model.label) || oneLine(model.id) || "?";
+  return { id: model.id, label: label.length <= MODEL_LABEL_MAX ? label : `${label.slice(0, MODEL_LABEL_MAX - 1).trimEnd()}~` };
 }
 
 function withModels(msg: ProjectsMessage, models: Model[]): ProjectsMessage {

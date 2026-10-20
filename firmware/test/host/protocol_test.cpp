@@ -168,13 +168,13 @@ TEST_CASE("projects models parse, are optional, and name the budget they break")
     CHECK(without.models.empty());
 
     const auto with = parseAs<t3::Projects>(
-        R"({"type":"projects","items":[],"models":[{"id":"claude-opus-5-5","label":"opus-5-5"},{"id":"claude-haiku-5-5","label":"haiku-5-5"}]})");
+        R"({"type":"projects","items":[],"models":[{"id":"claude-opus-5-5","label":"Claude Opus 5.5"},{"id":"claude-sonnet-5-5","label":"Claude Sonnet 5.5"}]})");
     REQUIRE(with.models.size() == 2);
     CHECK(with.models[0].id == "claude-opus-5-5");
-    CHECK(with.models[0].label == "opus-5-5");
-    CHECK(with.models[1].label == "haiku-5-5");
+    CHECK(with.models[0].label == "Claude Opus 5.5");
+    CHECK(with.models[1].label == "Claude Sonnet 5.5");
 
-    CHECK(parseError(R"({"type":"projects","items":[],"models":[{"id":"m","label":"abcdefghijklmnopq"}]})") == "models[0].label: model_label_max=16, got 17");
+    CHECK(parseError(R"({"type":"projects","items":[],"models":[{"id":"m","label":"abcdefghijklmnopqrstuvwxy"}]})") == "models[0].label: model_label_max=24, got 25");
     CHECK(parseError(R"({"type":"projects","items":[],"models":[{"id":"m"}]})") == "models[0].label");
     CHECK(parseError(R"({"type":"projects","items":[],"models":"opus"})") == "models: expected array");
 }

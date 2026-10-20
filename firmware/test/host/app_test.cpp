@@ -590,7 +590,7 @@ TEST_CASE("new task cycles the offered models with tab and launches the chosen i
     press(app, ch('n'));
     push(app, relay(R"({"type":"projects","items":[
  {"projectId":"proj_resend","name":"resend-api","defaults":{"model":"Opus 5.5","workspace":"worktree","runtimeMode":"auto"}}],
- "models":[{"id":"claude-opus-5-5","label":"opus-5-5"},{"id":"claude-sonnet-5-5","label":"sonnet-5-5"}]})"));
+ "models":[{"id":"claude-opus-5-5","label":"Claude Opus 5.5"},{"id":"claude-sonnet-5-5","label":"Claude Sonnet 5.5"}]})"));
     press(app, named(KeyName::Enter));
     CHECK(contains(row(app, 2), "Opus 5.5"));
     CHECK_FALSE(contains(row(app, 2), "["));
@@ -598,17 +598,17 @@ TEST_CASE("new task cycles the offered models with tab and launches the chosen i
     press(app, named(KeyName::Tab));
     CHECK(contains(row(app, 2), "[Opus 5.5]"));
     press(app, named(KeyName::Right));
-    CHECK(contains(row(app, 2), "[opus-5-5]"));
+    CHECK(contains(row(app, 2), "[Claude Opus 5.5]"));
     press(app, named(KeyName::Right));
-    CHECK(contains(row(app, 2), "[sonnet-5-5]"));
+    CHECK(contains(row(app, 2), "[Claude Sonnet 5.5]"));
     press(app, named(KeyName::Right));
     CHECK(contains(row(app, 2), "[Opus 5.5]"));
     press(app, named(KeyName::Left));
-    CHECK(contains(row(app, 2), "[sonnet-5-5]"));
+    CHECK(contains(row(app, 2), "[Claude Sonnet 5.5]"));
 
     press(app, named(KeyName::Tab));
-    CHECK(contains(row(app, 2), "sonnet-5-5"));
-    CHECK_FALSE(contains(row(app, 2), "[sonnet-5-5]"));
+    CHECK(contains(row(app, 2), "Claude Sonnet 5.5"));
+    CHECK_FALSE(contains(row(app, 2), "[Claude Sonnet 5.5]"));
     CHECK(contains(row(app, 3), "[new worktree]"));
 
     type(app, "go");
@@ -623,7 +623,7 @@ TEST_CASE("new task without a model change launches without a model even when mo
     press(app, ch('n'));
     push(app, relay(R"({"type":"projects","items":[
  {"projectId":"proj_resend","name":"resend-api","defaults":{"model":"Opus 5.5","workspace":"worktree","runtimeMode":"auto"}}],
- "models":[{"id":"claude-opus-5-5","label":"opus-5-5"}]})"));
+ "models":[{"id":"claude-opus-5-5","label":"Claude Opus 5.5"}]})"));
     press(app, named(KeyName::Enter));
     type(app, "go");
     const Frame launch(only(press(app, named(KeyName::Enter))));

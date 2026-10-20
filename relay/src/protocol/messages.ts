@@ -17,8 +17,8 @@ export const REF_MAX = 128;
 export const TOKEN_MAX = 256;
 export const FW_MAX = 32;
 export const LABEL_MAX = 64;
-// receipt: docs/receipts/2026-10-20-approvals-spike.md (f), the longest usable label is "sonnet-5-5" at 10 chars once "claude-" is dropped, so 16 only trips a model id nobody has shipped
-export const MODEL_LABEL_MAX = 16;
+// receipt: relay/test/fixtures/t3/mcp-orchestrator-capabilities.json (live capture), the longest usable label is "Claude Sonnet 5.5" at 17 chars; 24 keeps "model     [" + label + "]" within 40 columns and only trips a label nobody has shipped
+export const MODEL_LABEL_MAX = 24;
 // receipt: pending plan 2 (firmware measures its keyboard and heap)
 export const REPLY_TEXT_MAX = 4000;
 // receipt: T3 declares no length cap on t3_thread_send.message or t3_pending_request_respond.answers (tool schemas, 2026-10-20), so the cap is the device's typing budget, pending plan 2

@@ -413,13 +413,13 @@ Projects the device can launch into, with the defaults a `launch` gets when it o
 
 The list fits the same budgets as home: at most `hello.maxHomeRows` items (and the relay's own `maxHomeRows` limit, whichever is lower), and a frame within `maxFrameBytes`. When projects are left out, `truncated` says how many and which budget did it; the device shows it under the list, for example `+32 more projects: maxHomeRows=8, needed 40`. Left-out projects are the least recently active ones.
 
-`models` are the usable models of T3's catalog, in catalog order. `label` is printable ASCII, 1-16 chars (the id without a leading `claude-`, clipped with `...`); `id` is what `launch.model` takes. The list shares the frame budget with the projects: it is kept whole while at least one project fits beside it, and cut from the end only when it would otherwise push every project out. `models` is absent when T3 offers none. A device with no `models` offers only the project's default model.
+`models` are the models T3 can run now, in catalog order: only provider instances with no constraints (not disabled, installed, signed in), each id once even when two instances offer it. `label` is T3's own label as printable ASCII, 1-24 chars, clipped with a trailing `~`; `id` is what `launch.model` takes. The relay remembers which provider instance offers each id and launches on it; the device never sees instances. The list shares the frame budget with the projects: it is kept whole while at least one project fits beside it, and cut from the end only when it would otherwise push every project out. `models` is absent when T3 offers none. A device with no `models` offers only the project's default model. When the relay cannot read T3's catalog it sends `projects` without `models` and adds `model list unavailable: <why>` to the `warnings` of the next `home`; launching is not blocked.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"projects"` | yes | |
 | `items` | object[] | yes | `{projectId, name, defaults: {model, workspace, runtimeMode}}`; `workspace` is `"root"` or `"worktree"`, `runtimeMode` is one of the four launch values |
-| `models?` | object[] | no | `{id, label}`; `id` is 1-128 chars, `label` 1-16 printable ASCII chars |
+| `models?` | object[] | no | `{id, label}`; `id` is 1-128 chars, `label` 1-24 printable ASCII chars |
 | `truncated?` | object | no | `{budget: string, limit: int, actual: int, hidden: int}`; present when projects were left out: `budget` is `maxHomeRows` or `maxFrameBytes`, `limit` its value, `actual` what all projects needed (a count for `maxHomeRows`, bytes for `maxFrameBytes`), `hidden` how many projects are not in `items` |
 
 ```json relay
@@ -427,7 +427,7 @@ The list fits the same budgets as home: at most `hello.maxHomeRows` items (and t
 ```
 
 ```json relay
-{"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}],"models":[{"id":"claude-opus-5-5","label":"opus-5-5"},{"id":"claude-sonnet-5-5","label":"sonnet-5-5"},{"id":"claude-haiku-5-5","label":"haiku-5-5"}]}
+{"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}],"models":[{"id":"claude-opus-5-5","label":"Claude Opus 5.5"},{"id":"claude-sonnet-5-5","label":"Claude Sonnet 5.5"},{"id":"claude-haiku-5-5","label":"Claude Haiku 5.5"}]}
 ```
 
 ```json relay

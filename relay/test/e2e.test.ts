@@ -64,7 +64,10 @@ describe("simulator against the real server", () => {
 
   it("sim shows the model list on the new task screen", async () => {
     const { server, auth, t3 } = await startRelay();
-    t3.models = [{ id: "claude-opus-5-5" }, { id: "claude-haiku-5-5" }];
+    t3.models = [
+      { id: "claude-opus-5-5", label: "Opus 5.5", providerInstanceId: "claudeAgent" },
+      { id: "claude-haiku-5-5", label: "Haiku 5.5", providerInstanceId: "claudeAgent" },
+    ];
 
     const url = `http://127.0.0.1:${server.port}`;
     const result = await runSim({
@@ -74,11 +77,11 @@ describe("simulator against the real server", () => {
       bodyRows: 8,
       maxFrameBytes: 4096,
       write: () => {},
-      script: ["N", "1", "?opus-5-5"],
+      script: ["N", "1", "?Opus 5.5"],
     });
 
     expect(result.problems).toEqual([]);
-    expect(result.screens.join("\n")).toContain("models opus-5-5 haiku-5-5");
+    expect(result.screens.join("\n")).toContain("models Opus 5.5 Haiku 5.5");
   });
 
   it("sim denies with a reason and answers a free-text question", async () => {

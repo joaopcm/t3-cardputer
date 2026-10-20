@@ -19,7 +19,7 @@ inline constexpr int kRefMax = 128;
 // receipt: LABEL_MAX in relay/src/protocol/messages.ts (option label)
 inline constexpr int kLabelMax = 64;
 // receipt: MODEL_LABEL_MAX in relay/src/protocol/messages.ts (projects.models[].label)
-inline constexpr int kModelLabelMax = 16;
+inline constexpr int kModelLabelMax = 24;
 // receipt: TOKEN_MAX in relay/src/protocol/messages.ts
 inline constexpr int kTokenMax = 256;
 // receipt: FW_MAX in relay/src/protocol/messages.ts

@@ -262,21 +262,48 @@ describe("device session", () => {
     expect(device.received.some((m) => m.type === "error")).toBe(false);
   });
 
-  it("list_projects offers the usable models and launch accepts any listed id", async () => {
+  it("list_projects offers the usable models and launch sends the chosen model's provider instance", async () => {
     const { t3, connected } = await setup();
-    t3.models = [{ id: "claude-opus-5-5" }, { id: "claude-sonnet-5-5" }];
+    t3.models = [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", providerInstanceId: "claudeAgent" },
+      { id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "grokAgent" },
+    ];
     const device = await connected();
     device.send({ type: "list_projects", id: "l1" });
     const projects = await device.next("projects");
     expect((await device.next("ack")).id).toBe("l1");
     expect(projects.models).toEqual([
-      { id: "claude-opus-5-5", label: "opus-5-5" },
-      { id: "claude-sonnet-5-5", label: "sonnet-5-5" },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+      { id: "grok-4.7", label: "Grok 4.7" },
     ]);
 
     device.send({ type: "launch", id: "l2", projectId: "p1", text: "go", model: projects.models![1]!.id });
     expect(await device.next("ack")).toMatchObject({ id: "l2", ok: true });
-    expect(t3.launches[0]).toMatchObject({ projectId: "p1", model: "claude-sonnet-5-5" });
+    expect(t3.launches[0]).toMatchObject({ projectId: "p1", model: "grok-4.7", providerInstanceId: "grokAgent" });
+  });
+
+  it("launch with a model the device never listed asks the catalog, and falls back to the default instance when it is unknown", async () => {
+    const { t3, connected } = await setup();
+    t3.models = [{ id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "grokAgent" }];
+    const device = await connected();
+    device.send({ type: "launch", id: "l1", projectId: "p1", text: "go", model: "grok-4.7" });
+    await device.next("ack");
+    device.send({ type: "launch", id: "l2", projectId: "p1", text: "go", model: "claude-opus-4" });
+    await device.next("ack");
+
+    expect(t3.launches[0]).toMatchObject({ model: "grok-4.7", providerInstanceId: "grokAgent" });
+    expect(t3.launches[1]?.model).toBe("claude-opus-4");
+    expect("providerInstanceId" in t3.launches[1]!).toBe(false);
+  });
+
+  it("launch without a chosen model sends no provider instance", async () => {
+    const { t3, connected } = await setup();
+    t3.models = [{ id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "grokAgent" }];
+    const device = await connected();
+    device.send({ type: "launch", id: "l1", projectId: "p1", text: "go" });
+    await device.next("ack");
+    expect("providerInstanceId" in t3.launches[0]!).toBe(false);
+    expect("model" in t3.launches[0]!).toBe(false);
   });
 
   it("list_projects without a model catalog sends no models", async () => {
@@ -285,6 +312,26 @@ describe("device session", () => {
     device.send({ type: "list_projects", id: "l1" });
     const projects = await device.next("projects");
     expect("models" in projects).toBe(false);
+  });
+
+  it("a broken model catalog still lists projects, with a home warning naming the failure, cleared once it works", async () => {
+    const { t3, connected } = await setup();
+    const device = await connected();
+    t3.modelsError = "orchestrator_capabilities schema drift";
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect(projects.items).toHaveLength(1);
+    expect("models" in projects).toBe(false);
+    expect(await device.next("ack")).toMatchObject({ id: "l1", ok: true });
+    const warned = await device.next("home");
+    expect(warned.warnings).toContain("model list unavailable: orchestrator_capabilities schema drift");
+
+    t3.modelsError = undefined;
+    t3.models = [{ id: "claude-opus-5-5", label: "Claude Opus 5.5", providerInstanceId: "claudeAgent" }];
+    device.send({ type: "list_projects", id: "l2" });
+    expect((await device.next("projects")).models).toHaveLength(1);
+    const cleared = await device.next("home");
+    expect(cleared.warnings.some((w) => w.startsWith("model list unavailable"))).toBe(false);
   });
 
   it("a failed reply repeated with the same id gets the same failure, and a new id runs it", async () => {

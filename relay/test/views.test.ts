@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PendingApproval } from "../src/approvals/index.js";
-import { relayMessageSchema } from "../src/protocol/messages.js";
+import { MODEL_LABEL_MAX, relayMessageSchema } from "../src/protocol/messages.js";
 import type { T3Question, T3ThreadSummary } from "../src/t3/mcp.js";
 import { drawnAge, buildHome } from "../src/views/home.js";
 import { buildProjects } from "../src/views/projects.js";
@@ -508,34 +508,40 @@ describe("buildProjects", () => {
     expect(relayMessageSchema.safeParse(projects).success).toBe(true);
   });
 
-  const ids = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].map((id) => ({ id }));
-  const catalog = [
-    { id: "claude-opus-5-5", label: "opus-5-5" },
-    { id: "claude-sonnet-5-5", label: "sonnet-5-5" },
-    { id: "claude-haiku-5-5", label: "haiku-5-5" },
+  const live = [
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5", providerInstanceId: "claudeAgent" },
+    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", providerInstanceId: "claudeAgent" },
+    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", providerInstanceId: "claudeAgent" },
   ];
+  const catalog = live.map(({ id, label }) => ({ id, label }));
 
-  it("projects carries models from the catalog", () => {
-    const projects = buildProjects([{ projectId: "p1", name: "api" }], { get: () => undefined }, fallback, roomy, ids);
+  it("projects carries models from the catalog without their provider instance", () => {
+    const projects = buildProjects([{ projectId: "p1", name: "api" }], { get: () => undefined }, fallback, roomy, live);
 
     expect(projects.models).toEqual(catalog);
     expect(relayMessageSchema.safeParse(projects).success).toBe(true);
   });
 
-  it("labels models in ASCII within 16 chars and keeps the id intact", () => {
+  it("labels models in ASCII within MODEL_LABEL_MAX, clipping with ~ and keeping the id intact", () => {
     const projects = buildProjects(
       [{ projectId: "p1", name: "api" }],
       { get: () => undefined },
       fallback,
       roomy,
-      [{ id: "claude-sonnet-5-5-extended-thinking" }, { id: "grok-4.7" }, { id: "mod\u00e8le-\u2603" }],
+      [
+        { id: "long", label: "Claude Sonnet 5.5 with extended thinking", providerInstanceId: "x" },
+        { id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "x" },
+        { id: "mod\u00e8le", label: "Mod\u00e8le \u2603", providerInstanceId: "x" },
+      ],
     );
 
-    expect(projects.models?.map((m) => m.id)).toEqual(["claude-sonnet-5-5-extended-thinking", "grok-4.7", "mod\u00e8le-\u2603"]);
+    expect(projects.models?.map((m) => m.id)).toEqual(["long", "grok-4.7", "mod\u00e8le"]);
+    expect(projects.models?.[0]?.label).toBe("Claude Sonnet 5.5 with~");
+    expect(projects.models?.[0]?.label.length).toBeLessThanOrEqual(MODEL_LABEL_MAX);
+    expect(projects.models?.[1]?.label).toBe("Grok 4.7");
     for (const model of projects.models ?? []) {
-      expect(model.label).toMatch(/^[\x20-\x7e]{1,16}$/);
+      expect(model.label).toMatch(new RegExp(`^[\\x20-\\x7e]{1,${MODEL_LABEL_MAX}}$`));
     }
-    expect(projects.models?.[1]?.label).toBe("grok-4.7");
     expect(relayMessageSchema.safeParse(projects).success).toBe(true);
   });
 
@@ -547,7 +553,7 @@ describe("buildProjects", () => {
 
   it("models fit the frame budget with projects", () => {
     for (const maxFrameBytes of [1024, 700, 512]) {
-      const projects = buildProjects(forty, { get: () => undefined }, fallback, { maxRows: 50, maxFrameBytes, activity: new Map() }, ids);
+      const projects = buildProjects(forty, { get: () => undefined }, fallback, { maxRows: 50, maxFrameBytes, activity: new Map() }, live);
 
       expect(Buffer.byteLength(JSON.stringify(projects)), `maxFrameBytes=${maxFrameBytes}`).toBeLessThanOrEqual(maxFrameBytes);
       expect(projects.models).toEqual(catalog);
@@ -558,7 +564,7 @@ describe("buildProjects", () => {
   });
 
   it("caps models to what fits when even an empty project list cannot hold them all", () => {
-    const projects = buildProjects(forty, { get: () => undefined }, fallback, { maxRows: 50, maxFrameBytes: 256, activity: new Map() }, ids);
+    const projects = buildProjects(forty, { get: () => undefined }, fallback, { maxRows: 50, maxFrameBytes: 256, activity: new Map() }, live);
 
     expect(Buffer.byteLength(JSON.stringify(projects))).toBeLessThanOrEqual(256);
     expect((projects.models ?? []).length).toBeLessThan(catalog.length);
