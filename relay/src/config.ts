@@ -19,6 +19,7 @@ export const limitsSchema = z.strictObject({
   authWindowMs: positiveInt,
   authMaxTrackedSources: positiveInt,
   pairingCodeTtlMs: positiveInt,
+  adminRequestTimeoutMs: positiveInt,
   mcpRequestTimeoutMs: positiveInt,
   mcpWaitGraceMs: positiveInt,
   mcpMaxPages: positiveInt,
@@ -77,6 +78,8 @@ export const DEFAULT_LIMITS: Limits = {
   authMaxTrackedSources: 10_000,
   // receipt: pending plan 2 — time to type the code on the ADV keyboard
   pairingCodeTtlMs: 10 * 60 * 1000,
+  // receipt: 200 pair + 200 devices + 50 revoke (50 paired devices) over the admin socket took 0.22-0.26 ms p50 and 3.5 ms worst, so 5 s only trips a hung relay
+  adminRequestTimeoutMs: 5000,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), slowest MCP call measured was 114 ms, so 30 s only trips on a hung server
   mcpRequestTimeoutMs: 30_000,
   // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), loopback round trip p95 was under 120 ms, so 10 s past the wait is a tripwire

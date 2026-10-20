@@ -10,7 +10,7 @@
     "t3-cardputer-relay": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

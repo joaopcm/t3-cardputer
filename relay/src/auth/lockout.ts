@@ -45,6 +45,16 @@ export class Lockout {
     this.failures.set(source, [now]);
   }
 
+  lockedOut(): { source: string; retryAfterMs: number }[] {
+    const now = Date.now();
+    const out: { source: string; retryAfterMs: number }[] = [];
+    for (const source of [...this.failures.keys()]) {
+      const times = this.live(source, now);
+      if (times && times.length >= this.limitPerWindow) out.push({ source, retryAfterMs: times[0]! + this.windowMs - now });
+    }
+    return out;
+  }
+
   get trackedSources(): number {
     return this.failures.size;
   }

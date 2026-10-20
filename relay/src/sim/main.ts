@@ -6,26 +6,33 @@ const MAX_FRAME_BYTES = 4096;
 
 const USAGE = `usage:
   sim pair <relay-url> <code> [name]   trade a pairing code for a token, saved to ${DEFAULT_SIM_CONFIG_PATH}
-  sim run [--wav file.wav]             open the simulator with the saved token`;
+  sim run [--wav file.wav] [--url u]   open the simulator with the saved token, --url replaces the saved relay url`;
 
-export async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[], configPath: string = DEFAULT_SIM_CONFIG_PATH): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "pair") {
     const [url, code, name = "sim"] = rest;
     if (url === undefined || code === undefined) return usage("pair needs <relay-url> and <code>");
-    saveSimConfig(DEFAULT_SIM_CONFIG_PATH, { url, token: await pairDevice(url, code, name) });
-    console.log(`paired, token saved to ${DEFAULT_SIM_CONFIG_PATH}`);
+    saveSimConfig(configPath, { url, token: await pairDevice(url, code, name) });
+    console.log(`paired, token saved to ${configPath}`);
     return 0;
   }
   if (command === "run") {
-    const wavAt = rest.indexOf("--wav");
-    const wav = wavAt === -1 ? undefined : rest[wavAt + 1];
-    if (wavAt !== -1 && wav === undefined) return usage("--wav needs a file");
-    const { url, token } = loadSimConfig(DEFAULT_SIM_CONFIG_PATH);
-    const result = await runSim({ url, token, cols: 40, bodyRows: 8, maxFrameBytes: MAX_FRAME_BYTES, ...(wav === undefined ? {} : { wav }) });
+    const wav = flagValue(rest, "--wav");
+    if (wav === null) return usage("--wav needs a value");
+    const urlOverride = flagValue(rest, "--url");
+    if (urlOverride === null) return usage("--url needs a value");
+    const { url, token } = loadSimConfig(configPath);
+    const result = await runSim({ url: urlOverride ?? url, token, cols: 40, bodyRows: 8, maxFrameBytes: MAX_FRAME_BYTES, ...(wav === undefined ? {} : { wav }) });
     return result.problems.length === 0 ? 0 : 1;
   }
   return usage("unknown command");
+}
+
+function flagValue(args: string[], flag: string): string | undefined | null {
+  const at = args.indexOf(flag);
+  if (at === -1) return undefined;
+  return args[at + 1] ?? null;
 }
 
 function usage(problem: string): number {

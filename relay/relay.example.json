@@ -24,6 +24,7 @@
     "authWindowMs": 600000,
     "authMaxTrackedSources": 10000,
     "pairingCodeTtlMs": 600000,
+    "adminRequestTimeoutMs": 5000,
     "mcpRequestTimeoutMs": 30000,
     "mcpWaitGraceMs": 10000,
     "mcpMaxPages": 50,

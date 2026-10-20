@@ -237,6 +237,17 @@ describe("Lockout", () => {
     expect(lockout.check("b")).toEqual({ allowed: true });
   });
 
+  it("lockedOut lists only sources at the limit with their retry time", () => {
+    const lockout = new Lockout(2, 60_000, 100);
+    lockout.recordFailure("a");
+    lockout.recordFailure("b");
+    vi.advanceTimersByTime(10_000);
+    lockout.recordFailure("a");
+    expect(lockout.lockedOut()).toEqual([{ source: "a", retryAfterMs: 50_000 }]);
+    vi.advanceTimersByTime(50_000);
+    expect(lockout.lockedOut()).toEqual([]);
+  });
+
   it("lockout window slides", () => {
     const lockout = new Lockout(3, 60_000, 100);
     lockout.recordFailure("a");

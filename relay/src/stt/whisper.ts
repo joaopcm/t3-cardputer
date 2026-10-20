@@ -6,6 +6,7 @@ import type { Stt } from "./types.js";
 export type WhisperConfig = {
   whisper: RelayConfig["whisper"];
   limits: Pick<Limits, "whisperRestartsPerWindow" | "whisperRestartWindowMs" | "whisperStartTimeoutMs" | "whisperRequestTimeoutMs">;
+  onSpawn?: (pid: number) => void;
 };
 
 export type WhisperStt = Required<Stt> & {
@@ -93,6 +94,7 @@ class WhisperServer implements WhisperStt {
       { stdio: ["ignore", "ignore", "inherit"] },
     );
     this.child = child;
+    if (child.pid !== undefined) this.cfg.onSpawn?.(child.pid);
     let dead = false;
     const died = (cause: string) => {
       if (dead) return;

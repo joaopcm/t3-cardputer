@@ -331,6 +331,27 @@ describe("createWhisperStt", () => {
     expect(whisper.warning()).toBeUndefined();
   });
 
+  it("reports every child pid to onSpawn, including the restarted one", async () => {
+    const crashFile = join(mkdtempSync(join(tmpdir(), "relay-crash-")), "crash");
+    const { binDir } = fakeWhisperDir({ FAKE_WHISPER_CRASH_FILE: crashFile });
+    const pids: number[] = [];
+    const whisper = createWhisperStt({
+      whisper: { ...DEFAULT_CONFIG.whisper, binDir, model: "small.en", port: nextPort++, threads: 3 },
+      limits: { ...DEFAULT_LIMITS, ...whisperLimits },
+      onSpawn: (pid) => pids.push(pid),
+    });
+    onCleanup(() => whisper.close());
+    const wav = new AudioBuffer(16000, 5).toWav();
+    await whisper.transcribe(wav);
+    expect(pids).toHaveLength(1);
+    expect(() => process.kill(pids[0]!, 0)).not.toThrow();
+    writeFileSync(crashFile, "");
+    await expect(whisper.transcribe(wav)).rejects.toThrow(/whisper-server/);
+    await until(() => pids.length === 2);
+    expect(pids[1]).not.toBe(pids[0]);
+    unlinkSync(crashFile);
+  });
+
   it("a crash loop stops restarting and warns naming whisperRestartsPerWindow", async () => {
     const { binDir } = fakeWhisperDir({ FAKE_WHISPER_EXIT_ON_START: "1" });
     const whisper = makeWhisper(binDir);
