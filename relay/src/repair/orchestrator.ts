@@ -54,6 +54,7 @@ const ghPrSchema = z.object({
 
 type OpenPr = { number: number; sha: string; facts: Omit<PullRequestFacts, "files">; ciDone: boolean };
 type TrackOutcome = { kind: "merged" } | { kind: "closed" } | { kind: "timed_out"; status: string };
+type Evaluation = { kind: "merged" } | { kind: "held"; status: string; warning?: string };
 
 export type RepairDeps = {
   config: RelayConfig;
@@ -229,7 +230,8 @@ export class RepairOrchestrator {
     const deadline = attempt.startedAt + limits.repairAttemptTimeoutMs;
     let status = `waiting for a PR from ${attempt.branch}`;
     let evaluatedSha: string | undefined;
-    let pollFailing = false;
+    let heldWarning: string | undefined;
+    let shownWarning: string | undefined;
     while (!this.closed) {
       if (Date.now() >= deadline) return { kind: "timed_out", status };
       let next = status;
@@ -244,16 +246,18 @@ export class RepairOrchestrator {
           } else {
             const result = await this.evaluate(broken, attempt, own);
             evaluatedSha = own.sha;
-            if (result === "merged") return { kind: "merged" };
-            next = result;
+            if (result.kind === "merged") return { kind: "merged" };
+            next = result.status;
+            heldWarning = result.warning;
           }
         }
       } catch (error) {
         next = `PR poll failed: ${messageOf(error)}`;
         failing = true;
       }
-      if (failing || pollFailing) this.deps.setWarning(failing ? `approvals repair for T3 ${to}: ${next}` : undefined);
-      pollFailing = failing;
+      const warning = failing ? `approvals repair for T3 ${to}: ${next}` : heldWarning;
+      if (warning !== shownWarning) this.deps.setWarning(warning);
+      shownWarning = warning;
       if (next !== status) {
         console.log(`approvals repair for T3 ${to}, attempt ${attempt.attempt}: ${next}`);
         status = next;
@@ -276,7 +280,7 @@ export class RepairOrchestrator {
     return own === undefined ? { forks } : { own, forks };
   }
 
-  private async evaluate({ failure, versions: { to } }: Broken, attempt: Attempt, pr: OpenPr): Promise<"merged" | string> {
+  private async evaluate({ failure, versions: { to } }: Broken, attempt: Attempt, pr: OpenPr): Promise<Evaluation> {
     const { githubRepo, requiredChecks } = this.deps.config.repair;
     const files = await this.changedFiles(pr.sha);
     const verdict = checkMergeable({ ...pr.facts, files }, { repo: githubRepo, branch: attempt.branch, requiredChecks });
@@ -289,7 +293,7 @@ export class RepairOrchestrator {
           `Only ${REPAIR_FOLDER} may change and every CI check must pass. Push a fix to ${attempt.branch}.`,
         ].join("\n"),
       );
-      return `PR #${pr.number} blocked by guardrails: ${verdict.reasons.join("; ")}`;
+      return { kind: "held", status: `PR #${pr.number} blocked by guardrails: ${verdict.reasons.join("; ")}` };
     }
 
     const staging = await this.stagingCanary(pr.sha);
@@ -298,7 +302,7 @@ export class RepairOrchestrator {
         attempt,
         `The staging canary failed on PR #${pr.number} at ${pr.sha}, so the relay did not merge it:\n${staging.failure}\nPush a fix to ${attempt.branch}; the canary re-runs on the new commit.`,
       );
-      return `PR #${pr.number} staging canary failed: ${staging.failure}`;
+      return { kind: "held", status: `PR #${pr.number} staging canary failed: ${staging.failure}` };
     }
 
     try {
@@ -306,8 +310,11 @@ export class RepairOrchestrator {
     } catch (error) {
       const why = `PR #${pr.number} passed every guardrail but the merge failed: ${messageOf(error)}`;
       console.error(`approvals repair for T3 ${to}: ${why}`, error);
-      this.deps.setWarning(`approvals repair for T3 ${to}: ${why}`);
-      return why;
+      await this.tell(
+        attempt,
+        `GitHub refused to merge PR #${pr.number} at ${pr.sha}:\n${messageOf(error)}\nFix it: rebase ${attempt.branch} on main and push to ${attempt.branch}; the relay re-checks CI and re-runs the staging canary on the new commit.`,
+      );
+      return { kind: "held", status: why, warning: `approvals repair for T3 ${to}: ${why}` };
     }
     console.log(`approvals repair for T3 ${to}: merged PR #${pr.number} at ${pr.sha}, deploying`);
     this.update(to, (record) => {
@@ -319,7 +326,7 @@ export class RepairOrchestrator {
     } catch (error) {
       this.downWithoutFix(failure, `approvals repair merged PR #${pr.number} for T3 ${to} but the deploy failed: ${messageOf(error)}`);
     }
-    return "merged";
+    return { kind: "merged" };
   }
 
   private async changedFiles(sha: string): Promise<string[]> {

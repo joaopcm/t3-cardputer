@@ -392,6 +392,54 @@ describe("RepairOrchestrator", () => {
     expect(h.verbs().filter((v) => v.startsWith("gh pr merge"))).toHaveLength(1);
     expect(h.verbs().filter((v) => v.startsWith("node dist/cli.js"))).toHaveLength(1);
     expect(h.deploys).toHaveLength(0);
+    expect(h.warnings.at(-1)).toMatch(/merge failed/);
+  });
+
+  it("a refused merge is sent to the repair thread asking it to rebase on main and push, and a new commit is merged", async () => {
+    const NEW_SHA = "fedcba9876543210fedcba9876543210fedcba98";
+    let head = SHA;
+    let refusals = 0;
+    const h = harness({
+      script: {
+        prs: () => [ghPr({ headRefOid: head })],
+        merge: () => {
+          if (head === SHA) {
+            refusals++;
+            throw new Error("gh pr merge failed: exit 1: Pull request is not mergeable: the head branch is not up to date with the base branch");
+          }
+        },
+      },
+    });
+    h.orchestrator.onBroken(FAILURE, { from: FROM, to: TO });
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+    expect(h.sends[0]).toMatchObject({ threadId: "thread-1", mode: "queue" });
+    expect(h.sends[0]!.text).toContain("not up to date with the base branch");
+    expect(h.sends[0]!.text).toMatch(/rebase .*on main/);
+    expect(h.sends[0]!.text).toContain(`push to ${BRANCH}`);
+    await pause(20);
+    expect(refusals).toBe(1);
+    head = NEW_SHA;
+    await vi.waitFor(() => expect(h.deploys).toHaveLength(1));
+    expect(h.verbs()).toContain(`gh pr merge 7 --repo joaopcm/t3-cardputer --squash --match-head-commit ${NEW_SHA}`);
+  });
+
+  it("a merge failure right after a failing PR poll keeps its warning on Home", async () => {
+    let polls = 0;
+    const h = harness({
+      script: {
+        prs: () => {
+          if (++polls === 1) throw new Error("gh: HTTP 502 Bad Gateway");
+          return [ghPr()];
+        },
+        merge: () => {
+          throw new Error("gh pr merge failed: exit 1: base branch policy prohibits the merge");
+        },
+      },
+    });
+    h.orchestrator.onBroken(FAILURE, { from: FROM, to: TO });
+    await vi.waitFor(() => expect(h.verbs().filter((v) => v.startsWith("gh pr merge"))).toHaveLength(1));
+    await pause(20);
+    expect(h.warnings.at(-1)).toMatch(/PR #7 passed every guardrail but the merge failed/);
   });
 
   it("does not launch and names the missing config key when repair.projectId is unset", () => {
