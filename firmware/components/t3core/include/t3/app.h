@@ -50,6 +50,7 @@ public:
     App(const HelloCaps &caps, uint64_t idSeed);
 
     Out onKey(Key key, uint32_t nowMs);
+    Out onWake();
     Out onRelay(const RelayMsg &msg, uint32_t nowMs);
     Out onFrame(std::string_view json, uint32_t nowMs);
     Out onLinkStatus(std::string_view status);

@@ -485,6 +485,42 @@ TEST_CASE("R sends refresh")
     CHECK(lower.str("id") != upper.str("id"));
 }
 
+TEST_CASE("wake sends refresh and redraws home")
+{
+    App app = live();
+    push(app, relay(kHome));
+    const std::string before = allText(app);
+    const Frame refresh(only(app.onWake()));
+    CHECK(refresh.str("type") == "refresh");
+    CHECK(refresh.str("id") != "");
+    CHECK(app.screenName() == "home");
+    CHECK(allText(app) == before);
+    push(app, relay(kWeaverHome));
+    CHECK(app.screenName() == "home");
+    CHECK(contains(allText(app), "layout engine"));
+    CHECK_FALSE(contains(allText(app), "fix bounce webhook"));
+}
+
+TEST_CASE("wake keeps the open screen and a half-typed reply")
+{
+    App app = onWeaverThread();
+    type(app, "go ");
+    const Frame refresh(only(app.onWake()));
+    CHECK(refresh.str("type") == "refresh");
+    CHECK(app.screenName() == "thread");
+    CHECK(row(app, 8).rfind("> go _", 0) == 0);
+}
+
+TEST_CASE("wake with the link down sends nothing and the reconnect brings the state")
+{
+    App app = live();
+    push(app, relay(kHome));
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(app.onWake().send.empty());
+    CHECK(app.onLinkStatus("").send.empty());
+    CHECK(app.screenName() == "home");
+}
+
 TEST_CASE("T on approval sends respond with text")
 {
     App app = onApproval();

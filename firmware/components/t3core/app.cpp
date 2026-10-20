@@ -87,6 +87,14 @@ App::Out App::refresh()
     return out;
 }
 
+App::Out App::onWake()
+{
+    if (!linkStatus_.empty()) {
+        return {};
+    }
+    return refresh();
+}
+
 std::string App::health() const
 {
     if (!home_) {

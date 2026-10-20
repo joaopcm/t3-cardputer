@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "keyboard.h"
+#include "power.h"
 #include "settings.h"
 #include "t3/app.h"
 #include "t3/grid.h"
@@ -79,9 +80,20 @@ public:
 
     void key(const t3::Key &key)
     {
+        if (power_on_key(now_ms()) == t3::Power::KeyEffect::Woke) {
+            ESP_LOGI(TAG, "woke, key not delivered");
+            wake();
+            return;
+        }
         ESP_LOGI(TAG, "key %s", loggedKey(key).c_str());
         feed(app_.onKey(key, now_ms()));
         ESP_LOGI(TAG, "screen %.*s", static_cast<int>(app_.screenName().size()), app_.screenName().data());
+        dirty_ = true;
+    }
+
+    void wake()
+    {
+        feed(app_.onWake());
         dirty_ = true;
     }
 
@@ -104,6 +116,12 @@ public:
             onPairDone(*done);
             dirty_ = true;
         }
+        uint32_t dimAfterMs;
+        uint32_t offAfterMs;
+        if (debug_serial_poll_power(&dimAfterMs, &offAfterMs)) {
+            power_set_timeouts(dimAfterMs, offAfterMs, now_ms());
+        }
+        power_tick(now_ms());
         if (debug_serial_poll_drop()) {
             ESP_LOGI(TAG, "debug: dropping the relay socket");
             transport_close();
@@ -342,6 +360,7 @@ extern "C" void app_main(void)
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
     device.boot(!settings::wifi().empty(), token.has_value());
+    power_init(now_ms());
     draw(device.app());
     debug_serial_start();
     log_heap("ready");
