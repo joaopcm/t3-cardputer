@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PendingApproval } from "../src/approvals/index.js";
 import type { Limits } from "../src/config.js";
 import type { RelayMessage } from "../src/protocol/messages.js";
-import { Watcher } from "../src/watcher.js";
+import { T3UnavailableError } from "../src/t3/mcp.js";
+import { Watcher, type WatchSnapshot } from "../src/watcher.js";
 import { Device, FakeApprovals, FakeT3, HOURS_AGO, POLL_MS, cleanupAfterEach, deferred, onCleanup, startRelay, summary } from "./helpers/relay-fixture.js";
 
 cleanupAfterEach();
@@ -391,6 +392,47 @@ describe("watcher", () => {
     }
     expect(seen).toBeGreaterThanOrEqual(3);
     expect(errors.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("logs each change of T3 reachability once and warns on Home with the HTTP status when it is not a plain connection failure", async () => {
+    const t3 = new FakeT3();
+    let failure: Error | undefined;
+    t3.listProjects = async () => {
+      if (failure) throw failure;
+      return t3.projects;
+    };
+    const watcher = new Watcher(t3, new FakeApprovals(), 5);
+    const errors: string[] = [];
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => void errors.push(String(args[0])));
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => void logs.push(String(args[0])));
+    const snapshots: WatchSnapshot[] = [];
+    watcher.onChange((snapshot) => snapshots.push(snapshot));
+    const settle = async () => {
+      const at = snapshots.length;
+      await vi.waitFor(() => expect(snapshots.length).toBeGreaterThan(at + 3));
+      return snapshots.at(-1)!;
+    };
+    try {
+      watcher.start();
+      await settle();
+      failure = new T3UnavailableError("T3 at http://127.0.0.1:3773 answered HTTP 403 (t3_project_list), reconnecting", { httpStatus: 403 });
+      const forbidden = await settle();
+      expect(forbidden.t3).toBe("unreachable");
+      expect(forbidden.warnings).toEqual(["T3 at http://127.0.0.1:3773 answered HTTP 403 (t3_project_list), reconnecting"]);
+      expect(errors.filter((e) => e.includes("HTTP 403"))).toHaveLength(1);
+      failure = new T3UnavailableError("T3 unreachable at http://127.0.0.1:3773 (t3_project_list)");
+      const down = await settle();
+      expect(down.warnings).toEqual([]);
+      expect(errors.filter((e) => e.includes("T3 unreachable at"))).toHaveLength(1);
+      failure = undefined;
+      const back = await settle();
+      expect(back.t3).toBe("ok");
+      expect(logs.filter((l) => l.includes("T3 reachable again"))).toHaveLength(1);
+    } finally {
+      watcher.stop();
+      vi.restoreAllMocks();
+    }
   });
 
   it("stop releases callers still waiting for the first snapshot", async () => {

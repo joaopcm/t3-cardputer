@@ -363,6 +363,31 @@ describe("pairT3Mcp", () => {
   });
 });
 
+describe("T3Mcp HTTP errors", () => {
+  it("a non-401 HTTP answer is T3UnavailableError carrying the status", async () => {
+    const base = await listen((req, res) => {
+      req.resume();
+      res.writeHead(503, { "content-type": "text/plain" }).end("upstream down");
+    });
+    const mcp = new T3Mcp({ baseUrl: base, secrets: secretsWith(validToken), limits: DEFAULT_LIMITS });
+    try {
+      const error = await mcp.listProjects().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(T3UnavailableError);
+      expect((error as T3UnavailableError).httpStatus).toBe(503);
+      expect((error as Error).message).toContain("HTTP 503");
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  it("a refused connection is T3UnavailableError with no status", async () => {
+    const mcp = new T3Mcp({ baseUrl: "http://127.0.0.1:1", secrets: secretsWith(validToken), limits: DEFAULT_LIMITS });
+    const error = await mcp.listProjects().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(T3UnavailableError);
+    expect((error as T3UnavailableError).httpStatus).toBeUndefined();
+  });
+});
+
 describe("T3Mcp over HTTP when T3 restarts", () => {
   function restartableT3() {
     let sessions = new Map<string, StreamableHTTPServerTransport>();

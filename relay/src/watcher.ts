@@ -28,6 +28,7 @@ export class Watcher {
   private backfilled = false;
   private timer: NodeJS.Timeout | undefined;
   private generation = 0;
+  private unreachable: string | undefined;
 
   constructor(
     private readonly t3: WatcherT3,
@@ -91,9 +92,16 @@ export class Watcher {
   private async poll(): Promise<WatchSnapshot> {
     const last = this.latest ?? EMPTY;
     try {
-      return await this.read();
+      const snapshot = await this.read();
+      if (this.unreachable !== undefined) console.log(`watcher: T3 reachable again after: ${this.unreachable}`);
+      this.unreachable = undefined;
+      return snapshot;
     } catch (error) {
-      if (error instanceof T3UnavailableError) return { ...last, t3: "unreachable", warnings: [] };
+      if (error instanceof T3UnavailableError) {
+        if (error.message !== this.unreachable) console.error(`watcher: ${error.message}`);
+        this.unreachable = error.message;
+        return { ...last, t3: "unreachable", warnings: error.httpStatus === undefined ? [] : [error.message] };
+      }
       if (error instanceof T3AuthError) return { ...last, t3: "unreachable", warnings: [T3_AUTH_WARNING] };
       console.error("watcher: T3 poll failed", error);
       return { ...last, warnings: [`T3 poll failed: ${(error as Error).message}`] };

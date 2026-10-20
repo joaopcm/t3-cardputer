@@ -17,6 +17,11 @@ const DEFAULT_BASE_REF = "main";
 
 export class T3UnavailableError extends Error {
   override name = "T3UnavailableError";
+  readonly httpStatus: number | undefined;
+  constructor(message: string, options?: ErrorOptions & { httpStatus?: number | undefined }) {
+    super(message, options);
+    this.httpStatus = options?.httpStatus;
+  }
 }
 
 export class T3AuthError extends Error {
@@ -348,7 +353,7 @@ export class T3Mcp {
     if (error instanceof StreamableHTTPError) {
       // a restarted T3 answers the old mcp-session-id with 404 and the SDK does not re-initialize, so drop the session and reconnect on the next call
       await this.close();
-      return new T3UnavailableError(`T3 at ${this.options.baseUrl} answered HTTP ${error.code} (${what}), reconnecting`, { cause: error });
+      return new T3UnavailableError(`T3 at ${this.options.baseUrl} answered HTTP ${error.code} (${what}), reconnecting`, { cause: error, httpStatus: error.code });
     }
     if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
       return new Error(`T3 tool ${what} timed out: timeout=${timeoutMs}ms (mcpRequestTimeoutMs=${this.limits.mcpRequestTimeoutMs})`);
