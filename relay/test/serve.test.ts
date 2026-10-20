@@ -58,6 +58,37 @@ describe("startRelay", () => {
     await vi.waitFor(() => expect(alive(pid)).toBe(false));
   });
 
+  it("revoke through the admin socket drops the connected device with 4401 and refuses its old token", async () => {
+    const env = await relayEnvironment();
+    const relay = await startRelay(env);
+    cleanups.push(() => relay.close());
+    const paired = await adminRequest(env.socketPath, { op: "pair" }, 2000);
+    if (!("code" in paired)) throw new Error(JSON.stringify(paired));
+    const response = await fetch(`http://127.0.0.1:${env.port}/v1/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: paired.code, name: "adv" }),
+    });
+    const { token } = (await response.json()) as { token: string };
+    const device = await Device.open(env.port);
+    cleanups.push(() => device.close());
+    device.hello(token);
+    await device.next("home");
+    const listed = await adminRequest(env.socketPath, { op: "devices" }, 2000);
+    if (!("devices" in listed)) throw new Error(JSON.stringify(listed));
+
+    const revoked = await adminRequest(env.socketPath, { op: "revoke", id: listed.devices[0]!.id }, 2000);
+    expect(revoked).toEqual({ ok: true, revoked: true, disconnected: true });
+    expect((await device.next("error")).code).toBe("auth");
+    expect((await device.closed).code).toBe(4401);
+
+    const again = await Device.open(env.port);
+    cleanups.push(() => again.close());
+    again.hello(token);
+    expect((await again.next("error")).code).toBe("auth");
+    expect((await again.closed).code).toBe(4401);
+  });
+
   it("kills a whisper-server orphaned by a killed relay before spawning its own", async () => {
     const env = await relayEnvironment();
     const orphan = spawn(join(env.root, "whisper", "build", "bin", "whisper-server"), [], { stdio: "ignore" });

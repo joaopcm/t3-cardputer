@@ -11,7 +11,7 @@ export type AdminRequest = { op: "pair" } | { op: "devices" } | { op: "revoke"; 
 export type AdminReply =
   | { ok: true; code: string; expiresAt: string }
   | { ok: true; devices: { id: string; name: string; createdAt: string; lastSeenAt?: string }[]; lockouts: { source: string; retryAfterMs: number }[] }
-  | { ok: true; revoked: boolean }
+  | { ok: true; revoked: boolean; disconnected: boolean }
   | { ok: false; error: string };
 
 export class AdminUnavailableError extends Error {
@@ -21,9 +21,12 @@ export class AdminUnavailableError extends Error {
   }
 }
 
+type Disconnect = (deviceId: string, reason: string) => boolean;
 type AdminAuth = Pick<DeviceAuth, "createPairingCode" | "list" | "revoke" | "lockout">;
 
-function handle(auth: AdminAuth, line: string): AdminReply {
+const REVOKED_REASON = "device revoked, re-pair this device";
+
+function handle(auth: AdminAuth, disconnect: Disconnect, line: string): AdminReply {
   let request: unknown;
   try {
     request = JSON.parse(line);
@@ -41,7 +44,8 @@ function handle(auth: AdminAuth, line: string): AdminReply {
   }
   if (op === "revoke") {
     if (typeof id !== "string" || id === "") return { ok: false, error: "revoke needs a device id" };
-    return { ok: true, revoked: auth.revoke(id) };
+    const revoked = auth.revoke(id);
+    return { ok: true, revoked, disconnected: revoked && disconnect(id, REVOKED_REASON) };
   }
   return { ok: false, error: `unknown admin op ${JSON.stringify(op)}` };
 }
@@ -67,8 +71,8 @@ async function assertNoLiveRelay(socketPath: string): Promise<void> {
   rmSync(socketPath);
 }
 
-export async function startAdminServer(opts: { socketPath: string; auth: AdminAuth }): Promise<{ close(): Promise<void> }> {
-  const { socketPath, auth } = opts;
+export async function startAdminServer(opts: { socketPath: string; auth: AdminAuth; disconnect?: Disconnect }): Promise<{ close(): Promise<void> }> {
+  const { socketPath, auth, disconnect = () => false } = opts;
   const dir = dirname(socketPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
@@ -89,7 +93,7 @@ export async function startAdminServer(opts: { socketPath: string; auth: AdminAu
         reply = { ok: false, error: `admin request too large: admin_request_bytes_max=${ADMIN_REQUEST_BYTES_MAX}` };
       } else if (newline !== -1) {
         try {
-          reply = handle(auth, buffered.slice(0, newline));
+          reply = handle(auth, disconnect, buffered.slice(0, newline));
         } catch (error) {
           reply = { ok: false, error: (error as Error).message };
         }

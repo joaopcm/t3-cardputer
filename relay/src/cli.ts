@@ -82,21 +82,21 @@ async function revoke(ctx: CliContext, args: string[]): Promise<number> {
   const [id] = parse(args, {}, 1).rest;
   if (id === undefined) throw new UsageError("revoke needs <deviceId>");
   const revoked = await revokeVia(ctx, id);
-  if (!revoked) throw new UsageError(`unknown device id ${id}: run \`t3-cardputer-relay devices\` to list ids`);
+  if (!revoked.revoked) throw new UsageError(`unknown device id ${id}: run \`t3-cardputer-relay devices\` to list ids`);
   if (secretsOf(ctx).read().devices.some((device) => device.id === id)) {
     throw new Error(`revoke did not stick: device ${id} is still in ${ctx.secretsPath} (a concurrent write restored it), run revoke again`);
   }
-  ctx.stdout(`revoked ${id}`);
+  ctx.stdout(revoked.disconnected ? `revoked ${id}, connected device dropped` : `revoked ${id}`);
   return 0;
 }
 
-async function revokeVia(ctx: CliContext, id: string): Promise<boolean> {
+async function revokeVia(ctx: CliContext, id: string): Promise<{ revoked: boolean; disconnected: boolean }> {
   try {
     const reply = await admin(ctx, { op: "revoke", id });
-    return "revoked" in reply && reply.revoked;
+    return "revoked" in reply ? reply : { revoked: false, disconnected: false };
   } catch (error) {
     if (!(error instanceof AdminUnavailableError)) throw error;
-    return new DeviceAuth(secretsOf(ctx), loadConfig(ctx.configPath).limits).revoke(id);
+    return { revoked: new DeviceAuth(secretsOf(ctx), loadConfig(ctx.configPath).limits).revoke(id), disconnected: false };
   }
 }
 

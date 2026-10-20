@@ -28,7 +28,8 @@ export async function startRelay(paths: RelayPaths): Promise<{ port: number; clo
   };
 
   try {
-    const admin = await startAdminServer({ socketPath: join(stateDir, ADMIN_SOCKET_NAME), auth });
+    let disconnect: (deviceId: string, reason: string) => boolean = () => false;
+    const admin = await startAdminServer({ socketPath: join(stateDir, ADMIN_SOCKET_NAME), auth, disconnect: (id, reason) => disconnect(id, reason) });
     closers.push(admin.close);
 
     await reapOrphanWhisper(pidFile);
@@ -69,6 +70,7 @@ export async function startRelay(paths: RelayPaths): Promise<{ port: number; clo
       approvalsState,
     });
     closers.push(server.close);
+    disconnect = server.disconnect;
     return { port: server.port, close };
   } catch (error) {
     await close();

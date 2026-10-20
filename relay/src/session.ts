@@ -112,6 +112,14 @@ export class Hub {
     if (this.sessions.size === 0) this.watcher.stop();
   }
 
+  disconnect(deviceId: string, reason: string): boolean {
+    const session = this.sessions.get(deviceId);
+    if (session === undefined) return false;
+    this.release(deviceId, session);
+    session.revoke(reason);
+    return true;
+  }
+
   closeAll(): void {
     for (const session of this.sessions.values()) session.terminate();
     this.sessions.clear();
@@ -205,6 +213,12 @@ export class Session {
   replace(): void {
     this.closed = true;
     this.ws.close(CLOSE_REPLACED, "replaced");
+  }
+
+  revoke(reason: string): void {
+    this.send({ type: "error", code: "auth", message: clipText(reason) });
+    this.closed = true;
+    this.ws.close(CLOSE_AUTH, "revoked");
   }
 
   terminate(): void {

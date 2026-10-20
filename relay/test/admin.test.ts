@@ -14,11 +14,11 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(limits = DEFAULT_LIMITS) {
+async function setup(limits = DEFAULT_LIMITS, disconnect?: (id: string, reason: string) => boolean) {
   const dir = mkdtempSync(join(tmpdir(), "relay-admin-"));
   const auth = new DeviceAuth(new SecretsStore(join(dir, "secrets.json")), limits);
   const socketPath = join(dir, "state", "admin.sock");
-  const admin = await startAdminServer({ socketPath, auth });
+  const admin = await startAdminServer({ socketPath, auth, ...(disconnect ? { disconnect } : {}) });
   cleanups.push(() => admin.close());
   return { dir, auth, socketPath, admin };
 }
@@ -55,9 +55,24 @@ describe("admin socket", () => {
   it("revoke removes the device and reports unknown ids", async () => {
     const { auth, socketPath } = await setup();
     const { deviceId } = auth.redeem(auth.createPairingCode().code, "adv", "1.1.1.1");
-    expect(await adminRequest(socketPath, { op: "revoke", id: deviceId }, 2000)).toEqual({ ok: true, revoked: true });
+    expect(await adminRequest(socketPath, { op: "revoke", id: deviceId }, 2000)).toEqual({ ok: true, revoked: true, disconnected: false });
     expect(auth.list()).toEqual([]);
-    expect(await adminRequest(socketPath, { op: "revoke", id: deviceId }, 2000)).toEqual({ ok: true, revoked: false });
+    expect(await adminRequest(socketPath, { op: "revoke", id: deviceId }, 2000)).toEqual({ ok: true, revoked: false, disconnected: false });
+  });
+
+  it("revoke disconnects the device only after the secrets no longer hold it", async () => {
+    const calls: { id: string; reason: string; stillStored: boolean }[] = [];
+    let auth!: DeviceAuth;
+    const made = await setup(DEFAULT_LIMITS, (id, reason) => {
+      calls.push({ id, reason, stillStored: auth.list().some((d) => d.id === id) });
+      return true;
+    });
+    auth = made.auth;
+    const { deviceId } = auth.redeem(auth.createPairingCode().code, "adv", "1.1.1.1");
+    expect(await adminRequest(made.socketPath, { op: "revoke", id: deviceId }, 2000)).toEqual({ ok: true, revoked: true, disconnected: true });
+    expect(calls).toEqual([{ id: deviceId, reason: expect.stringContaining("revoked"), stillStored: false }]);
+    expect(await adminRequest(made.socketPath, { op: "revoke", id: deviceId }, 2000)).toEqual({ ok: true, revoked: false, disconnected: false });
+    expect(calls).toHaveLength(1);
   });
 
   it("answers an unknown op with an error naming it", async () => {

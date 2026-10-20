@@ -123,6 +123,25 @@ describe("device session", () => {
     expect(t3.launches[2]).toMatchObject({ model: "claude-sonnet-5-5", workspace: "root", runtimeMode: "auto" });
   });
 
+  it("disconnect closes that device with an auth error then 4401, releases it, and leaves others alone", async () => {
+    const { server, connected, connect, auth, token, deviceId } = await setup();
+    const other = auth.redeem(auth.createPairingCode().code, "other", "198.51.100.2");
+    const victim = await connected();
+    const bystander = await connect();
+    bystander.hello(other.token);
+    await bystander.next("home");
+
+    expect(server.disconnect(deviceId, "device revoked, re-pair this device")).toBe(true);
+    expect((await victim.next("error")).code).toBe("auth");
+    expect((await victim.closed).code).toBe(4401);
+    expect(server.disconnect(deviceId, "again")).toBe(false);
+    expect(bystander.ws.readyState).toBe(WebSocket.OPEN);
+
+    const back = await connect();
+    back.hello(token);
+    await back.next("welcome");
+  });
+
   it("second connection for same device closes the first with 4000 and only the newest gets pushes", async () => {
     const { t3, connected } = await setup();
     const first = await connected();
