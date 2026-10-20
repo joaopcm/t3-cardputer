@@ -34,7 +34,13 @@ const RELAY_VERSION = z.object({ version: z.string() }).parse(JSON.parse(readFil
 
 const pairBodySchema = z.strictObject({ code: z.string().min(1), name: z.string().trim().min(1).max(DEVICE_NAME_MAX) });
 
-export async function startServer(deps: ServerDeps): Promise<{ port: number; disconnect(deviceId: string, reason: string): boolean; close(): Promise<void> }> {
+export async function startServer(deps: ServerDeps): Promise<{
+  port: number;
+  disconnect(deviceId: string, reason: string): boolean;
+  markApprovalsDown(reason: string): void;
+  markApprovalsUp(): void;
+  close(): Promise<void>;
+}> {
   const { limits } = deps.config;
   const watcher = new Watcher(deps.t3, deps.approvals, limits.pollIntervalMs);
   const hub = new Hub({ ...deps, limits, relayVersion: RELAY_VERSION }, watcher);
@@ -62,6 +68,8 @@ export async function startServer(deps: ServerDeps): Promise<{ port: number; dis
   return {
     port: (http.address() as AddressInfo).port,
     disconnect: (deviceId, reason) => hub.disconnect(deviceId, reason),
+    markApprovalsDown: (reason) => hub.markApprovalsDown(reason),
+    markApprovalsUp: () => hub.markApprovalsUp(),
     async close() {
       hub.closeAll();
       for (const ws of wss.clients) ws.terminate();

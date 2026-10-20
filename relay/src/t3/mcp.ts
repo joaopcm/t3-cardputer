@@ -53,6 +53,7 @@ export type T3LaunchInput = {
   title: string;
   message: string;
   model?: string;
+  options?: { id: string; value: string }[];
   workspace: "root" | "worktree";
   branch?: string;
   baseRef?: string;
@@ -205,7 +206,7 @@ export class T3Mcp {
     const args: Record<string, unknown> = { title: input.title, message: input.message };
     if (input.scratch) args.scratch = true;
     else args.projectId = input.projectId;
-    if (input.model) args.modelSelection = { instanceId: PROVIDER_INSTANCE_ID, model: input.model };
+    if (input.model) args.modelSelection = { instanceId: PROVIDER_INSTANCE_ID, model: input.model, ...(input.options ? { options: input.options } : {}) };
     if (input.runtimeMode) args.runtimeMode = input.runtimeMode;
     if (!input.scratch) {
       args.workspaceStrategy =

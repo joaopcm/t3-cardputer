@@ -246,6 +246,19 @@ describe("device session", () => {
     await device.next("home", (h) => h.approvals.available);
   });
 
+  it("a canary failure marks approvals down on connected devices until a canary passes, whatever the live adapter says", async () => {
+    const { t3, server, connected } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    server.markApprovalsDown("canary respond: decision not accepted");
+    const down = await device.next("home", (h) => !h.approvals.available);
+    expect(down.approvals.reason).toContain("canary respond: decision not accepted");
+    expect(down.approvals.reason).toContain("fix in progress");
+    await pause(POLL_MS * 5);
+    server.markApprovalsUp();
+    await device.next("home", (h) => h.approvals.available);
+  });
+
   it("frame over device maxFrameBytes is replaced by error naming max_frame_bytes", async () => {
     const { t3, connect, token } = await setup();
     t3.threads = Array.from({ length: 8 }, (_, i) => summary(`thread-${i}`, "running", HOURS_AGO(2), "a long title that fills the row"));

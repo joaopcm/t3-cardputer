@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminRequest, startAdminServer } from "../src/admin.js";
 import { DeviceAuth } from "../src/auth/devices.js";
 import { runCli, type CliContext } from "../src/cli.js";
+import type { CanaryDeps } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { SecretsStore } from "../src/secrets.js";
 import { relayEnvironment } from "./helpers/relay-env.js";
@@ -80,7 +81,7 @@ describe("usage", () => {
   it("--help lists the commands and exits 0", async () => {
     const { run, out } = await setup();
     expect(await run("--help")).toBe(0);
-    for (const command of ["serve", "pair", "devices", "revoke", "pair-t3", "secrets set github", "sim"]) expect(out()).toContain(command);
+    for (const command of ["serve", "pair", "devices", "revoke", "pair-t3", "secrets set github", "canary", "sim"]) expect(out()).toContain(command);
   });
 
   it("no command exits 2", async () => {
@@ -337,5 +338,72 @@ describe("sim", () => {
     expect(await run("sim", "--wav")).toBe(2);
     expect(await run("sim", "--url")).toBe(2);
     expect(printed.mock.calls.map(([text]) => String(text).split("\n")[0])).toEqual(["--wav needs a value", "--url needs a value"]);
+  });
+});
+
+describe("canary", () => {
+  function fakeCanary(overrides: Partial<{ approvals: boolean }> = {}) {
+    const close = vi.fn(async () => {});
+    const seen: { model?: string | undefined; timeoutMs?: number } = {};
+    const deps: CanaryDeps = {
+      t3: {
+        launch: async (input) => {
+          seen.model = input.model;
+          return { threadId: "mcp:c" };
+        },
+        waitForRun: async (_id, timeoutMs) => {
+          seen.timeoutMs = timeoutMs;
+          return { status: "completed", timedOut: false };
+        },
+        settleThread: async () => {},
+      },
+      approvals: {
+        listPending: async () => (overrides.approvals === false ? [] : [{ threadId: "mcp:c", requestId: "r1", summary: "s", detail: [], decisions: ["allow_once"] }]),
+        respond: async () => {},
+      },
+    };
+    return { open: () => ({ ...deps, close }), close, seen };
+  }
+
+  it("exits 0 and prints the duration when the canary passes, then closes its connections", async () => {
+    const fake = fakeCanary();
+    const { run, out } = await setup({ openCanary: fake.open });
+    expect(await run("canary")).toBe(0);
+    expect(out()).toMatch(/canary passed in \d+ ms/);
+    expect(fake.close).toHaveBeenCalledOnce();
+  });
+
+  it("runs with the configured model and the canaryTimeoutMs limit", async () => {
+    const fake = fakeCanary();
+    const { env, run } = await setup({ openCanary: fake.open });
+    withConfig(env, { canary: { model: "claude-sonnet-5-5" }, limits: { pollIntervalMs: 50, canaryTimeoutMs: 4321 } });
+    expect(await run("canary")).toBe(0);
+    expect(fake.seen.model).toBe("claude-sonnet-5-5");
+    expect(fake.seen.timeoutMs).toBeLessThanOrEqual(4321);
+    expect(fake.seen.timeoutMs).toBeGreaterThan(4000);
+  });
+
+  it("exits 1 printing the stage and reason when the canary fails, and still closes", async () => {
+    const fake = fakeCanary({ approvals: false });
+    const { env, run, err, out } = await setup({ openCanary: fake.open });
+    withConfig(env, { limits: { pollIntervalMs: 5, canaryTimeoutMs: 30 } });
+    expect(await run("canary")).toBe(1);
+    expect(err()).toContain("canary failed at approval_seen");
+    expect(err()).toContain("canaryTimeoutMs=30");
+    expect(out()).not.toContain("canary passed");
+    expect(fake.close).toHaveBeenCalledOnce();
+  });
+
+  it("without stored tokens it fails at launch and says how to pair", async () => {
+    const { run, err } = await setup();
+    expect(await run("canary")).toBe(1);
+    expect(err()).toContain("canary failed at launch");
+    expect(err()).toContain("t3 auth pairing create");
+  });
+
+  it("takes no arguments", async () => {
+    const { run, err } = await setup({ openCanary: fakeCanary().open });
+    expect(await run("canary", "--bogus")).toBe(2);
+    expect(err()).toContain("--bogus");
   });
 });

@@ -190,6 +190,12 @@ describe("T3Mcp", () => {
     });
   });
 
+  it("launch passes model options into modelSelection", async () => {
+    const { mcp, calls } = fakeMcp({ t3_thread_launch: () => ({ threadId: "mcp:new" }) });
+    await mcp.launch({ scratch: true, title: "t", message: "m", model: "claude-haiku-5-5", options: [{ id: "effort", value: "low" }], workspace: "root" });
+    expect(calls[0]?.args.modelSelection).toEqual({ instanceId: "claudeAgent", model: "claude-haiku-5-5", options: [{ id: "effort", value: "low" }] });
+  });
+
   it("launch maps worktree to workspaceStrategy with baseRef defaulting to main", async () => {
     const { mcp, calls } = fakeMcp({ t3_thread_launch: () => ({ threadId: "mcp:new" }) });
     await mcp.launch({ projectId: "p1", title: "t", message: "m", workspace: "worktree", branch: "feat/x" });

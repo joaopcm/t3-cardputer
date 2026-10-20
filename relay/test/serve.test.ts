@@ -129,4 +129,14 @@ describe("startRelay", () => {
     expect(existsSync(env.socketPath)).toBe(false);
     expect(existsSync(env.pidFile)).toBe(false);
   });
+
+  it("skips the version-change canary with a logged reason while T3 tokens are missing, and stops cleanly", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = await relayEnvironment();
+    const relay = await startRelay(env);
+    cleanups.push(() => relay.close());
+    await vi.waitFor(() => expect(error.mock.calls.some(([line]) => String(line).includes("canary skipped") && String(line).includes("T3 MCP token"))).toBe(true));
+    await relay.close();
+    expect(existsSync(join(env.stateDir, "t3-version.json"))).toBe(false);
+  });
 });

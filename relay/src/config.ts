@@ -29,6 +29,7 @@ export const limitsSchema = z.strictObject({
   idempotencyMaxEntries: positiveInt,
   heartbeatIntervalMs: positiveInt,
   heartbeatMaxMissed: positiveInt,
+  canaryTimeoutMs: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -98,6 +99,8 @@ export const DEFAULT_LIMITS: Limits = {
   heartbeatIntervalMs: 30_000,
   // receipt: pending plan 2; one lost pong on a lossy hotspot is normal, two in a row (60 s silent) is a dead or half-open socket
   heartbeatMaxMissed: 2,
+  // receipt: docs/receipts/2026-10-20-canary.md, 4 live runs took 5.6-6.4 s, so 5x the slowest (6433 ms) is 32165 ms and only trips a broken or hung run
+  canaryTimeoutMs: 32_165,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

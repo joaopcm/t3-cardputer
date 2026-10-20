@@ -33,6 +33,7 @@
     "idempotencyTtlMs": 86400000,
     "idempotencyMaxEntries": 10000,
     "heartbeatIntervalMs": 30000,
-    "heartbeatMaxMissed": 2
+    "heartbeatMaxMissed": 2,
+    "canaryTimeoutMs": 32165
   }
 }

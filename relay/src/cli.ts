@@ -6,10 +6,11 @@ import { parseArgs } from "node:util";
 import { AdminUnavailableError, adminRequest, type AdminReply, type AdminRequest } from "./admin.js";
 import { pairT3Internal } from "./approvals/index.js";
 import { DeviceAuth } from "./auth/devices.js";
-import { DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, loadConfig } from "./config.js";
+import { runCanary, type CanaryDeps } from "./canary.js";
+import { DEFAULT_CONFIG_PATH, DEFAULT_SECRETS_PATH, loadConfig, type RelayConfig } from "./config.js";
 import { readSecret, type SecretInput } from "./read-secret.js";
 import { SecretsStore, type TokenRecord } from "./secrets.js";
-import { ADMIN_SOCKET_NAME, startRelay } from "./serve.js";
+import { ADMIN_SOCKET_NAME, connectT3, startRelay } from "./serve.js";
 import { main as simMain } from "./sim/main.js";
 import { DEFAULT_SIM_CONFIG_PATH } from "./sim/sim-config.js";
 import { pairT3Mcp } from "./t3/mcp-oauth.js";
@@ -22,6 +23,7 @@ export type CliContext = {
   stdout: (line: string) => void;
   stderr: (line: string) => void;
   waitForShutdown: () => Promise<void>;
+  openCanary?: (config: RelayConfig, secrets: SecretsStore) => CanaryDeps & { close(): Promise<void> };
 };
 
 const USAGE = `usage: t3-cardputer-relay <command>
@@ -31,6 +33,7 @@ const USAGE = `usage: t3-cardputer-relay <command>
   revoke <deviceId>                          remove a paired device
   pair-t3 --mcp <code> --internal <token>    store the T3 MCP and internal tokens
   secrets set github                         read the GitHub token from stdin and store it
+  canary                                     run the live approvals canary against T3 (exit 0 pass, 1 fail)
   sim [pair <relay-url> <code>] [--wav f] [--url u]   drive the relay as a simulated device`;
 
 class UsageError extends Error {
@@ -141,6 +144,24 @@ async function secrets(ctx: CliContext, args: string[]): Promise<number> {
   return 0;
 }
 
+async function canary(ctx: CliContext, args: string[]): Promise<number> {
+  parse(args, {}, 0);
+  const config = loadConfig(ctx.configPath);
+  const connection = (ctx.openCanary ?? connectT3)(config, secretsOf(ctx));
+  let result;
+  try {
+    result = await runCanary(connection, { model: config.canary.model, timeoutMs: config.limits.canaryTimeoutMs, pollIntervalMs: config.limits.pollIntervalMs });
+  } finally {
+    await connection.close();
+  }
+  if (result.ok) {
+    ctx.stdout(`canary passed in ${result.ms} ms`);
+    return 0;
+  }
+  ctx.stderr(`canary failed at ${result.stage}: ${result.reason}`);
+  return 1;
+}
+
 async function serve(ctx: CliContext, args: string[]): Promise<number> {
   parse(args, {}, 0);
   const relay = await startRelay(ctx);
@@ -173,6 +194,8 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         return await pairT3(ctx, args);
       case "secrets":
         return await secrets(ctx, args);
+      case "canary":
+        return await canary(ctx, args);
       case "sim":
         return await simMain(args[0] === "pair" ? args : ["run", ...args], ctx.simConfigPath);
       case undefined:

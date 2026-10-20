@@ -82,6 +82,7 @@ export class Hub {
   private readonly sessions = new Map<string, Session>();
   private readonly answers = new Map<string, Record<string, string>>();
   private brokenReason: string | undefined;
+  private canaryReason: string | undefined;
   private adapter: AdapterHealth = { state: "idle" };
 
   constructor(
@@ -131,9 +132,22 @@ export class Hub {
   }
 
   approvalsState(): ApprovalsState {
-    if (this.brokenReason !== undefined) return { available: false, reason: clipText(`approvals down: ${this.brokenReason}, fix in progress`) };
+    const reason = this.brokenReason ?? this.canaryReason;
+    if (reason !== undefined) return { available: false, reason: clipText(`approvals down: ${reason}, fix in progress`) };
     if (this.adapter.state === "unauthorized") return { available: false, reason: T3_AUTH_WARNING };
     return this.deps.approvalsState();
+  }
+
+  markApprovalsDown(reason: string): void {
+    this.canaryReason = reason;
+    console.error(`approvals marked down by canary: ${reason}`);
+    for (const session of this.sessions.values()) session.refreshHome();
+  }
+
+  markApprovalsUp(): void {
+    if (this.canaryReason === undefined) return;
+    this.canaryReason = undefined;
+    for (const session of this.sessions.values()) session.refreshHome();
   }
 
   adapterWorked(): void {
