@@ -1,0 +1,51 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config.js";
+
+function tmpFile(contents: string): string {
+  const path = join(mkdtempSync(join(tmpdir(), "relay-config-")), "relay.json");
+  writeFileSync(path, contents);
+  return path;
+}
+
+describe("loadConfig", () => {
+  it("returns defaults when file missing", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "relay-config-")), "nope.json");
+    const config = loadConfig(missing);
+    expect(config.port).toBeGreaterThan(0);
+    expect(config.t3BaseUrl).toBe("http://127.0.0.1:3773");
+    expect(config.limits.pollIntervalMs).toBeGreaterThan(0);
+    expect(config.repair.maxAttemptsPerVersion).toBeGreaterThan(0);
+  });
+
+  it('rejects port 0 naming "port"', () => {
+    const path = tmpFile(JSON.stringify({ port: 0 }));
+    expect(() => loadConfig(path)).toThrow(/port.*0/);
+  });
+
+  it("merges nested values over defaults", () => {
+    const path = tmpFile(JSON.stringify({ limits: { maxHomeRows: 7 }, whisper: { model: "tiny.en" } }));
+    const config = loadConfig(path);
+    expect(config.limits.maxHomeRows).toBe(7);
+    expect(config.limits.maxReplyPages).toBe(loadConfig(join(tmpdir(), "missing-relay.json")).limits.maxReplyPages);
+    expect(config.whisper.model).toBe("tiny.en");
+    expect(config.whisper.binDir.length).toBeGreaterThan(0);
+  });
+
+  it("names the nested key and bad value", () => {
+    const path = tmpFile(JSON.stringify({ limits: { audioMaxSeconds: -5 } }));
+    expect(() => loadConfig(path)).toThrow(/limits\.audioMaxSeconds.*-5/);
+  });
+
+  it("rejects unknown keys naming them", () => {
+    const path = tmpFile(JSON.stringify({ prot: 1 }));
+    expect(() => loadConfig(path)).toThrow(/prot/);
+  });
+
+  it("names the file when JSON is malformed", () => {
+    const path = tmpFile("{nope");
+    expect(() => loadConfig(path)).toThrow(path);
+  });
+});
