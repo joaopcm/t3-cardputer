@@ -13,10 +13,10 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 
 ## Ordering
 
-1. Device opens the socket and sends `hello` as its first frame. Anything else first gets `error {code:"auth"}` and close 4401.
+1. Device opens the socket and sends `hello` as its first frame. A first frame that is not a `hello` (including garbage) gets `error {code:"auth"}` and close 4401. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400.
 2. Relay answers `welcome`, then immediately `home`. Nothing else is sent before `welcome`.
 3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted.
-4. Every device message with an `id` gets exactly one `ack` with the same `id`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
+4. Every device message with an `id` gets exactly one `ack` with the same `id`. If the message fails validation but still has a usable `id` (a string of 1 to 16 characters), the ack is `ack {ok:false, error}` and `error` names the field. Only a malformed frame with no usable `id` gets a bare `error {code:"bad_message"}`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
 5. On reconnect the device sends `hello` again and gets `welcome` then `home`. Nothing is replayed, the relay sends full state.
 
 ## Message ids
@@ -25,14 +25,31 @@ Every device message except `hello` carries `id`: a string of 1 to 16 characters
 
 ## Versioning
 
-`PROTOCOL_VERSION = 1`. `hello.v` must equal the relay's version. On mismatch the relay sends `error {code:"protocol_version"}` and then closes the socket with code 4400. The error `message` names both versions (`device speaks protocol v=2, relay speaks v=1`); the device shows it verbatim, since the relay sends no `welcome` on a mismatch and the device cannot tell which side is newer by itself. The relay checks `v` before anything else in `hello`, so a future `hello` shape never produces a confusing field error.
+`PROTOCOL_VERSION = 1`. `hello.v` must equal the relay's version. On mismatch the relay sends `error {code:"protocol_version"}` and then closes the socket with code 4400. The relay checks `v` before anything else in `hello`, so a future `hello` shape never produces a confusing field error.
+
+The `message` says which side to update, and the device shows it verbatim:
+
+- `hello.v` lower than the relay's: `update firmware: device protocol v=1, relay v=2`
+- `hello.v` higher than the relay's: `update relay: device protocol v=2, relay v=1`
+
+The message always starts with `update firmware` or `update relay`, so firmware may also match on that prefix to pick a screen.
+
+### Never changes
+
+These stay as they are in every protocol version, so any device can reach this error against any relay:
+
+- `hello.type` is the string `"hello"` and `hello.v` is a JSON integer. Their names and types never change. The relay reads them before looking at any other `hello` field.
+- The mismatch reply is `{"type":"error","code":"protocol_version","message":<string>}`, then close 4400.
+- Every frame the relay sends before `welcome` is at most 256 bytes (`PRE_WELCOME_FRAME_BYTES`), because the relay does not know the device's `maxFrameBytes` yet. The relay enforces this in code. A device's `maxFrameBytes` is never below 256, so these frames always fit.
+- Error `message` text is cut to 120 characters and mapped to printable ASCII, so it fits that limit.
 
 ## Close codes
 
 | Code | Meaning | Device should |
 | --- | --- | --- |
 | 4400 | protocol version mismatch (preceded by `error protocol_version`) | stop reconnecting, show the error message ("update firmware" or "update relay") |
-| 4401 | auth: first frame was not `hello`, token missing or wrong, or no `hello` in time (preceded by `error auth`) | stop reconnecting, show "re-pair" |
+| 4401 | auth: first frame was not a `hello`, token missing or wrong, or no `hello` in time (preceded by `error auth`) | stop reconnecting, show "re-pair" |
+| 4402 | bad_hello: `hello` failed validation (preceded by `error bad_message` naming the field) | stop reconnecting, show the error message; firmware bug or incompatible build, re-pairing will not help |
 | 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "taken over by another connection" |
 
 Any other close (network drop, relay restart) is reconnected with backoff.
@@ -45,11 +62,11 @@ Any other close (network drop, relay restart) is reconnected with backoff.
 | --- | --- |
 | `protocol_version` | `hello.v` is not 1. Followed by close 4400. |
 | `auth` | `hello` missing, or token rejected. Followed by close 4401. |
-| `bad_message` | a text frame failed validation. `message` names the field path. The socket stays open. |
+| `bad_message` | a text frame failed validation and has no usable `id` (see Ordering rule 4), or an invalid `hello` (then followed by close 4402). `message` names the field path. Otherwise the socket stays open. |
 | `bad_audio` | binary frame outside an audio window, or odd byte length. The socket stays open. |
 | `internal` | relay failure not caused by the device. The socket stays open. |
 
-Failures of a specific request (thread not found, T3 down, reply too long for T3) come back as `ack {ok:false, error}`, not as `error`.
+Failures of a specific request (invalid fields, thread not found, T3 down, reply too long for T3) come back as `ack {ok:false, error}`, not as `error`, whenever the request had a usable `id`.
 
 ## Device to relay
 
@@ -373,5 +390,5 @@ See "Errors".
 | `message` | string | yes | printable ASCII |
 
 ```json relay
-{"type":"error","code":"protocol_version","message":"device speaks protocol v=2, relay speaks v=1"}
+{"type":"error","code":"protocol_version","message":"update relay: device protocol v=2, relay v=1"}
 ```

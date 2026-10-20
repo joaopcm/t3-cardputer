@@ -1,11 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { encodeFrame, FrameBudgetError } from "../src/protocol/frame.js";
+import { encodeFrame, encodePreWelcomeError, FrameBudgetError } from "../src/protocol/frame.js";
 import {
+  CLOSE_AUTH,
+  CLOSE_BAD_HELLO,
+  CLOSE_PROTOCOL_VERSION,
   deviceMessageSchema,
   parseDeviceMessage,
-  PROTOCOL_VERSION,
+  PRE_WELCOME_FRAME_BYTES,
   ProtocolError,
+  REJECTION_TEXT_MAX,
+  rejectionFor,
   relayMessageSchema,
   type RelayMessage,
 } from "../src/protocol/messages.js";
@@ -81,11 +86,16 @@ describe("parseDeviceMessage", () => {
     expect(err.message).toContain("mode");
   });
 
-  it('hello with v=2 is rejected with code "protocol_version"', () => {
+  it('hello with v=2 is rejected with code "protocol_version" and tells the user to update the relay', () => {
     const err = parseError(JSON.stringify({ ...hello, v: 2 }));
     expect(err.code).toBe("protocol_version");
-    expect(err.message).toContain(`v=2`);
-    expect(err.message).toContain(`v=${PROTOCOL_VERSION}`);
+    expect(err.message).toBe("update relay: device protocol v=2, relay v=1");
+  });
+
+  it('hello with v=0 is rejected with code "protocol_version" and tells the user to update the firmware', () => {
+    const err = parseError(JSON.stringify({ ...hello, v: 0 }));
+    expect(err.code).toBe("protocol_version");
+    expect(err.message).toBe("update firmware: device protocol v=0, relay v=1");
   });
 
   it("rejects ids longer than 16 chars and empty ids", () => {
@@ -143,5 +153,73 @@ describe("encodeFrame", () => {
     const needed = Buffer.byteLength(JSON.stringify(msg));
     expect(() => encodeFrame(msg, needed - 1)).toThrow(FrameBudgetError);
     expect(() => encodeFrame(msg, needed)).not.toThrow();
+  });
+});
+
+describe("rejectionFor", () => {
+  const reject = (raw: string, established = true) => rejectionFor(raw, parseError(raw), established);
+
+  it("acks a malformed request that has a usable id", () => {
+    const r = reject(JSON.stringify({ type: "reply", id: "r1", threadId: "t1", text: "hi" }));
+    expect(r).toEqual({ kind: "ack", id: "r1", error: expect.stringContaining("mode") });
+  });
+
+  it("sends a bare bad_message error when the id is missing, empty, or too long", () => {
+    for (const id of [undefined, "", "x".repeat(17), 7]) {
+      const raw = JSON.stringify({ type: "reply", id, threadId: "t1", text: "hi" });
+      expect(reject(raw)).toMatchObject({ kind: "error", code: "bad_message" });
+      expect((reject(raw) as { close?: number }).close).toBeUndefined();
+    }
+    expect(reject("{nope")).toMatchObject({ kind: "error", code: "bad_message" });
+  });
+
+  it("closes an invalid hello with 4402 bad_hello, not 4401", () => {
+    const r = reject(JSON.stringify({ ...hello, maxFrameBytes: 10 }), false);
+    expect(r).toMatchObject({ kind: "error", code: "bad_message", close: CLOSE_BAD_HELLO });
+    expect(CLOSE_BAD_HELLO).toBe(4402);
+  });
+
+  it("closes a first frame that is not a hello with 4401 auth", () => {
+    const r = reject(JSON.stringify({ type: "reply", id: "r1" }), false);
+    expect(r).toMatchObject({ kind: "error", code: "auth", close: CLOSE_AUTH });
+    expect(reject("{nope", false)).toMatchObject({ kind: "error", code: "auth", close: CLOSE_AUTH });
+  });
+
+  it("closes a version mismatch with 4400", () => {
+    const r = reject(JSON.stringify({ ...hello, v: 2 }), false);
+    expect(r).toMatchObject({ kind: "error", code: "protocol_version", close: CLOSE_PROTOCOL_VERSION });
+  });
+
+  it("keeps every pre-welcome rejection under PRE_WELCOME_FRAME_BYTES, even for hostile input", () => {
+    const hostile = [
+      JSON.stringify({ ...hello, v: Number.MAX_VALUE }),
+      JSON.stringify({ ...hello, v: -Number.MAX_VALUE }),
+      JSON.stringify({ ...hello, ["\u00e9".repeat(5000)]: 1 }),
+      JSON.stringify({ ...hello, token: 5 }),
+      JSON.stringify({ type: "x".repeat(5000) }),
+      "{nope",
+    ];
+    let worst = 0;
+    for (const raw of hostile) {
+      const r = reject(raw, false);
+      expect(r.kind).toBe("error");
+      if (r.kind !== "error") continue;
+      expect(r.message).toMatch(/^[\x20-\x7e]*$/);
+      expect(r.message.length).toBeLessThanOrEqual(REJECTION_TEXT_MAX);
+      const frame = encodePreWelcomeError(r.code, r.message);
+      worst = Math.max(worst, Buffer.byteLength(frame));
+    }
+    expect(worst).toBeLessThanOrEqual(PRE_WELCOME_FRAME_BYTES);
+  });
+
+  it("measures envelope overhead of error and ack at the worst message length", () => {
+    const text = "x".repeat(REJECTION_TEXT_MAX);
+    const error = Buffer.byteLength(JSON.stringify({ type: "error", code: "protocol_version", message: text }));
+    const ack = Buffer.byteLength(JSON.stringify({ type: "ack", id: "x".repeat(16), ok: false, error: text }));
+    expect(Math.max(error, ack)).toBeLessThanOrEqual(PRE_WELCOME_FRAME_BYTES);
+  });
+
+  it("refuses to encode a pre-welcome error over the cap", () => {
+    expect(() => encodePreWelcomeError("internal", "x".repeat(300))).toThrow(FrameBudgetError);
   });
 });

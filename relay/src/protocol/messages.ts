@@ -6,6 +6,7 @@ export const DEVICE_PATH = "/v1/device";
 export const CLOSE_PROTOCOL_VERSION = 4400;
 export const CLOSE_AUTH = 4401;
 export const CLOSE_REPLACED = 4000;
+export const CLOSE_BAD_HELLO = 4402;
 
 export const ERROR_CODES = ["protocol_version", "auth", "bad_message", "bad_audio", "internal"] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -23,8 +24,11 @@ export const RESPOND_TEXT_MAX = 1000;
 export const COLS_MAX = 255;
 // receipt: pending plan 2
 export const BODY_ROWS_MAX = 64;
-// receipt: pending plan 2
-export const FRAME_BYTES_MIN = 256;
+// receipt: relay/test/protocol.test.ts measures the worst pre-welcome frame over hostile input at 171 bytes
+export const PRE_WELCOME_FRAME_BYTES = 256;
+export const FRAME_BYTES_MIN = PRE_WELCOME_FRAME_BYTES;
+// receipt: relay/test/protocol.test.ts measures error and ack envelopes at 60 bytes of overhead (180 bytes at 120 chars), under PRE_WELCOME_FRAME_BYTES
+export const REJECTION_TEXT_MAX = 120;
 // receipt: pending plan 2
 export const FRAME_BYTES_MAX = 1_048_576;
 // receipt: pending plan 2
@@ -166,9 +170,10 @@ export function parseDeviceMessage(raw: string): DeviceMessage {
   }
 
   if (isRecord(json) && json.type === "hello" && typeof json.v === "number" && json.v !== PROTOCOL_VERSION) {
+    const side = json.v < PROTOCOL_VERSION ? "update firmware" : "update relay";
     throw new ProtocolError(
       "protocol_version",
-      `device speaks protocol v=${json.v}, relay speaks v=${PROTOCOL_VERSION}`,
+      clipText(`${side}: device protocol v=${json.v}, relay v=${PROTOCOL_VERSION}`),
       "v",
     );
   }
@@ -179,7 +184,51 @@ export function parseDeviceMessage(raw: string): DeviceMessage {
   const issue = result.error.issues[0];
   const path = (issue?.path ?? []).join(".");
   const unrecognized = issue?.code === "unrecognized_keys" ? ` ${issue.keys.join(",")}` : "";
-  throw new ProtocolError("bad_message", `${path || "message"}: ${issue?.message ?? "invalid"}${unrecognized}`, path);
+  throw new ProtocolError(
+    "bad_message",
+    clipText(`${path || "message"}: ${issue?.message ?? "invalid"}${unrecognized}`),
+    path,
+  );
+}
+
+export type Rejection =
+  | { kind: "ack"; id: string; error: string }
+  | { kind: "error"; code: ErrorCode; message: string; close?: number };
+
+export function rejectionFor(raw: string, err: ProtocolError, established: boolean): Rejection {
+  if (err.code === "protocol_version") {
+    return { kind: "error", code: "protocol_version", message: err.message, close: CLOSE_PROTOCOL_VERSION };
+  }
+
+  const json = tryParse(raw);
+  const type = isRecord(json) ? json.type : undefined;
+
+  if (!established) {
+    if (type === "hello") {
+      return { kind: "error", code: "bad_message", message: err.message, close: CLOSE_BAD_HELLO };
+    }
+    return { kind: "error", code: "auth", message: "first frame must be a valid hello", close: CLOSE_AUTH };
+  }
+
+  const id = isRecord(json) ? json.id : undefined;
+  if (typeof id === "string" && id.length >= 1 && id.length <= REQUEST_ID_MAX) {
+    return { kind: "ack", id, error: err.message };
+  }
+  return { kind: "error", code: "bad_message", message: err.message };
+}
+
+function clipText(text: string): string {
+  const ascii = text.replace(/[^\x20-\x7e]/g, "?");
+  if (ascii.length <= REJECTION_TEXT_MAX) return ascii;
+  return `${ascii.slice(0, REJECTION_TEXT_MAX - 3)}...`;
+}
+
+function tryParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
