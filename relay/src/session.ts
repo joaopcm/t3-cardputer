@@ -225,6 +225,7 @@ export class Session {
   private lastHomeKey: string | undefined;
   private openThreadId: string | undefined;
   private shownRequestKey: string | undefined;
+  private refusedRequestKey: string | undefined;
   private openPage = 1;
   private shownPageVersion: string | undefined;
   private refreshingPage = false;
@@ -370,21 +371,24 @@ export class Session {
     return false;
   }
 
-  private send(msg: RelayMessage): void {
-    if (this.ws.readyState !== this.ws.OPEN || !this.hello) return;
+  private send(msg: RelayMessage): boolean {
+    if (this.ws.readyState !== this.ws.OPEN || !this.hello) return false;
     let frame: string;
+    let delivered = true;
     try {
       frame = encodeFrame(msg, this.hello.maxFrameBytes);
     } catch (error) {
       if (!(error instanceof FrameBudgetError)) throw error;
       console.error(`device ${this.deviceId}: ${error.message}`);
       frame = encodeFrame({ type: "error", code: "internal", message: clipText(error.message) }, this.hello.maxFrameBytes);
+      delivered = false;
     }
     if (NOT_DEVICE_SAFE.test(frame)) {
       console.error(`relay bug: ${msg.type} frame for device ${this.deviceId} carries non-ascii, replaced with ?: ${frame.slice(0, 200)}`);
       frame = frame.replace(NOT_DEVICE_SAFE_ALL, "?");
     }
     this.ws.send(frame);
+    return delivered;
   }
 
   private pushHome(snapshot: WatchSnapshot): void {
@@ -419,14 +423,19 @@ export class Session {
 
   private showRequest(threadId: string, pending: PendingRequest): void {
     const key = pending.kind === "approval" ? pending.approval.requestId : `${pending.question.requestId}\n${pending.question.questionId}`;
-    if (key === this.shownRequestKey) return;
-    this.shownRequestKey = key;
+    if (key === this.shownRequestKey || key === this.refusedRequestKey) return;
+    const { cols, bodyRows, maxFrameBytes } = this.hello!;
+    const screen = { cols, bodyRows, maxFrameBytes };
+    let request: RelayMessage;
     try {
-      this.send(pending.kind === "approval" ? buildRequest(pending.approval, this.hello!.cols) : buildRequest(pending.question, this.hello!.cols, threadId));
+      request = pending.kind === "approval" ? buildRequest(pending.approval, screen) : buildRequest(pending.question, screen, threadId);
     } catch (error) {
-      if (!(error instanceof RangeError)) throw error;
-      this.send({ type: "error", code: "internal", message: clipText(error.message) });
+      if (!(error instanceof RangeError || error instanceof FrameBudgetError)) throw error;
+      console.error(`device ${this.deviceId}: request ${key} cannot be shown: ${error.message}`);
+      if (this.send({ type: "error", code: "internal", message: clipText(error.message) })) this.refusedRequestKey = key;
+      return;
     }
+    if (this.send(request)) this.shownRequestKey = key;
   }
 
   private pendingRequest(threadId: string, snapshot: WatchSnapshot): PendingRequest | undefined {

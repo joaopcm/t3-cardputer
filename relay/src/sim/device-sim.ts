@@ -236,8 +236,9 @@ class DeviceSim {
     } else if (msg.type === "thread_page") {
       if (msg.lines.length > bodyRows) this.problem(`thread_page has ${msg.lines.length} lines, bodyRows=${bodyRows}`);
       if (msg.lines.some((l) => l.length > cols)) this.problem(`thread_page line over ${cols} cols`);
-    } else if (msg.type === "request" && msg.lines.some((l) => l.length > cols)) {
-      this.problem(`request line over ${cols} cols`);
+    } else if (msg.type === "request") {
+      if (msg.lines.some((l) => l.length > cols)) this.problem(`request line over ${cols} cols`);
+      if (msg.lines.length + msg.options.length > bodyRows) this.problem(`request has ${msg.lines.length} lines + ${msg.options.length} options, bodyRows=${bodyRows}`);
     }
   }
 

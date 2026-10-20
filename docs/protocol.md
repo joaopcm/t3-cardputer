@@ -365,11 +365,17 @@ The relay sends `request` after the `thread_page` of an `open_thread` when that 
 
 Option: `{key, label, value}`. `key` is one character, the key the user presses; `label` is 1-64 printable ASCII chars; `value` is 1-128 chars, echoed in `respond.value`.
 
+Fit rule: the device draws `lines`, then one row per option. The relay keeps `lines.length + options.length <= bodyRows` (at least one line) and the whole frame within `maxFrameBytes`, so every request fits one screen. When the text is longer, the relay cuts it and ends `lines` with a notice that names the budget that cut it, wrapped to `cols`: `command truncated: 113 more lines, bodyRows=11` for an approval, `question truncated: ...` for a question, or `..., maxFrameBytes=4096` when bytes, not rows, were the limit. Options are never cut, and a question's notes (`(showing 9 of 12 options, T to type another)`, `(pick one)`) stay after the notice. If even the options alone do not fit `maxFrameBytes`, the relay sends `error {code:"internal"}` naming `max_frame_bytes` once for that request instead of the request.
+
 - Approval requests use keys `Y` (value `allow_once`), `A` (`allow_always`), `N` (`deny`), `T` (`deny_with_reason`). On `T` the device asks for a reason and sends it as `respond.text`.
 - Question requests use keys `1` to `9` for the choices. Whenever free text is allowed (a question with no choices, or more choices than fit in keys `1` to `9`), `options` carries an explicit entry `{key:"T", label:"Type answer", value:"text"}`. On `T` the device collects text and sends `respond` with `value` `"text"` and the answer in `respond.text`. A device should also treat a question whose `options` list is empty as free text, so it never shows a screen with nothing to press.
 
 ```json relay
 {"type":"request","threadId":"thr_01","requestId":"req_9","kind":"approval","lines":["Run shell command?","","  pnpm db:migrate"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]}
+```
+
+```json relay
+{"type":"request","threadId":"thr_02","requestId":"req_10","kind":"approval","lines":["cat <<'EOF' > seed.sql","INSERT INTO users VALUES (0, 'a');","INSERT INTO users VALUES (1, 'b');","INSERT INTO users VALUES (2, 'c');","INSERT INTO users VALUES (3, 'd');","command truncated: 116 more lines,","bodyRows=11"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]}
 ```
 
 ```json relay

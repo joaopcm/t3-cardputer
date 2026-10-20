@@ -189,4 +189,14 @@ describe("simulator wire behavior", () => {
     const result = await runSim({ ...base, url, script: [] });
     expect(result.problems).toEqual([expect.stringContaining("home row too long for 40 cols")]);
   });
+
+  it("reports a request whose lines and options do not fit bodyRows", async () => {
+    const tall = { type: "request", threadId: "t1", requestId: "r1", kind: "approval", lines: Array.from({ length: 6 }, (_, i) => `line ${i}`), options: [{ key: "Y", label: "Allow once", value: "allow_once" }, { key: "N", label: "Deny", value: "deny" }, { key: "A", label: "Always", value: "allow_always" }] };
+    const { url } = await stub(() => {}, (ws) => {
+      ws.send(JSON.stringify(HOME));
+      ws.send(JSON.stringify(tall));
+    });
+    const result = await runSim({ ...base, url, script: [] });
+    expect(result.problems).toEqual(["request has 6 lines + 3 options, bodyRows=8"]);
+  });
 });

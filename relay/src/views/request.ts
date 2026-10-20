@@ -1,10 +1,12 @@
 import type { ApprovalDecision, PendingApproval } from "../approvals/index.js";
+import { FrameBudgetError } from "../protocol/frame.js";
 import { LABEL_MAX, REF_MAX, type RelayMessage } from "../protocol/messages.js";
 import { toDeviceAscii, wrap } from "../text/device-text.js";
 import type { T3Question } from "../t3/mcp.js";
 import { oneLine } from "./one-line.js";
 
 export type RequestMessage = Extract<RelayMessage, { type: "request" }>;
+export type RequestScreen = { cols: number; bodyRows: number; maxFrameBytes: number };
 type RequestOption = RequestMessage["options"][number];
 
 // receipt: docs/protocol.md request, question keys are the digits 1 to 9
@@ -19,31 +21,32 @@ const APPROVAL_OPTIONS: ReadonlyArray<{ decision: ApprovalDecision["kind"]; key:
   { decision: "deny_with_reason", key: "T", label: "Deny, say why" },
 ];
 
-export function buildRequest(approval: PendingApproval, cols: number): RequestMessage;
-export function buildRequest(question: T3Question, cols: number, threadId: string): RequestMessage;
-export function buildRequest(item: PendingApproval | T3Question, cols: number, threadId?: string): RequestMessage {
-  if ("decisions" in item) return approvalRequest(item, cols);
+export function buildRequest(approval: PendingApproval, screen: RequestScreen): RequestMessage;
+export function buildRequest(question: T3Question, screen: RequestScreen, threadId: string): RequestMessage;
+export function buildRequest(item: PendingApproval | T3Question, screen: RequestScreen, threadId?: string): RequestMessage {
+  if ("decisions" in item) return approvalRequest(item, screen);
   if (threadId === undefined) throw new TypeError("buildRequest: a question needs the threadId it was asked on");
-  return questionRequest(item, cols, threadId);
+  return questionRequest(item, screen, threadId);
 }
 
-function approvalRequest(approval: PendingApproval, cols: number): RequestMessage {
+function approvalRequest(approval: PendingApproval, screen: RequestScreen): RequestMessage {
+  const { cols } = screen;
   const detail = approval.detail.flatMap((line) => wrap(indent(toDeviceAscii(line)), cols));
-  return {
-    type: "request",
-    threadId: approval.threadId,
-    requestId: approval.requestId,
-    kind: "approval",
-    lines: [...wrap(toDeviceAscii(approval.summary).trim(), cols), ...(detail.length > 0 ? ["", ...detail] : [])],
-    options: APPROVAL_OPTIONS.filter((o) => approval.decisions.includes(o.decision)).map(({ decision, key, label }) => ({
-      key,
-      label,
-      value: decision,
-    })),
-  };
+  const options = APPROVAL_OPTIONS.filter((o) => approval.decisions.includes(o.decision)).map(({ decision, key, label }) => ({
+    key,
+    label,
+    value: decision,
+  }));
+  const lines = [...wrap(toDeviceAscii(approval.summary).trim(), cols), ...(detail.length > 0 ? ["", ...detail] : [])];
+  return fitToScreen(
+    (fitted) => ({ type: "request", threadId: approval.threadId, requestId: approval.requestId, kind: "approval", lines: fitted, options }),
+    { body: lines, tail: [], options: options.length, what: "command" },
+    screen,
+  );
 }
 
-function questionRequest(question: T3Question, cols: number, threadId: string): RequestMessage {
+function questionRequest(question: T3Question, screen: RequestScreen, threadId: string): RequestMessage {
+  const { cols } = screen;
   const shown = question.options.slice(0, QUESTION_KEYS.length);
   const notes: string[] = [];
   if (question.options.length > shown.length) {
@@ -59,14 +62,34 @@ function questionRequest(question: T3Question, cols: number, threadId: string): 
   });
   if (question.options.length !== shown.length || question.options.length === 0) options.push(FREE_TEXT_OPTION);
 
-  return {
-    type: "request",
-    threadId,
-    requestId: question.requestId,
-    kind: "question",
-    lines: [...wrap(oneLine(question.prompt), cols), ...notes.flatMap((note) => wrap(`(${note})`, cols))],
-    options,
-  };
+  return fitToScreen(
+    (fitted) => ({ type: "request", threadId, requestId: question.requestId, kind: "question", lines: fitted, options }),
+    { body: wrap(oneLine(question.prompt), cols), tail: notes.flatMap((note) => wrap(`(${note})`, cols)), options: options.length, what: "question" },
+    screen,
+  );
+}
+
+type Content = { body: string[]; tail: string[]; options: number; what: "command" | "question" };
+
+function frameBytes(msg: RequestMessage): number {
+  return Buffer.byteLength(JSON.stringify(msg), "utf8");
+}
+
+// receipt: docs/protocol.md request fit rule, the device shows lines then one row per option, so lines + options stay within bodyRows and the frame within maxFrameBytes
+function fitToScreen(build: (lines: string[]) => RequestMessage, content: Content, screen: RequestScreen): RequestMessage {
+  const { body, tail, what } = content;
+  const rows = Math.max(1, screen.bodyRows - content.options - tail.length);
+  const whole = build([...body, ...tail]);
+  if (body.length <= rows && frameBytes(whole) <= screen.maxFrameBytes) return whole;
+  let budget = body.length > rows ? `bodyRows=${screen.bodyRows}` : `maxFrameBytes=${screen.maxFrameBytes}`;
+  for (let keep = Math.min(body.length, rows) - 1; keep >= 0; keep--) {
+    const notice = wrap(`${what} truncated: ${body.length - keep} more lines, ${budget}`, screen.cols);
+    if (keep > 0 && keep + notice.length > rows) continue;
+    const msg = build([...[...body.slice(0, keep), ...notice].slice(0, rows), ...tail]);
+    if (frameBytes(msg) <= screen.maxFrameBytes) return msg;
+    budget = `maxFrameBytes=${screen.maxFrameBytes}`;
+  }
+  throw new FrameBudgetError("request", screen.maxFrameBytes, frameBytes(build(tail)));
 }
 
 function indent(text: string): string {

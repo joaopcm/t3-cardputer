@@ -301,9 +301,58 @@ describe("buildThreadPage", () => {
   });
 });
 
+const screen = (cols: number, bodyRows = 11, maxFrameBytes = 4096) => ({ cols, bodyRows, maxFrameBytes });
+const frameBytes = (msg: unknown) => Buffer.byteLength(JSON.stringify(msg));
+
 describe("buildRequest", () => {
+  it("a 120-line heredoc approval fits bodyRows and maxFrameBytes, keeps every option, and says how much was cut", () => {
+    const heredoc = ["cat <<'EOF' > migrate.sql", ...Array.from({ length: 118 }, (_, i) => `INSERT INTO t VALUES (${i}, 'row ${i}');`), "EOF"].join("\n");
+    const request = buildRequest(approval("t1", { summary: heredoc, detail: ["cwd: /repo"] }), screen(40, 11, 4096));
+
+    expect(request.options.map((o) => o.key)).toEqual(["Y", "A", "N", "T"]);
+    expect(request.lines.length + request.options.length).toBeLessThanOrEqual(11);
+    expect(request.lines[0]).toBe("cat <<'EOF' > migrate.sql");
+    expect(request.lines.slice(-2).join(" ")).toMatch(/^command truncated: \d+ more lines, bodyRows=11$/);
+    expect(request.lines.every((l) => l.length <= 40)).toBe(true);
+    expect(frameBytes(request)).toBeLessThanOrEqual(4096);
+    expect(relayMessageSchema.safeParse(request).success).toBe(true);
+  });
+
+  it("counts the cut lines exactly", () => {
+    const summary = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
+    const request = buildRequest(approval("t1", { summary, detail: [] }), screen(80, 8, 4096));
+
+    expect(request.lines).toEqual(["line 1", "line 2", "line 3", "command truncated: 17 more lines, bodyRows=8"]);
+  });
+
+  it("cuts to the frame budget when rows are not the limit, naming maxFrameBytes", () => {
+    const summary = Array.from({ length: 40 }, (_, i) => `${i}`.padEnd(200, "x")).join("\n");
+    const request = buildRequest(approval("t1", { summary, detail: [] }), screen(255, 64, 2048));
+
+    expect(frameBytes(request)).toBeLessThanOrEqual(2048);
+    expect(request.options).toHaveLength(4);
+    expect(request.lines.at(-1)).toMatch(/^command truncated: \d+ more lines, maxFrameBytes=2048$/);
+  });
+
+  it("leaves a request that fits untouched", () => {
+    const request = buildRequest(approval("t1"), screen(40, 11, 4096));
+
+    expect(request.lines).toEqual(["Run shell command?", "", "  pnpm db:migrate"]);
+  });
+
+  it("a long question prompt is cut the same way and names the question", () => {
+    const request = buildRequest(question({ prompt: "word ".repeat(200) }), screen(40, 6, 4096), "t3");
+
+    expect(request.lines.length + request.options.length).toBeLessThanOrEqual(6);
+    expect(request.lines.join(" ")).toMatch(/question truncated: \d+ more lines, bodyRows=6/);
+  });
+
+  it("throws naming max_frame_bytes when even the options alone do not fit", () => {
+    expect(() => buildRequest(approval("t1"), screen(40, 11, 256))).toThrow(/max_frame_bytes=256, request needed \d+/);
+  });
+
   it("approval offering only allow_once and deny maps to keys Y and N only", () => {
-    const request = buildRequest(approval("t1", { decisions: ["allow_once", "deny"] }), 40);
+    const request = buildRequest(approval("t1", { decisions: ["allow_once", "deny"] }), screen(40));
 
     expect(request.options).toEqual([
       { key: "Y", label: "Allow once", value: "allow_once" },
@@ -316,7 +365,7 @@ describe("buildRequest", () => {
   });
 
   it("maps all four decisions to Y A N T", () => {
-    const request = buildRequest(approval("t1"), 40);
+    const request = buildRequest(approval("t1"), screen(40));
 
     expect(request.options.map((o) => [o.key, o.value])).toEqual([
       ["Y", "allow_once"],
@@ -329,7 +378,7 @@ describe("buildRequest", () => {
   it("wraps summary and indents detail as ascii", () => {
     const request = buildRequest(
       approval("t1", { summary: "Run shell command — really?", detail: ["pnpm db:migrate --env “staging” now please"] }),
-      20,
+      screen(20),
     );
 
     expect(request.lines[0]).toBe("Run shell command -");
@@ -339,7 +388,7 @@ describe("buildRequest", () => {
   });
 
   it("question maps options to keys 1..n with the T3 value", () => {
-    const request = buildRequest(question({ options: [{ label: "Staging DB", value: "staging" }, { label: "Local", value: "local" }] }), 40, "t3");
+    const request = buildRequest(question({ options: [{ label: "Staging DB", value: "staging" }, { label: "Local", value: "local" }] }), screen(40), "t3");
 
     expect(request.kind).toBe("question");
     expect(request.threadId).toBe("t3");
@@ -353,7 +402,7 @@ describe("buildRequest", () => {
   });
 
   it("question with no options is free text", () => {
-    const request = buildRequest(question({ options: [] }), 40, "t3");
+    const request = buildRequest(question({ options: [] }), screen(40), "t3");
 
     expect(request.options).toEqual([{ key: "T", label: "Type answer", value: "text" }]);
     expect(relayMessageSchema.safeParse(request).success).toBe(true);
@@ -361,7 +410,7 @@ describe("buildRequest", () => {
 
   it("question with more than 9 options keeps 9, says so, and offers typed answer", () => {
     const options = Array.from({ length: 12 }, (_, i) => ({ label: `opt ${i + 1}`, value: `v${i + 1}` }));
-    const request = buildRequest(question({ options }), 40, "t3");
+    const request = buildRequest(question({ options }), screen(40), "t3");
 
     expect(request.options.map((o) => o.key)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "T"]);
     expect(request.options.at(-1)?.value).toBe("text");
@@ -370,7 +419,7 @@ describe("buildRequest", () => {
   });
 
   it("multiSelect question says pick one", () => {
-    const request = buildRequest(question({ multiSelect: true }), 40, "t3");
+    const request = buildRequest(question({ multiSelect: true }), screen(40), "t3");
 
     expect(request.lines.join(" ")).toContain("pick one");
     expect(request.options).toHaveLength(2);
@@ -378,11 +427,11 @@ describe("buildRequest", () => {
 
   it("truncates long labels to the protocol limit and rejects oversize values loudly", () => {
     const long = "x".repeat(100);
-    const request = buildRequest(question({ options: [{ label: long, value: "v" }] }), 40, "t3");
+    const request = buildRequest(question({ options: [{ label: long, value: "v" }] }), screen(40), "t3");
 
     expect(request.options[0]?.label).toHaveLength(64);
     expect(request.options[0]?.label.endsWith("...")).toBe(true);
-    expect(() => buildRequest(question({ options: [{ label: "a", value: "v".repeat(129) }] }), 40, "t3")).toThrow(/max_ref_chars=128.*129/);
+    expect(() => buildRequest(question({ options: [{ label: "a", value: "v".repeat(129) }] }), screen(40), "t3")).toThrow(/max_ref_chars=128.*129/);
   });
 });
 

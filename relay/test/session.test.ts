@@ -194,6 +194,38 @@ describe("device session", () => {
     expect(request).toMatchObject({ threadId: "t1", requestId: "req1", kind: "approval" });
   });
 
+  it("a 120-line command approval reaches a 4096-byte device with its options and a truncation line, and can be answered", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1")];
+    const heredoc = ["cat <<'EOF' > seed.sql", ...Array.from({ length: 118 }, (_, i) => `INSERT INTO users VALUES (${i}, 'user ${i}@example.com');`), "EOF"].join("\n");
+    approvals.pending = [{ threadId: "t1", requestId: "req1", summary: heredoc, detail: ["cwd: /repo"], decisions: ["allow_once", "allow_always", "deny", "deny_with_reason"] }];
+    const device = await connected({ maxFrameBytes: 4096, bodyRows: 11 });
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    const request = await device.next("request");
+    expect(request.options.map((o) => o.key)).toEqual(["Y", "A", "N", "T"]);
+    expect(request.lines.join(" ")).toMatch(/command truncated: \d+ more lines, bodyRows=11/);
+    expect(request.lines.length + request.options.length).toBeLessThanOrEqual(11);
+    expect(device.received.some((m) => m.type === "error")).toBe(false);
+    device.send({ type: "respond", id: "a1", threadId: "t1", requestId: "req1", value: "deny" });
+    expect(await device.next("ack", (a) => a.id === "a1")).toMatchObject({ ok: true });
+    expect(approvals.responses).toEqual([{ threadId: "t1", requestId: "req1", decision: { kind: "deny" } }]);
+  });
+
+  it("a request that cannot fit the device says so once, naming the budget, instead of every poll", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1", "running", HOURS_AGO(2), "t")];
+    t3.projects = [{ projectId: "p1", name: "a" }];
+    approvals.pending = [{ threadId: "t1", requestId: "req1", summary: "x", detail: [], decisions: ["allow_once", "allow_always", "deny", "deny_with_reason"] }];
+    t3.replies.set("t1", "ok");
+    const device = await connected({ maxFrameBytes: 256, maxHomeRows: 1 });
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    const error = await device.next("error");
+    expect(error.message).toMatch(/max_frame_bytes=256, request needed \d+/);
+    await pause(POLL_MS * 6);
+    expect(device.received.filter((m) => m.type === "error")).toHaveLength(1);
+    expect(device.received.some((m) => m.type === "request")).toBe(false);
+  });
+
   it("respond on approval calls adapter.respond with mapped decision", async () => {
     const { t3, approvals, connected, deviceId } = await setup();
     t3.threads = [summary("t1")];
