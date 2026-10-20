@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { checkMergeable, type PullRequestFacts } from "../src/repair/guardrails.js";
 
-const expected = { repo: "joaopcm/t3-cardputer", branch: "repair/t3-0.0.27+orch3-1" };
+const expected = { repo: "joaopcm/t3-cardputer", branch: "repair/t3-0.0.27+orch3-1", requiredChecks: ["test"] };
 
 function pr(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
   return {
@@ -9,7 +9,7 @@ function pr(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
     baseRepo: "joaopcm/t3-cardputer",
     headRef: "repair/t3-0.0.27+orch3-1",
     files: ["relay/src/approvals/internal-ws.ts", "relay/src/approvals/internal-ws.test.ts"],
-    checks: [{ name: "relay", conclusion: "success" }],
+    checks: [{ name: "test", conclusion: "success" }],
     ...overrides,
   };
 }
@@ -31,7 +31,7 @@ describe("checkMergeable", () => {
   });
 
   it("fork PR on the relay's exact branch name with green checks named like ours is not mergeable", () => {
-    expect(reasons(pr({ headRepo: "stranger/t3-cardputer", checks: [{ name: "relay", conclusion: "success" }] }))).toEqual([
+    expect(reasons(pr({ headRepo: "stranger/t3-cardputer", checks: [{ name: "test", conclusion: "success" }] }))).toEqual([
       expect.stringMatching(/^no forks: /),
     ]);
   });
@@ -99,14 +99,42 @@ describe("checkMergeable", () => {
   it.each(["pending", "neutral", "skipped", "failure", "cancelled", "timed_out", "action_required", "stale", "error", "", "SUCCESS", "Success"])(
     "a check concluded %j is not mergeable",
     (conclusion) => {
-      const got = reasons(pr({ checks: [{ name: "relay", conclusion: "success" }, { name: "leak-grep", conclusion }] }));
+      const got = reasons(pr({ checks: [{ name: "test", conclusion: "success" }, { name: "leak-grep", conclusion }] }));
       expect(got).toEqual([`checks not successful: leak-grep (${conclusion})`]);
     },
   );
 
+  it("a green rollup missing a required check is not mergeable and names it", () => {
+    expect(reasons(pr({ checks: [{ name: "lint", conclusion: "success" }] }))).toEqual(["required checks missing: test"]);
+  });
+
+  it("names only the required checks that are missing", () => {
+    const want = { ...expected, requiredChecks: ["test", "typecheck", "leak-grep"] };
+    expect(reasons(pr({ checks: [{ name: "test", conclusion: "success" }, { name: "leak-grep", conclusion: "success" }] }), want)).toEqual([
+      "required checks missing: typecheck",
+    ]);
+  });
+
+  it("accepts every required check present and successful", () => {
+    const want = { ...expected, requiredChecks: ["test", "typecheck"] };
+    expect(checkMergeable(pr({ checks: [{ name: "typecheck", conclusion: "success" }, { name: "test", conclusion: "success" }] }), want)).toEqual({ ok: true });
+  });
+
+  it("a required check that failed is named as not successful", () => {
+    expect(reasons(pr({ checks: [{ name: "test", conclusion: "failure" }] }))).toEqual(["checks not successful: test (failure)"]);
+  });
+
+  it("a commit status carrying a required check's name does not satisfy it", () => {
+    expect(reasons(pr({ checks: [{ name: "status:test", conclusion: "success" }] }))).toEqual(["required checks missing: test"]);
+  });
+
+  it("no required checks configured is never mergeable", () => {
+    expect(reasons(pr(), { ...expected, requiredChecks: [] })).toEqual([expect.stringMatching(/^required checks: none configured.*repair\.requiredChecks/)]);
+  });
+
   it("a duplicate check name with one failure is not mergeable", () => {
-    const got = reasons(pr({ checks: [{ name: "relay", conclusion: "success" }, { name: "relay", conclusion: "failure" }] }));
-    expect(got).toEqual(["checks not successful: relay (failure)"]);
+    const got = reasons(pr({ checks: [{ name: "test", conclusion: "success" }, { name: "test", conclusion: "failure" }] }));
+    expect(got).toEqual(["checks not successful: test (failure)"]);
   });
 
   it("PR on a different branch than the relay created is not mergeable", () => {

@@ -9,7 +9,8 @@
     "maxAttemptsPerVersion": 3,
     "githubRepo": "joaopcm/t3-cardputer",
     "deployDir": "/home/you/.local/share/t3-cardputer/deploy",
-    "projectId": "<t3 project id of this repo, from t3_project_list>"
+    "projectId": "<t3 project id of this repo, from t3_project_list>",
+    "requiredChecks": ["test"]
   },
   "limits": {
     "maxReplyPages": 32,

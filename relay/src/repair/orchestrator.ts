@@ -5,9 +5,10 @@ import { z } from "zod";
 import type { CanaryFailure } from "../canary.js";
 import { CONFIG_PATH_ENV, SECRETS_PATH_ENV, type RelayConfig } from "../config.js";
 import type { Exec } from "../exec.js";
+import { SecretsStore } from "../secrets.js";
 import type { T3Mcp } from "../t3/mcp.js";
 import { canaryDownReason, type DownPhase } from "../version-watch.js";
-import { REPAIR_BRANCH_PREFIX, REPAIR_FOLDER, checkMergeable, type PullRequestFacts } from "./guardrails.js";
+import { REPAIR_BRANCH_PREFIX, REPAIR_FOLDER, STATUS_CHECK_PREFIX, checkMergeable, missingChecks, type PullRequestFacts } from "./guardrails.js";
 import { repairPrompt } from "./prompt.js";
 
 export const REPAIR_STATE_NAME = "repair.json";
@@ -56,9 +57,8 @@ type TrackOutcome = { kind: "merged" } | { kind: "closed" } | { kind: "timed_out
 
 export type RepairDeps = {
   config: RelayConfig;
-  secretsPath: string;
+  secrets: Pick<SecretsStore, "read">;
   exec: Exec;
-  githubToken: () => string | undefined;
   t3: Pick<T3Mcp, "launch" | "send">;
   markApprovalsDown(reason: string, phase: DownPhase): void;
   setWarning(text: string | undefined): void;
@@ -73,11 +73,11 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 const gaveUp = (attempts: number, to: string) => `approvals repair gave up after ${attempts} attempts for T3 ${to}`;
 const refSafe = (label: string) => label.replace(/[^A-Za-z0-9._+-]+/g, "-").replace(/\.{2,}/g, ".");
 
-function toOpenPr(raw: z.infer<typeof ghPrSchema>): OpenPr {
+function toOpenPr(raw: z.infer<typeof ghPrSchema>, requiredChecks: string[]): OpenPr {
   const checks = (raw.statusCheckRollup ?? []).map((item) =>
     item.__typename === "CheckRun"
       ? { name: item.name, conclusion: item.status === "COMPLETED" ? (item.conclusion ?? "").toLowerCase() : PENDING }
-      : { name: item.context, conclusion: item.state === "PENDING" || item.state === "EXPECTED" ? PENDING : item.state.toLowerCase() },
+      : { name: `${STATUS_CHECK_PREFIX}${item.context}`, conclusion: item.state === "PENDING" || item.state === "EXPECTED" ? PENDING : item.state.toLowerCase() },
   );
   return {
     number: raw.number,
@@ -88,7 +88,7 @@ function toOpenPr(raw: z.infer<typeof ghPrSchema>): OpenPr {
       headRef: raw.headRefName,
       checks,
     },
-    ciDone: checks.length > 0 && checks.every((check) => check.conclusion !== PENDING),
+    ciDone: checks.every((check) => check.conclusion !== PENDING) && missingChecks(checks, requiredChecks).length === 0,
   };
 }
 
@@ -106,7 +106,7 @@ export class RepairOrchestrator {
     if (this.running.has(to)) return;
     const { repair } = this.deps.config;
     if (repair.projectId === undefined) this.refuse("approvals repair needs config key repair.projectId (the T3 project id of this repo) in relay.json");
-    if (this.deps.githubToken() === undefined) this.refuse(`approvals repair needs a GitHub token: ${GITHUB_HINT}`);
+    if (this.githubToken() === undefined) this.refuse(`approvals repair needs a GitHub token: ${GITHUB_HINT}`);
 
     let state: RepairState;
     try {
@@ -266,16 +266,20 @@ export class RepairOrchestrator {
   private async findPr(branch: string): Promise<{ own?: OpenPr; forks: number[] }> {
     const { githubRepo } = this.deps.config.repair;
     const out = await this.gh(["pr", "list", "--repo", githubRepo, "--head", branch, "--base", BASE_BRANCH, "--state", "open", "--json", PR_JSON_FIELDS]);
-    const prs = z.array(ghPrSchema).parse(JSON.parse(out)).map(toOpenPr);
+    const { requiredChecks } = this.deps.config.repair;
+    const prs = z
+      .array(ghPrSchema)
+      .parse(JSON.parse(out))
+      .map((raw) => toOpenPr(raw, requiredChecks));
     const own = prs.find((pr) => pr.facts.headRepo === githubRepo);
     const forks = prs.filter((pr) => pr !== own).map((pr) => pr.number);
     return own === undefined ? { forks } : { own, forks };
   }
 
   private async evaluate({ failure, versions: { to } }: Broken, attempt: Attempt, pr: OpenPr): Promise<"merged" | string> {
-    const { githubRepo } = this.deps.config.repair;
+    const { githubRepo, requiredChecks } = this.deps.config.repair;
     const files = await this.changedFiles(pr.sha);
-    const verdict = checkMergeable({ ...pr.facts, files }, { repo: githubRepo, branch: attempt.branch });
+    const verdict = checkMergeable({ ...pr.facts, files }, { repo: githubRepo, branch: attempt.branch, requiredChecks });
     if (!verdict.ok) {
       await this.tell(
         attempt,
@@ -326,7 +330,7 @@ export class RepairOrchestrator {
   }
 
   private async stagingCanary(sha: string): Promise<{ ok: true } | { ok: false; failure: string }> {
-    const { config, secretsPath } = this.deps;
+    const { config } = this.deps;
     const { deployDir } = config.repair;
     mkdirSync(config.stateDir, { recursive: true });
     const dir = mkdtempSync(join(config.stateDir, STAGING_PREFIX));
@@ -334,13 +338,15 @@ export class RepairOrchestrator {
     const relayDir = join(worktree, "relay");
     let added = false;
     try {
+      const configPath = join(dir, "relay.json");
+      writeFileSync(configPath, JSON.stringify({ ...config, stateDir: join(dir, "state") }, null, 2));
+      const secretsPath = join(dir, "secrets.json");
+      this.writeStagingSecrets(secretsPath);
       await this.step("git", ["worktree", "add", "--detach", worktree, sha], deployDir);
       added = true;
       try {
         await this.step("pnpm", ["install", "--frozen-lockfile"], relayDir);
         await this.step("pnpm", ["build"], relayDir);
-        const configPath = join(dir, "relay.json");
-        writeFileSync(configPath, JSON.stringify({ ...config, stateDir: join(dir, "state") }, null, 2));
         await this.deps.exec(process.execPath, ["dist/cli.js", "canary"], {
           cwd: relayDir,
           env: { [CONFIG_PATH_ENV]: configPath, [SECRETS_PATH_ENV]: secretsPath },
@@ -361,6 +367,15 @@ export class RepairOrchestrator {
     }
   }
 
+  private writeStagingSecrets(path: string): void {
+    const { t3McpToken, t3InternalToken } = this.deps.secrets.read();
+    new SecretsStore(path).write({ ...(t3McpToken ? { t3McpToken } : {}), ...(t3InternalToken ? { t3InternalToken } : {}), devices: [] });
+  }
+
+  private githubToken(): string | undefined {
+    return this.deps.secrets.read().githubToken;
+  }
+
   private async tell(attempt: Attempt, text: string): Promise<void> {
     if (attempt.threadId === undefined) {
       console.error(`approvals repair on ${attempt.branch} has no known thread id, could not send: ${text}`);
@@ -374,7 +389,7 @@ export class RepairOrchestrator {
   }
 
   private gh(args: string[]): Promise<string> {
-    const token = this.deps.githubToken();
+    const token = this.githubToken();
     if (token === undefined) return Promise.reject(new Error(`no GitHub token: ${GITHUB_HINT}`));
     return this.deps.exec("gh", args, { env: { GH_TOKEN: token }, timeoutMs: this.deps.config.limits.repairStepTimeoutMs, timeoutName: "repairStepTimeoutMs" });
   }

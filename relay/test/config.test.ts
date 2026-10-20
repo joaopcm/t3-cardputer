@@ -42,6 +42,14 @@ describe("loadConfig", () => {
     expect(config.repair.maxAttemptsPerVersion).toBeGreaterThan(0);
   });
 
+  it("requires the CI job named test before a repair PR can merge", () => {
+    expect(loadConfig(join(tmpdir(), "missing-relay.json")).repair.requiredChecks).toEqual(["test"]);
+  });
+
+  it("rejects an empty repair.requiredChecks naming it", () => {
+    expect(() => loadConfig(tmpFile(JSON.stringify({ repair: { requiredChecks: [] } })))).toThrow(/repair\.requiredChecks/);
+  });
+
   it('rejects port 0 naming "port"', () => {
     const path = tmpFile(JSON.stringify({ port: 0 }));
     expect(() => loadConfig(path)).toThrow(/port.*0/);

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,8 @@ const FAILURE = { stage: "approval_seen" as const, reason: "no approval appeared
 const BRANCH = `repair/t3-${TO}-1`;
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const TOKEN = "github_pat_fake_for_tests";
+const MCP_TOKEN = { token: "mcp-fake", expiresAt: "2099-01-01T00:00:00.000Z" };
+const INTERNAL_TOKEN = { token: "internal-fake", expiresAt: "2099-01-01T00:00:00.000Z" };
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -28,7 +30,7 @@ function ghPr(overrides: Record<string, unknown> = {}) {
     headRefOid: SHA,
     headRepository: { name: "t3-cardputer" },
     headRepositoryOwner: { login: "joaopcm" },
-    statusCheckRollup: [{ __typename: "CheckRun", name: "relay", status: "COMPLETED", conclusion: "SUCCESS" }],
+    statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }],
     ...overrides,
   };
 }
@@ -89,9 +91,18 @@ function harness(opts: { config?: (config: RelayConfig) => RelayConfig; script?:
   let launchError: Error | undefined;
   const deps: RepairDeps = {
     config,
-    secretsPath: join(root, "secrets.json"),
     exec: fake.exec,
-    githubToken: () => ("token" in opts ? opts.token : TOKEN),
+    secrets: {
+      read: () => {
+        const githubToken = "token" in opts ? opts.token : TOKEN;
+        return {
+          t3McpToken: MCP_TOKEN,
+          t3InternalToken: INTERNAL_TOKEN,
+          ...(githubToken === undefined ? {} : { githubToken }),
+          devices: [{ id: "d1", name: "adv", tokenSha256: "ab".repeat(32), createdAt: "2026-10-20T00:00:00.000Z" }],
+        };
+      },
+    },
     t3: {
       async launch(input) {
         if (launchError) throw launchError;
@@ -228,14 +239,19 @@ describe("RepairOrchestrator", () => {
   });
 
   it("merges a guarded, CI-green, canary-passing PR at the checked commit, then deploys", async () => {
-    let staged: { config: RelayConfig; env: Record<string, string> } | undefined;
+    let staged: { config: RelayConfig; env: Record<string, string>; secrets: unknown; secretsMode: number } | undefined;
     const h = harness({
       script: {
         prs: () => [ghPr()],
         files: () => ["relay/src/approvals/internal-ws.ts", "relay/src/approvals/internal-ws.test.ts"],
         canary: (call) => {
           const env = call.options.env!;
-          staged = { config: JSON.parse(readFileSync(env.T3_CARDPUTER_RELAY_CONFIG!, "utf8")), env };
+          staged = {
+            config: JSON.parse(readFileSync(env.T3_CARDPUTER_RELAY_CONFIG!, "utf8")),
+            env,
+            secrets: JSON.parse(readFileSync(env.T3_CARDPUTER_RELAY_SECRETS!, "utf8")),
+            secretsMode: statSync(env.T3_CARDPUTER_RELAY_SECRETS!).mode & 0o777,
+          };
         },
       },
     });
@@ -269,7 +285,11 @@ describe("RepairOrchestrator", () => {
     expect(staged!.config.stateDir).not.toBe(h.config.stateDir);
     expect(staged!.config.stateDir).toMatch(/\/staging-[^/]+\/state$/);
     expect({ ...staged!.config, stateDir: h.config.stateDir }).toEqual(h.config);
-    expect(staged!.env.T3_CARDPUTER_RELAY_SECRETS).toBe(join(h.root, "secrets.json"));
+    expect(staged!.env.T3_CARDPUTER_RELAY_SECRETS).toMatch(/\/staging-[^/]+\/secrets\.json$/);
+    expect(staged!.secrets).toEqual({ t3McpToken: MCP_TOKEN, t3InternalToken: INTERNAL_TOKEN, devices: [] });
+    expect(JSON.stringify(staged!.secrets)).not.toContain(TOKEN);
+    expect(staged!.secretsMode).toBe(0o600);
+    expect(existsSync(staged!.env.T3_CARDPUTER_RELAY_SECRETS!)).toBe(false);
 
     const state = JSON.parse(readFileSync(join(h.config.stateDir, REPAIR_STATE_NAME), "utf8"));
     expect(state[TO].active).toBeUndefined();
@@ -291,12 +311,12 @@ describe("RepairOrchestrator", () => {
   it("a red CI check is reported to the repair thread by name", async () => {
     const h = harness({
       script: {
-        prs: () => [ghPr({ statusCheckRollup: [{ __typename: "CheckRun", name: "relay", status: "COMPLETED", conclusion: "FAILURE" }] })],
+        prs: () => [ghPr({ statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }] })],
       },
     });
     h.orchestrator.onBroken(FAILURE, { from: FROM, to: TO });
     await vi.waitFor(() => expect(h.sends).toHaveLength(1));
-    expect(h.sends[0]!.text).toContain("relay (failure)");
+    expect(h.sends[0]!.text).toContain("test (failure)");
     expect(h.verbs().some((v) => v.startsWith("pnpm") || v.startsWith("gh pr merge"))).toBe(false);
   });
 
@@ -309,20 +329,33 @@ describe("RepairOrchestrator", () => {
     expect(h.sends).toHaveLength(0);
   });
 
+  it("waits while a required check has not been created yet, even when every reported check is green", async () => {
+    let rollup: unknown[] = [
+      { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" },
+      { __typename: "StatusContext", context: "test", state: "SUCCESS" },
+    ];
+    const h = harness({ script: { prs: () => [ghPr({ statusCheckRollup: rollup })] } });
+    h.orchestrator.onBroken(FAILURE, { from: FROM, to: TO });
+    await vi.waitFor(() => expect(h.verbs().filter((v) => v.startsWith("gh pr list")).length).toBeGreaterThan(3));
+    expect(h.verbs().every((v) => v.startsWith("gh pr list"))).toBe(true);
+    rollup = [...rollup, { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }];
+    await vi.waitFor(() => expect(h.deploys).toHaveLength(1));
+  });
+
   it("waits while CI is pending or has not reported any check", async () => {
     let rollup: unknown[] = [];
     const h = harness({ script: { prs: () => [ghPr({ statusCheckRollup: rollup })] } });
     h.orchestrator.onBroken(FAILURE, { from: FROM, to: TO });
     await vi.waitFor(() => expect(h.verbs().filter((v) => v.startsWith("gh pr list")).length).toBeGreaterThan(2));
     rollup = [
-      { __typename: "CheckRun", name: "relay", status: "IN_PROGRESS", conclusion: "" },
+      { __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: "" },
       { __typename: "StatusContext", context: "leak-grep", state: "SUCCESS" },
     ];
     const listed = h.verbs().filter((v) => v.startsWith("gh pr list")).length;
     await vi.waitFor(() => expect(h.verbs().filter((v) => v.startsWith("gh pr list")).length).toBeGreaterThan(listed + 2));
     expect(h.verbs().every((v) => v.startsWith("gh pr list"))).toBe(true);
     rollup = [
-      { __typename: "CheckRun", name: "relay", status: "COMPLETED", conclusion: "SUCCESS" },
+      { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
       { __typename: "StatusContext", context: "leak-grep", state: "SUCCESS" },
     ];
     await vi.waitFor(() => expect(h.deploys).toHaveLength(1));
@@ -362,7 +395,12 @@ describe("RepairOrchestrator", () => {
   });
 
   it("does not launch and names the missing config key when repair.projectId is unset", () => {
-    const h = harness({ config: (c) => ({ ...c, repair: { model: c.repair.model, maxAttemptsPerVersion: 2, githubRepo: c.repair.githubRepo, deployDir: c.repair.deployDir } }) });
+    const h = harness({
+      config: (c) => {
+        const { projectId: _unset, ...repair } = c.repair;
+        return { ...c, repair };
+      },
+    });
     expect(() => h.orchestrator.onBroken(FAILURE, { from: FROM, to: TO })).toThrow(/repair\.projectId/);
     expect(h.warnings.at(-1)).toMatch(/repair\.projectId/);
     expect(h.launches).toHaveLength(0);

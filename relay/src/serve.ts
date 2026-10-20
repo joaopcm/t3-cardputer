@@ -104,9 +104,8 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
     };
     const repair = new RepairOrchestrator({
       config,
-      secretsPath: paths.secretsPath,
+      secrets,
       exec: execRunner,
-      githubToken: () => secrets.read().githubToken,
       t3,
       markApprovalsDown: server.markApprovalsDown,
       setWarning: server.setRepairWarning,

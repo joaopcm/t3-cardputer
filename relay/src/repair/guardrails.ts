@@ -1,5 +1,6 @@
 export const REPAIR_FOLDER = "relay/src/approvals/";
 export const REPAIR_BRANCH_PREFIX = "repair/";
+export const STATUS_CHECK_PREFIX = "status:";
 
 export type PullRequestFacts = {
   headRepo: string;
@@ -22,7 +23,11 @@ export function insideRepairFolder(path: string): boolean {
 
 const shown = (path: string) => (PRINTABLE_PATH.test(path) && !path.includes("\\") ? path : JSON.stringify(path));
 
-export function checkMergeable(pr: PullRequestFacts, expected: { repo: string; branch: string }): Mergeable {
+export function missingChecks(checks: PullRequestFacts["checks"], required: string[]): string[] {
+  return required.filter((name) => !checks.some((check) => check.name === name));
+}
+
+export function checkMergeable(pr: PullRequestFacts, expected: { repo: string; branch: string; requiredChecks: string[] }): Mergeable {
   const reasons: string[] = [];
   if (pr.headRepo !== expected.repo || pr.baseRepo !== expected.repo) {
     reasons.push(`no forks: head repo ${JSON.stringify(pr.headRepo)} and base repo ${JSON.stringify(pr.baseRepo)} must both be ${JSON.stringify(expected.repo)}`);
@@ -43,6 +48,12 @@ export function checkMergeable(pr: PullRequestFacts, expected: { repo: string; b
   } else {
     const failing = pr.checks.filter((check) => check.conclusion !== "success");
     if (failing.length > 0) reasons.push(`checks not successful: ${failing.map((check) => `${check.name} (${check.conclusion})`).join(", ")}`);
+  }
+  if (expected.requiredChecks.length === 0) {
+    reasons.push("required checks: none configured, set repair.requiredChecks to the CI job names");
+  } else if (pr.checks.length > 0) {
+    const missing = missingChecks(pr.checks, expected.requiredChecks);
+    if (missing.length > 0) reasons.push(`required checks missing: ${missing.join(", ")}`);
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

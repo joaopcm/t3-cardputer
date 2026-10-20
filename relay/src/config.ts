@@ -48,6 +48,7 @@ export const configSchema = z.strictObject({
     githubRepo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, "expected owner/name"),
     deployDir: z.string().min(1),
     projectId: z.string().min(1).optional(),
+    requiredChecks: z.array(z.string().min(1)).min(1),
   }),
   limits: limitsSchema,
 });
@@ -129,6 +130,7 @@ export const DEFAULT_CONFIG: RelayConfig = {
     maxAttemptsPerVersion: 3,
     githubRepo: "joaopcm/t3-cardputer",
     deployDir: join(dataDir, "deploy"),
+    requiredChecks: ["test"],
   },
   limits: DEFAULT_LIMITS,
 };
