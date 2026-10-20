@@ -15,7 +15,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 
 ## Ordering
 
-1. Device opens the socket and sends `hello` as its first frame, within `helloTimeoutMs` (10 s by default) or it gets `error {code:"auth"}` and close 4401. A first frame that is not a `hello` (including garbage) gets `error {code:"auth"}` and close 4401. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400.
+1. Device opens the socket and sends `hello` as its first frame, within `helloTimeoutMs` (10 s by default) or it gets `error {code:"hello_timeout"}` and close 4408 (a stalled link, not a bad token: keep the token and reconnect with backoff). A first frame that is not a `hello` (including garbage or a binary frame) gets `error {code:"bad_message", message:"first frame must be a valid hello"}` and close 4402. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400. A `hello` whose token is missing from the relay, wrong, or revoked gets `error {code:"auth"}` and close 4401; 4401 means only that.
 2. Relay answers `welcome`, then immediately `home`. Nothing else is sent before `welcome`.
 3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted. `thread_page` is pushed for the thread last opened with `open_thread` or `page`, at the page the device is on (clamped if the reply got shorter), whenever that thread's status or latest activity changes.
 4. Every device message with an `id` gets exactly one `ack` with the same `id`. If the message fails validation but still has a usable `id` (a string of 1 to 16 characters), the ack is `ack {ok:false, error}` and `error` names the field. Only a malformed frame with no usable `id` gets a bare `error {code:"bad_message"}`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
@@ -66,8 +66,9 @@ POST /v1/pair
 | Code | Meaning | Device should |
 | --- | --- | --- |
 | 4400 | protocol version mismatch (preceded by `error protocol_version`) | stop reconnecting, show the error message ("update firmware" or "update relay") |
-| 4401 | auth: first frame was not a `hello`, token missing or wrong, or no `hello` in time (preceded by `error auth`). Also sent mid-session, after `welcome`, when the device is revoked on the relay (`error auth` "device revoked, re-pair this device", then close 4401) | stop reconnecting, show "re-pair", clear the stored token |
-| 4402 | bad_hello: `hello` failed validation (preceded by `error bad_message` naming the field) | stop reconnecting, show the error message; firmware bug or incompatible build, re-pairing will not help |
+| 4401 | auth: the relay rejected the token (unknown, wrong, or revoked), preceded by `error auth`. Also sent mid-session, after `welcome`, when the device is revoked on the relay (`error auth` "device revoked, re-pair this device", then close 4401). Only a token problem closes with 4401 | stop reconnecting, show "re-pair", clear the stored token |
+| 4402 | bad_hello: the first frame was not a `hello`, or `hello` failed validation (preceded by `error bad_message` naming the problem) | stop reconnecting, show the error message; firmware bug or incompatible build, re-pairing will not help |
+| 4408 | hello_timeout: no `hello` within `helloTimeoutMs` (preceded by `error hello_timeout` naming the budget), usually a stalled hotspot | keep the token, reconnect with backoff |
 | 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "taken over by another connection" |
 
 Any other close (network drop, relay restart) is reconnected with backoff.
@@ -79,8 +80,9 @@ Any other close (network drop, relay restart) is reconnected with backoff.
 | Code | When |
 | --- | --- |
 | `protocol_version` | `hello.v` is not 1. Followed by close 4400. |
-| `auth` | `hello` missing, or token rejected, or (any time after `welcome`) the device was revoked. Followed by close 4401. |
-| `bad_message` | a text frame failed validation and has no usable `id` (see Ordering rule 4), or an invalid `hello` (then followed by close 4402). `message` names the field path. Otherwise the socket stays open. |
+| `auth` | token rejected, or (any time after `welcome`) the device was revoked. Followed by close 4401. |
+| `hello_timeout` | no `hello` within `helloTimeoutMs`. Followed by close 4408. |
+| `bad_message` | a text frame failed validation and has no usable `id` (see Ordering rule 4), or a first frame that is not a valid `hello` (then followed by close 4402). `message` names the field path. Otherwise the socket stays open. |
 | `audio_not_started` | binary frame with no open audio window (before `audio_start`, or after `audio_end`, `audio_cancel`, or a budget error). The frame is dropped and the socket stays open. |
 | `bad_audio` | an empty or odd-length binary frame (dropped, the window stays open), or an audio budget was hit (the window is closed and the buffer thrown away, see "Audio"). `message` names the budget. The socket stays open. |
 | `internal` | relay failure not caused by the device. The socket stays open. |
@@ -424,7 +426,7 @@ See "Errors".
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"error"` | yes | |
-| `code` | string | yes | `protocol_version`, `auth`, `bad_message`, `bad_audio`, `audio_not_started`, or `internal` |
+| `code` | string | yes | `protocol_version`, `auth`, `hello_timeout`, `bad_message`, `bad_audio`, `audio_not_started`, or `internal` |
 | `message` | string | yes | printable ASCII |
 
 ```json relay

@@ -4,6 +4,7 @@ import { encodeFrame, encodePreWelcomeError, FrameBudgetError } from "../src/pro
 import {
   CLOSE_AUTH,
   CLOSE_BAD_HELLO,
+  CLOSE_HELLO_TIMEOUT,
   CLOSE_PROTOCOL_VERSION,
   deviceMessageSchema,
   parseDeviceMessage,
@@ -179,10 +180,12 @@ describe("rejectionFor", () => {
     expect(CLOSE_BAD_HELLO).toBe(4402);
   });
 
-  it("closes a first frame that is not a hello with 4401 auth", () => {
+  it("closes a first frame that is not a hello with 4402 bad_hello, keeping 4401 for rejected tokens only", () => {
     const r = reject(JSON.stringify({ type: "reply", id: "r1" }), false);
-    expect(r).toMatchObject({ kind: "error", code: "auth", close: CLOSE_AUTH });
-    expect(reject("{nope", false)).toMatchObject({ kind: "error", code: "auth", close: CLOSE_AUTH });
+    expect(r).toMatchObject({ kind: "error", code: "bad_message", message: "first frame must be a valid hello", close: CLOSE_BAD_HELLO });
+    expect(reject("{nope", false)).toMatchObject({ kind: "error", code: "bad_message", close: CLOSE_BAD_HELLO });
+    expect(CLOSE_AUTH).toBe(4401);
+    expect(CLOSE_HELLO_TIMEOUT).toBe(4408);
   });
 
   it("closes a version mismatch with 4400", () => {

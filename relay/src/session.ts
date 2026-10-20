@@ -6,7 +6,10 @@ import type { DefaultsStore, ProjectDefaults } from "./defaults-store.js";
 import { FrameBudgetError, encodeFrame, encodePreWelcomeError } from "./protocol/frame.js";
 import {
   CLOSE_AUTH,
+  CLOSE_BAD_HELLO,
+  CLOSE_HELLO_TIMEOUT,
   CLOSE_REPLACED,
+  FIRST_FRAME_NOT_HELLO,
   PROTOCOL_VERSION,
   ProtocolError,
   clipText,
@@ -239,7 +242,7 @@ export class Session {
     private readonly hub: Hub,
   ) {
     const { helloTimeoutMs } = hub.deps.limits;
-    this.helloTimer = setTimeout(() => this.refuse("auth", `no hello within helloTimeoutMs=${helloTimeoutMs}`, CLOSE_AUTH), helloTimeoutMs);
+    this.helloTimer = setTimeout(() => this.refuse("hello_timeout", `no hello within helloTimeoutMs=${helloTimeoutMs}`, CLOSE_HELLO_TIMEOUT), helloTimeoutMs);
     ws.on("message", (data, isBinary) => {
       this.onFrame(data, isBinary).catch((error: unknown) => {
         console.error(`device ${this.deviceId}: frame handling failed`, error);
@@ -324,7 +327,7 @@ export class Session {
 
   private async onHello(raw: string, isBinary: boolean): Promise<boolean> {
     clearTimeout(this.helloTimer);
-    if (isBinary) return this.refuse("auth", "first frame must be a valid hello", CLOSE_AUTH);
+    if (isBinary) return this.refuse("bad_message", FIRST_FRAME_NOT_HELLO, CLOSE_BAD_HELLO);
     let msg: DeviceMessage;
     try {
       msg = parseDeviceMessage(raw);
@@ -332,9 +335,9 @@ export class Session {
       if (!(error instanceof ProtocolError)) throw error;
       const rejection = rejectionFor(raw, error, false);
       if (rejection.kind === "ack") throw new Error("rejectionFor returned an ack before welcome");
-      return this.refuse(rejection.code, rejection.message, rejection.close ?? CLOSE_AUTH);
+      return this.refuse(rejection.code, rejection.message, rejection.close ?? CLOSE_BAD_HELLO);
     }
-    if (msg.type !== "hello") return this.refuse("auth", "first frame must be a valid hello", CLOSE_AUTH);
+    if (msg.type !== "hello") return this.refuse("bad_message", FIRST_FRAME_NOT_HELLO, CLOSE_BAD_HELLO);
 
     let device;
     try {

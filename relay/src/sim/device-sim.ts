@@ -6,6 +6,7 @@ import { DEFAULT_LIMITS } from "../config.js";
 import {
   CLOSE_AUTH,
   CLOSE_BAD_HELLO,
+  CLOSE_HELLO_TIMEOUT,
   CLOSE_PROTOCOL_VERSION,
   CLOSE_REPLACED,
   DEVICE_PATH,
@@ -181,6 +182,8 @@ class DeviceSim {
         return `closed ${code}: auth rejected, stop reconnecting and show "re-pair". ${this.lastError}`;
       case CLOSE_BAD_HELLO:
         return `closed ${code}: hello rejected, stop reconnecting. ${this.lastError}`;
+      case CLOSE_HELLO_TIMEOUT:
+        return `closed ${code}: hello timed out, keep the token and reconnect with backoff. ${this.lastError}`;
       case CLOSE_REPLACED:
         return `closed ${code}: taken over by another connection, stop reconnecting`;
       default:

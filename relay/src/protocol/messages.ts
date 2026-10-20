@@ -7,8 +7,9 @@ export const CLOSE_PROTOCOL_VERSION = 4400;
 export const CLOSE_AUTH = 4401;
 export const CLOSE_REPLACED = 4000;
 export const CLOSE_BAD_HELLO = 4402;
+export const CLOSE_HELLO_TIMEOUT = 4408;
 
-export const ERROR_CODES = ["protocol_version", "auth", "bad_message", "bad_audio", "audio_not_started", "internal"] as const;
+export const ERROR_CODES = ["protocol_version", "auth", "hello_timeout", "bad_message", "bad_audio", "audio_not_started", "internal"] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export const REQUEST_ID_MAX = 16;
@@ -197,6 +198,8 @@ export function parseDeviceMessage(raw: string): DeviceMessage {
   );
 }
 
+export const FIRST_FRAME_NOT_HELLO = "first frame must be a valid hello";
+
 export type Rejection =
   | { kind: "ack"; id: string; error: string }
   | { kind: "error"; code: ErrorCode; message: string; close?: number };
@@ -213,7 +216,7 @@ export function rejectionFor(raw: string, err: ProtocolError, established: boole
     if (type === "hello") {
       return { kind: "error", code: "bad_message", message: err.message, close: CLOSE_BAD_HELLO };
     }
-    return { kind: "error", code: "auth", message: "first frame must be a valid hello", close: CLOSE_AUTH };
+    return { kind: "error", code: "bad_message", message: FIRST_FRAME_NOT_HELLO, close: CLOSE_BAD_HELLO };
   }
 
   const id = isRecord(json) ? json.id : undefined;

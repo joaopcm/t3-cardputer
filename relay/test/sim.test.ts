@@ -140,11 +140,12 @@ describe("simulator wire behavior", () => {
     [4400, "update firmware: device protocol v=1, relay v=2", "protocol mismatch"],
     [4401, "bad token", "re-pair"],
     [4402, "cols: too big", "hello rejected"],
+    [4408, "no hello within helloTimeoutMs=10000", "keep the token and reconnect with backoff"],
     [4000, "", "taken over by another connection"],
   ])("close %i prints the documented device action and stops", async (code, message, action) => {
     const output: string[] = [];
     const { url } = await stub(() => {}, (ws) => {
-      if (message !== "") ws.send(JSON.stringify({ type: "error", code: code === 4400 ? "protocol_version" : code === 4401 ? "auth" : "bad_message", message }));
+      if (message !== "") ws.send(JSON.stringify({ type: "error", code: code === 4400 ? "protocol_version" : code === 4401 ? "auth" : code === 4408 ? "hello_timeout" : "bad_message", message }));
       ws.close(code);
     });
     const result = await runSim({ ...base, url, write: (text) => output.push(text), script: ["R", "R"] });

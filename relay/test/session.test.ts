@@ -44,13 +44,13 @@ describe("device session", () => {
     expect(home.approvals).toEqual({ available: true });
   });
 
-  it("no hello within timeout closes 4401", async () => {
+  it("no hello within timeout closes 4408 hello_timeout, which keeps the token and reconnects, not 4401", async () => {
     const { connect } = await setup({ helloTimeoutMs: 50 });
     const device = await connect();
     const error = await device.next("error");
-    expect(error.code).toBe("auth");
+    expect(error.code).toBe("hello_timeout");
     expect(error.message).toContain("helloTimeoutMs=50");
-    expect((await device.closed).code).toBe(4401);
+    expect((await device.closed).code).toBe(4408);
   });
 
   it("bad token closes 4401 and counts toward lockout", async () => {
@@ -63,12 +63,16 @@ describe("device session", () => {
     expect(device.received.map((m) => m.type)).toEqual(["error"]);
   });
 
-  it("a first frame that is not a hello closes 4401", async () => {
+  it("a first frame that is not a hello closes 4402 bad_hello", async () => {
     const { connect } = await setup();
     const device = await connect();
     device.send({ type: "list_projects", id: "a1" });
-    expect((await device.next("error")).code).toBe("auth");
-    expect((await device.closed).code).toBe(4401);
+    expect(await device.next("error")).toMatchObject({ code: "bad_message", message: "first frame must be a valid hello" });
+    expect((await device.closed).code).toBe(4402);
+    const binary = await connect();
+    binary.ws.send(Buffer.from([1, 2]), { binary: true });
+    expect((await binary.next("error")).code).toBe("bad_message");
+    expect((await binary.closed).code).toBe(4402);
   });
 
   it("reply id repeated after reconnect calls t3.send once", async () => {
