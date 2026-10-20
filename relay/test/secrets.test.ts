@@ -78,6 +78,15 @@ describe("SecretsStore", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  it("replaces a stale temp file left by an earlier process with the same pid", () => {
+    const path = tmpPath();
+    const stale = `${path}.${process.pid}.tmp`;
+    writeFileSync(stale, "half-written by a dead relay", { mode: 0o600 });
+    new SecretsStore(path).write(sample);
+    expect(new SecretsStore(path).read()).toEqual(sample);
+    expect(existsSync(stale)).toBe(false);
+  });
+
   it("rejects malformed contents naming the file", () => {
     const path = tmpPath();
     writeFileSync(path, "{nope", { mode: 0o600 });

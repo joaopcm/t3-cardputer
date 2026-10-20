@@ -45,7 +45,7 @@ export class SecretsStore {
     const json = JSON.stringify(secretsSchema.parse(secrets), null, 2);
     const tmp = `${this.path}.${process.pid}.tmp`;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    const fd = openSync(tmp, "wx", 0o600);
+    const fd = openPrivate(tmp);
     try {
       writeSync(fd, json);
       fsyncSync(fd);
@@ -77,4 +77,16 @@ export class SecretsStore {
     }
     return true;
   }
+}
+
+function openPrivate(path: string): number {
+  try {
+    return openSync(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  // the temp name carries this pid, so an existing file is left over from a dead process that had the same pid
+  console.error(`removing stale secrets temp file ${path}`);
+  unlinkSync(path);
+  return openSync(path, "wx", 0o600);
 }

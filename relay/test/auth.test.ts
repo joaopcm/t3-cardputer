@@ -149,6 +149,22 @@ describe("DeviceAuth tokens", () => {
     expect(store.read().devices[0]!.lastSeenAt).toBe("2026-10-20T12:01:00.000Z");
   });
 
+  it("still authenticates when persisting lastSeenAt fails, and says so loudly", () => {
+    const { path, token } = paired();
+    const store = new SecretsStore(path);
+    vi.spyOn(store, "write").mockImplementation(() => {
+      throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const device = new DeviceAuth(store, DEFAULT_LIMITS).verify(token, "s");
+      expect(device?.name).toBe("cardputer");
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(/lastSeenAt.*not saved.*ENOSPC/), expect.anything());
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("keeps the secrets file private and keeps other secrets", () => {
     const path = tmpPath();
     const store = new SecretsStore(path);

@@ -104,7 +104,11 @@ export class DeviceAuth {
     const now = Date.now();
     if (match.lastSeenAt === undefined || now - Date.parse(match.lastSeenAt) >= LAST_SEEN_PERSIST_INTERVAL_MS) {
       match.lastSeenAt = new Date(now).toISOString();
-      this.store.write(secrets);
+      try {
+        this.store.write(secrets);
+      } catch (error) {
+        console.error(`device ${match.id} authenticated but lastSeenAt was not saved, fix the secrets file: ${(error as Error).message}`, error);
+      }
     }
     return match;
   }
