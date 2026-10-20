@@ -17,6 +17,10 @@ inline constexpr uint32_t kRequestGuardMs = 400;
 
 std::vector<std::string> wrapWords(std::string_view text, int width);
 
+// why: 16-bit PCM spans 96 dB, so -96 dBFS is below any chunk that is not all zeros
+inline constexpr int kSilenceDbfs = -96;
+int chunkDbfs(const int16_t *samples, size_t count);
+
 struct WifiNet {
     std::string ssid;
     int rssi = 0;
@@ -51,6 +55,8 @@ public:
 
     Out onKey(Key key, uint32_t nowMs);
     Out onWake();
+    void onAudio(int dbfs, uint32_t nowMs);
+    Out onAudioFailed(std::string_view why);
     Out onRelay(const RelayMsg &msg, uint32_t nowMs);
     Out onFrame(std::string_view json, uint32_t nowMs);
     Out onLinkStatus(std::string_view status);
@@ -65,9 +71,11 @@ public:
     void draw(Grid &grid) const;
     std::string_view screenName() const;
     bool editing() const;
+    bool recording() const;
 
 private:
-    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiPassword, SetupPair };
+    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiPassword, SetupPair, Voice };
+    enum class Voice { Recording, Transcribing, Review };
     enum class Field { None, Model, Workspace, Mode };
 
     struct Line {
@@ -131,6 +139,18 @@ private:
     void drawWifiPassword(Grid &grid) const;
     void drawPair(Grid &grid) const;
 
+    Out startVoice(uint32_t nowMs);
+    Out stopVoice(uint32_t nowMs);
+    Out cancelRecording(std::string_view why);
+    void leaveVoice();
+    bool commitVoice();
+    Out voiceKey(Key key, uint32_t nowMs);
+    Out onAudioAck(const Ack &ack);
+    std::optional<Out> onAudioError(const Error &error);
+    Out onVoiceLinkLost();
+    void onTranscript(std::string_view text);
+    void drawVoice(Grid &grid) const;
+
     HelloCaps caps_;
     IdGen ids_;
     Screen screen_ = Screen::Connecting;
@@ -180,6 +200,16 @@ private:
     std::string pairCode_;
     std::string pairNote_;
     bool pairing_ = false;
+
+    Screen voiceFrom_ = Screen::Thread;
+    Voice voice_ = Voice::Review;
+    std::string voiceText_;
+    std::string voicePartial_;
+    std::string audioStartId_;
+    std::string audioEndId_;
+    uint32_t recStartMs_ = 0;
+    uint32_t recMs_ = 0;
+    std::string meter_;
 };
 
 }

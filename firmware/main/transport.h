@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@ bool transport_init(const std::string &relayUrl, size_t maxFrameBytes);
 bool transport_connect();
 void transport_close();
 std::optional<std::string> transport_send(std::string_view text);
+std::optional<std::string> transport_send_audio(const int16_t *samples, size_t count);
 std::optional<TransportEvent> transport_poll();
 std::optional<std::string> transport_dropped();
 void transport_wait(TickType_t ticks);

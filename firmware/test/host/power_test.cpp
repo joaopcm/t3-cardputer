@@ -44,7 +44,7 @@ TEST_CASE("a key on a dimmed screen acts and restarts the idle clock")
 {
     Power p = power();
     p.onTick(kDim);
-    CHECK(p.onKey(kDim + 10) == Power::KeyEffect::Deliver);
+    CHECK(p.onKey(t3::KeyName::Char, kDim + 10) == Power::KeyEffect::Deliver);
     CHECK(p.level() == Power::Level::Full);
     CHECK_FALSE(p.onTick(kDim + 10 + kDim - 1));
     CHECK(p.onTick(kDim + 10 + kDim));
@@ -54,7 +54,7 @@ TEST_CASE("a key on a dimmed screen acts and restarts the idle clock")
 TEST_CASE("a key on a full screen restarts the idle clock")
 {
     Power p = power();
-    CHECK(p.onKey(kDim - 1) == Power::KeyEffect::Deliver);
+    CHECK(p.onKey(t3::KeyName::Char, kDim - 1) == Power::KeyEffect::Deliver);
     CHECK_FALSE(p.onTick(kDim));
     CHECK(p.level() == Power::Level::Full);
     CHECK(p.onTick(kDim - 1 + kDim));
@@ -65,16 +65,16 @@ TEST_CASE("a key on a dark screen only wakes it")
     Power p = power();
     p.onTick(kOff);
     REQUIRE(p.level() == Power::Level::Off);
-    CHECK(p.onKey(kOff + 5) == Power::KeyEffect::Woke);
+    CHECK(p.onKey(t3::KeyName::Char, kOff + 5) == Power::KeyEffect::Woke);
     CHECK(p.level() == Power::Level::Full);
-    CHECK(p.onKey(kOff + 6) == Power::KeyEffect::Deliver);
+    CHECK(p.onKey(t3::KeyName::Char, kOff + 6) == Power::KeyEffect::Deliver);
 }
 
 TEST_CASE("after a wake the idle clock restarts from the waking key")
 {
     Power p = power();
     p.onTick(kOff);
-    p.onKey(kOff + 5);
+    p.onKey(t3::KeyName::Char, kOff + 5);
     CHECK_FALSE(p.onTick(kOff + 5 + kDim - 1));
     CHECK(p.onTick(kOff + 5 + kDim));
     CHECK(p.level() == Power::Level::Dim);
@@ -89,7 +89,7 @@ TEST_CASE("timeouts survive the 32-bit millisecond clock wrapping")
     CHECK(p.level() == Power::Level::Dim);
     CHECK(p.onTick(start + kOff));
     CHECK(p.level() == Power::Level::Off);
-    CHECK(p.onKey(start + kOff + 1) == Power::KeyEffect::Woke);
+    CHECK(p.onKey(t3::KeyName::Char, start + kOff + 1) == Power::KeyEffect::Woke);
 }
 
 TEST_CASE("new timeouts restart the idle clock and wake the screen")
@@ -121,7 +121,7 @@ TEST_CASE("a late tick while editing stops at dim, and the next key acts")
     p.setEditing(true);
     CHECK(p.onTick(kOff + 500));
     CHECK(p.level() == Power::Level::Dim);
-    CHECK(p.onKey(kOff + 501) == Power::KeyEffect::Deliver);
+    CHECK(p.onKey(t3::KeyName::Char, kOff + 501) == Power::KeyEffect::Deliver);
     CHECK(p.level() == Power::Level::Full);
 }
 
@@ -139,7 +139,7 @@ TEST_CASE("when editing ends a dim screen goes off at the normal timeout")
 TEST_CASE("editing set again after the clock restarts keeps the normal timeout from the last key")
 {
     Power p = power();
-    p.onKey(500);
+    p.onKey(t3::KeyName::Char, 500);
     p.setEditing(true);
     CHECK_FALSE(p.onTick(500 + kDim - 1));
     CHECK(p.onTick(500 + kDim));

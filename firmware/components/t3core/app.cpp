@@ -51,6 +51,8 @@ std::string_view App::screenName() const
         return "setup_password";
     case Screen::SetupPair:
         return "setup_pair";
+    case Screen::Voice:
+        return "voice";
     }
     return "";
 }
@@ -61,6 +63,7 @@ bool App::editing() const
     case Screen::SetupWifiList:
     case Screen::SetupWifiPassword:
     case Screen::SetupPair:
+    case Screen::Voice:
         return true;
     case Screen::Thread:
         return !reply_.empty();
@@ -176,26 +179,31 @@ void App::drawHint(Grid &grid, std::string_view hint)
 
 App::Out App::onKey(Key key, uint32_t nowMs)
 {
-    notice_.clear();
+    if (key.name != KeyName::TalkUp) {
+        notice_.clear();
+    }
+    const bool talk = key.name == KeyName::TalkDown;
     switch (screen_) {
     case Screen::Connecting:
         return key.name == KeyName::FnS ? openSetup() : Out{};
     case Screen::Home:
         return key.name == KeyName::FnS ? openSetup() : homeKey(key);
     case Screen::Thread:
-        return threadKey(key);
+        return talk ? startVoice(nowMs) : threadKey(key);
     case Screen::Request:
         return requestKey(key, nowMs);
     case Screen::Projects:
         return projectsKey(key);
     case Screen::Prompt:
-        return promptKey(key);
+        return talk ? startVoice(nowMs) : promptKey(key);
     case Screen::SetupWifiList:
         return wifiListKey(key);
     case Screen::SetupWifiPassword:
         return wifiPasswordKey(key);
     case Screen::SetupPair:
         return pairKey(key);
+    case Screen::Voice:
+        return voiceKey(key, nowMs);
     }
     return {};
 }
@@ -214,6 +222,9 @@ App::Out App::onFrame(std::string_view json, uint32_t nowMs)
 App::Out App::onRelay(const RelayMsg &msg, uint32_t nowMs)
 {
     if (const Ack *ack = std::get_if<Ack>(&msg)) {
+        if (!ack->id.empty() && (ack->id == audioStartId_ || ack->id == audioEndId_)) {
+            return onAudioAck(*ack);
+        }
         onAck(*ack, nowMs);
     } else if (const Home *home = std::get_if<Home>(&msg)) {
         onHome(*home);
@@ -227,7 +238,16 @@ App::Out App::onRelay(const RelayMsg &msg, uint32_t nowMs)
         projects_ = *projects;
         projectSelected_ = 0;
         projectTop_ = 0;
+    } else if (const TranscriptPartial *partial = std::get_if<TranscriptPartial>(&msg)) {
+        if (screen_ == Screen::Voice && voice_ != Voice::Review) {
+            voicePartial_ = partial->text;
+        }
+    } else if (const TranscriptFinal *final = std::get_if<TranscriptFinal>(&msg)) {
+        onTranscript(final->text);
     } else if (const Error *error = std::get_if<Error>(&msg)) {
+        if (std::optional<Out> out = onAudioError(*error)) {
+            return *out;
+        }
         inform(error->message.empty() ? "relay error" : error->message);
     }
     return {};
@@ -241,8 +261,12 @@ App::Out App::onLinkStatus(std::string_view status)
         launchId_.clear();
         inform("launch result unknown, check Home", Color::Warn);
     }
-    const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request) && !threadId_.empty();
-    if (!status.empty() || wasLive || !threadOpen) {
+    if (!status.empty()) {
+        return onVoiceLinkLost();
+    }
+    const bool voiceOnThread = screen_ == Screen::Voice && voiceFrom_ == Screen::Thread;
+    const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request || voiceOnThread) && !threadId_.empty();
+    if (wasLive || !threadOpen) {
         return {};
     }
     Out out;
@@ -340,6 +364,9 @@ void App::draw(Grid &grid) const
         return;
     case Screen::SetupPair:
         drawPair(grid);
+        return;
+    case Screen::Voice:
+        drawVoice(grid);
         return;
     }
 }

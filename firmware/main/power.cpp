@@ -110,19 +110,20 @@ void power_init(uint32_t nowMs)
     logBattery("boot");
 }
 
-t3::Power::KeyEffect power_on_key(uint32_t nowMs)
+t3::Power::KeyEffect power_on_key(t3::KeyName key, uint32_t nowMs)
 {
     const t3::Power::Level before = power.level();
-    const t3::Power::KeyEffect effect = power.onKey(nowMs);
+    const t3::Power::KeyEffect effect = power.onKey(key, nowMs);
     if (before != t3::Power::Level::Full) {
         applyLevel(power.level());
     }
     return effect;
 }
 
-void power_tick(uint32_t nowMs, bool editing)
+void power_tick(uint32_t nowMs, bool editing, bool recording)
 {
     power.setEditing(editing);
+    power.setRecording(recording);
     if (power.onTick(nowMs)) {
         applyLevel(power.level());
     }

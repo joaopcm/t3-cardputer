@@ -8,4 +8,4 @@ mode      auto
   the payload has no tags. find why and 
   open a PR_                            
                                         
-Enter start  Tab options  Esc back      
+Enter start  Tab opts  ` talk  Esc back 

@@ -68,12 +68,13 @@ App::Out App::onBoot(bool hasWifi, bool hasToken)
 
 App::Out App::onAuthRejected()
 {
+    Out out = onVoiceLinkLost();
     hasToken_ = false;
     pairing_ = false;
     pairCode_.clear();
     pairNote_ = "re-pair needed: relay rejected token";
     screen_ = Screen::SetupPair;
-    return {};
+    return out;
 }
 
 App::Out App::openSetup()

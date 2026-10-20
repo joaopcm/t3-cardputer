@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 
 #include "debug_serial.h"
@@ -11,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "keyboard.h"
+#include "mic.h"
 #include "power.h"
 #include "settings.h"
 #include "t3/app.h"
@@ -28,6 +31,9 @@ constexpr TickType_t kMainPollTicks = pdMS_TO_TICKS(20);
 constexpr int kAbnormalClose = 1006;
 // receipt: docs/receipts/2026-10-21-firmware-network.md "json parse budget", 1.95x the ADV's honest worst parse (4.1 x 8192 = 33.6 KB) and 1.3x the host's honest bound (6 x 8192 = 49.2 KB)
 constexpr size_t kJsonParseBudgetBytes = 65536;
+
+// receipt: docs/receipts/2026-10-21-firmware-voice.md "tail", the chunk in flight at talk-up finishes within one chunk period, 2x is the tripwire
+constexpr uint32_t kTailWaitMs = 2 * kMicChunkMs;
 
 // receipt: docs/receipts/2026-10-21-firmware-network.md "hello caps"; bodyRows 7 is the controller ruling (thread screen: bar, header, reply line, hint)
 constexpr t3::HelloCaps kCaps{t3::Grid::Cols, 7, 8192, 32};
@@ -61,6 +67,28 @@ std::string_view frameType(std::string_view frame)
     return end == std::string_view::npos ? std::string_view("?") : frame.substr(start, end - start);
 }
 
+struct VoiceStats {
+    uint32_t startMs = 0;
+    uint32_t lastSendMs = 0;
+    uint32_t firstSoundMs = 0;
+    uint32_t chunks = 0;
+    uint32_t bytes = 0;
+    uint32_t maxSendMs = 0;
+    uint32_t maxGapMs = 0;
+    int minDbfs = 0;
+    int maxDbfs = t3::kSilenceDbfs;
+    int peak = 0;
+};
+
+int peakOf(const int16_t *samples, size_t count)
+{
+    int peak = 0;
+    for (size_t i = 0; i < count; ++i) {
+        peak = std::max(peak, std::abs(static_cast<int>(samples[i])));
+    }
+    return peak;
+}
+
 class Device {
 public:
     Device(const t3::HelloCaps &caps, uint64_t seed, std::string token)
@@ -80,9 +108,12 @@ public:
 
     void key(const t3::Key &key)
     {
-        if (power_on_key(now_ms()) == t3::Power::KeyEffect::Woke) {
-            ESP_LOGI(TAG, "woke, key not delivered");
+        const t3::Power::KeyEffect effect = power_on_key(key.name, now_ms());
+        if (effect != t3::Power::KeyEffect::Deliver) {
             wake();
+        }
+        if (effect == t3::Power::KeyEffect::Woke) {
+            ESP_LOGI(TAG, "woke, key not delivered");
             return;
         }
         ESP_LOGI(TAG, "key %s", loggedKey(key).c_str());
@@ -121,7 +152,7 @@ public:
         if (debug_serial_poll_power(&dimAfterMs, &offAfterMs)) {
             power_set_timeouts(dimAfterMs, offAfterMs, now_ms());
         }
-        power_tick(now_ms(), app_.editing());
+        power_tick(now_ms(), app_.editing(), app_.recording());
         if (debug_serial_poll_drop()) {
             ESP_LOGI(TAG, "debug: dropping the relay socket");
             transport_close();
@@ -129,6 +160,22 @@ public:
             dirty_ = true;
         }
         apply(link_.onTick(now_ms()));
+    }
+
+    void pumpAudio()
+    {
+        if (!app_.recording()) {
+            endRecording("abandoned");
+            return;
+        }
+        if (const size_t count = mic_read(chunk_, kMicChunkSamples); count > 0 && !sendChunk(count)) {
+            return;
+        }
+        if (std::optional<std::string> lost = mic_lost()) {
+            ESP_LOGE(TAG, "%s", lost->c_str());
+            app_.onTransportError("voice: " + *lost);
+            dirty_ = true;
+        }
     }
 
     bool takeDirty()
@@ -171,6 +218,73 @@ private:
             feed(app_.onLinkStatus(*out.statusText));
             dirty_ = true;
         }
+    }
+
+    void startRecording()
+    {
+        if (std::optional<std::string> error = mic_start()) {
+            ESP_LOGE(TAG, "%s", error->c_str());
+            feed(app_.onAudioFailed(*error));
+            return;
+        }
+        voice_ = VoiceStats{};
+        voice_.startMs = now_ms();
+        voice_.lastSendMs = voice_.startMs;
+        micOn_ = true;
+        log_heap("mic on");
+    }
+
+    void finishRecording()
+    {
+        while (const size_t count = mic_read(chunk_, kMicChunkSamples)) {
+            sendChunk(count);
+        }
+        if (const size_t tail = mic_read(chunk_, kMicChunkSamples, kTailWaitMs)) {
+            sendChunk(tail);
+        }
+        endRecording("sent");
+    }
+
+    void endRecording(const char *how)
+    {
+        if (!micOn_) {
+            return;
+        }
+        micOn_ = false;
+        mic_stop();
+        const uint32_t elapsed = std::max<uint32_t>(1, now_ms() - voice_.startMs);
+        ESP_LOGI(TAG,
+                 "voice %s: %u chunks %u bytes in %u ms = %u B/s, send max %u ms, gap max %u ms, rms %d..%d dBFS, peak %d, first sound %u ms",
+                 how, static_cast<unsigned>(voice_.chunks), static_cast<unsigned>(voice_.bytes), static_cast<unsigned>(elapsed),
+                 static_cast<unsigned>(static_cast<uint64_t>(voice_.bytes) * 1000 / elapsed), static_cast<unsigned>(voice_.maxSendMs),
+                 static_cast<unsigned>(voice_.maxGapMs), voice_.minDbfs, voice_.maxDbfs, voice_.peak, static_cast<unsigned>(voice_.firstSoundMs));
+    }
+
+    bool sendChunk(size_t count)
+    {
+        const uint32_t before = now_ms();
+        if (std::optional<std::string> error = transport_send_audio(chunk_, count)) {
+            ESP_LOGE(TAG, "%s", error->c_str());
+            feed(app_.onAudioFailed(*error));
+            dirty_ = true;
+            return false;
+        }
+        const uint32_t after = now_ms();
+        const int dbfs = t3::chunkDbfs(chunk_, count);
+        if (voice_.firstSoundMs == 0 && dbfs > t3::kSilenceDbfs) {
+            voice_.firstSoundMs = after - voice_.startMs;
+        }
+        voice_.chunks += 1;
+        voice_.bytes += count * sizeof(int16_t);
+        voice_.maxSendMs = std::max(voice_.maxSendMs, after - before);
+        voice_.maxGapMs = std::max(voice_.maxGapMs, after - voice_.lastSendMs);
+        voice_.lastSendMs = after;
+        voice_.minDbfs = std::min(voice_.minDbfs, dbfs);
+        voice_.maxDbfs = std::max(voice_.maxDbfs, dbfs);
+        voice_.peak = std::max(voice_.peak, peakOf(chunk_, count));
+        app_.onAudio(dbfs, after);
+        dirty_ = true;
+        return true;
     }
 
     void onTransport(const TransportEvent &event)
@@ -258,6 +372,11 @@ private:
 
     void feed(const t3::App::Out &out)
     {
+        if (out.audio == t3::App::Out::Audio::Stop) {
+            finishRecording();
+        } else if (out.audio == t3::App::Out::Audio::Cancel) {
+            endRecording("cancelled");
+        }
         if (out.scanWifi) {
             wifi_scan();
         }
@@ -294,12 +413,18 @@ private:
                 app_.onTransportError(*error);
             }
         }
+        if (out.audio == t3::App::Out::Audio::Start) {
+            startRecording();
+        }
     }
 
     t3::App app_;
     t3::Link link_;
     settings::WifiCred joining_;
     std::map<std::string, size_t> largestFrame_;
+    int16_t chunk_[kMicChunkSamples];
+    VoiceStats voice_;
+    bool micOn_ = false;
     bool dirty_ = true;
 };
 
@@ -362,6 +487,9 @@ extern "C" void app_main(void)
     device.boot(!settings::wifi().empty(), token.has_value());
     power_init(now_ms());
     draw(device.app());
+    const bool mic_ok = mic_init(system_i2c_bus());
+    ESP_LOGI(TAG, "mic %s", mic_ok ? "ready" : "missing");
+    log_heap("mic");
     debug_serial_start();
     log_heap("ready");
 
@@ -374,6 +502,7 @@ extern "C" void app_main(void)
             device.key(*pressed);
         }
         device.poll();
+        device.pumpAudio();
         if (device.takeDirty()) {
             draw(device.app());
         }

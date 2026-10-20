@@ -385,14 +385,36 @@ void transport_close()
     xTaskNotifyGive(controlTask);
 }
 
+namespace {
+
+bool sendable()
+{
+    return openGen == generation.load() && wantedGen.load() != 0 && esp_websocket_client_is_connected(client);
+}
+
+}
+
 std::optional<std::string> transport_send(std::string_view text)
 {
-    if (openGen != generation.load() || wantedGen.load() == 0 || !esp_websocket_client_is_connected(client)) {
+    if (!sendable()) {
         return std::string("not connected, ") + std::to_string(text.size()) + " bytes not sent";
     }
     const int sent = esp_websocket_client_send_text(client, text.data(), static_cast<int>(text.size()), kSendWaitTicks);
     if (sent != static_cast<int>(text.size())) {
         return "send failed, " + std::to_string(text.size()) + " bytes not sent";
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> transport_send_audio(const int16_t *samples, size_t count)
+{
+    const int bytes = static_cast<int>(count * sizeof(int16_t));
+    if (!sendable()) {
+        return "not connected, " + std::to_string(bytes) + " audio bytes not sent";
+    }
+    const int sent = esp_websocket_client_send_bin(client, reinterpret_cast<const char *>(samples), bytes, kSendWaitTicks);
+    if (sent != bytes) {
+        return "audio send failed, " + std::to_string(bytes) + " bytes not sent";
     }
     return std::nullopt;
 }

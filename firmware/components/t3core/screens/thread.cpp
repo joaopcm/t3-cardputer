@@ -145,7 +145,7 @@ void App::drawThread(Grid &grid) const
     if (waiting_) {
         drawHint(grid, reply_.empty() ? "Tab request  type to reply  Bksp back" : "Tab request  Enter queue  Fn+Enter steer");
     } else {
-        drawHint(grid, reply_.empty() ? "type to reply  ^v page  Bksp back" : "Enter queue  Fn+Enter steer");
+        drawHint(grid, reply_.empty() ? "type or hold ` talk  ^v page  Bksp back" : "Enter queue  Fn+Enter steer");
     }
 
     if (loaded) {
