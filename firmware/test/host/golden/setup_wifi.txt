@@ -1,0 +1,11 @@
+setup                           wifi 1/3
+pick a network                          
+corner-cafe                          -48
+home-5g                       saved  -61
+guest                         open   -70
+                                        
+                                        
+                                        
+                                        
+                                        
+Enter join  R scan  D forget  Tab pair  

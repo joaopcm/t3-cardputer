@@ -9,6 +9,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "keyboard.h"
+#include "settings.h"
 #include "t3/app.h"
 #include "t3/grid.h"
 #include "t3/keys.h"
@@ -40,8 +42,43 @@ void draw(const t3::App &app)
     display_draw(grid);
 }
 
+std::vector<t3::WifiNet> demo_scan()
+{
+    std::vector<t3::WifiNet> nets = {{"demo-net-a", -48, true, false}, {"demo-net-b", -61, true, false}, {"demo-open", -70, false, false}};
+    for (const settings::WifiCred &saved : settings::wifi()) {
+        bool found = false;
+        for (t3::WifiNet &net : nets) {
+            if (net.ssid == saved.ssid) {
+                net.saved = true;
+                found = true;
+            }
+        }
+        if (!found) {
+            nets.push_back({saved.ssid, -80, true, true});
+        }
+    }
+    return nets;
+}
+
+// why: demo only until Task 8 joins WiFi and posts /v1/pair; both fake a success so the NVS round trip can be walked on the device
 void feed(t3::App &app, const t3::App::Out &out)
 {
+    if (out.scanWifi) {
+        app.onWifiScan(demo_scan());
+    }
+    if (out.forgetWifi) {
+        settings::removeWifi(*out.forgetWifi);
+    }
+    if (out.joinWifi) {
+        const std::optional<std::string> error = settings::addWifi({out.joinWifi->ssid, out.joinWifi->password});
+        feed(app, app.onWifiResult(!error, error.value_or("")));
+    }
+    if (out.pair) {
+        feed(app, app.onPairResult("demo-token-" + out.pair->code, ""));
+    }
+    if (out.storeToken) {
+        settings::setToken(*out.storeToken);
+    }
     for (const std::string &frame : out.send) {
         for (const std::string &answer : demo_relay_answer(frame)) {
             feed(app, app.onFrame(answer, now_ms()));
@@ -49,18 +86,35 @@ void feed(t3::App &app, const t3::App::Out &out)
     }
 }
 
+std::string loggedKey(const t3::App &app, const t3::Key &key)
+{
+    const bool secret = key.name == t3::KeyName::Char && app.screenName() == "setup_password";
+    return secret ? "char:*" : t3::keyNameString(key);
+}
+
+void handle_key(t3::App &app, const t3::Key &key)
+{
+    ESP_LOGI(TAG, "key %s", loggedKey(app, key).c_str());
+    feed(app, app.onKey(key, now_ms()));
+    draw(app);
+    ESP_LOGI(TAG, "screen %.*s", static_cast<int>(app.screenName().size()), app.screenName().data());
+}
+
 }
 
 extern "C" void app_main(void)
 {
     log_heap("boot");
-    if (!display_init()) {
+    if (!settings::init() || !display_init()) {
         return;
     }
     log_heap("sprite");
+    const bool keyboard_ok = keyboard_init();
+    ESP_LOGI(TAG, "keyboard %s", keyboard_ok ? "ready" : "missing");
     static t3::App app(kDemoCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random());
     app.onLinkStatus("");
     feed(app, app.onFrame(kDemoHome, now_ms()));
+    feed(app, app.onBoot(!settings::wifi().empty(), settings::token().has_value()));
     draw(app);
     debug_serial_start();
     log_heap("ready");
@@ -69,10 +123,10 @@ extern "C" void app_main(void)
     for (;;) {
         t3::Key key;
         while (debug_serial_poll_key(&key)) {
-            ESP_LOGI(TAG, "key %s", t3::keyNameString(key).c_str());
-            feed(app, app.onKey(key, now_ms()));
-            draw(app);
-            ESP_LOGI(TAG, "screen %.*s", static_cast<int>(app.screenName().size()), app.screenName().data());
+            handle_key(app, key);
+        }
+        while (const std::optional<t3::Key> pressed = keyboard_poll()) {
+            handle_key(app, *pressed);
         }
         vTaskDelay(kMainPollTicks);
     }

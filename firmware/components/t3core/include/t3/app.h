@@ -17,11 +17,34 @@ inline constexpr uint32_t kRequestGuardMs = 400;
 
 std::vector<std::string> wrapWords(std::string_view text, int width);
 
+struct WifiNet {
+    std::string ssid;
+    int rssi = 0;
+    bool secure = true;
+    bool saved = false;
+};
+
+struct WifiJoin {
+    std::string ssid;
+    std::string password;
+};
+
+struct PairRequest {
+    std::string code;
+    std::string name;
+};
+
 class App {
 public:
     struct Out {
         std::vector<std::string> send;
         enum class Audio { None, Start, Stop, Cancel } audio = Audio::None;
+        bool scanWifi = false;
+        std::optional<WifiJoin> joinWifi;
+        std::optional<std::string> forgetWifi;
+        std::optional<PairRequest> pair;
+        std::optional<std::string> storeToken;
+        bool reconnect = false;
     };
 
     App(const HelloCaps &caps, uint64_t idSeed);
@@ -30,11 +53,16 @@ public:
     Out onRelay(const RelayMsg &msg, uint32_t nowMs);
     Out onFrame(std::string_view json, uint32_t nowMs);
     Out onLinkStatus(std::string_view status);
+    Out onBoot(bool hasWifi, bool hasToken);
+    Out onAuthRejected();
+    void onWifiScan(std::vector<WifiNet> nets);
+    Out onWifiResult(bool ok, std::string_view why);
+    Out onPairResult(std::optional<std::string> token, std::string_view why);
     void draw(Grid &grid) const;
     std::string_view screenName() const;
 
 private:
-    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt };
+    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiPassword, SetupPair };
     enum class Field { None, Model, Workspace, Mode };
 
     struct Line {
@@ -87,6 +115,16 @@ private:
     void drawProjects(Grid &grid) const;
     void drawPrompt(Grid &grid) const;
 
+    Out openSetup();
+    void leaveSetup();
+    Out wifiListKey(Key key);
+    Out wifiPasswordKey(Key key);
+    Out pairKey(Key key);
+    void drawSetupBar(Grid &grid, std::string_view step) const;
+    void drawWifiList(Grid &grid) const;
+    void drawWifiPassword(Grid &grid) const;
+    void drawPair(Grid &grid) const;
+
     HelloCaps caps_;
     IdGen ids_;
     Screen screen_ = Screen::Connecting;
@@ -124,6 +162,18 @@ private:
     RuntimeMode mode_ = RuntimeMode::ApprovalRequired;
     Field field_ = Field::None;
     std::string launchId_;
+
+    bool hasToken_ = false;
+    std::vector<WifiNet> nets_;
+    bool scanned_ = false;
+    int netSelected_ = 0;
+    int netTop_ = 0;
+    WifiNet joinTarget_;
+    std::string wifiPassword_;
+    bool joining_ = false;
+    std::string pairCode_;
+    std::string pairNote_;
+    bool pairing_ = false;
 };
 
 }

@@ -1,0 +1,11 @@
+setup                           pair 3/3
+pair with the relay                     
+re-pair needed: relay rejected token    
+run t3-cardputer-relay pair on the relay
+host and type the code                  
+                                        
+code 0/8                                
+> _                                     
+                                        
+                                        
+Enter pair  Esc back                    

@@ -45,6 +45,12 @@ std::string_view App::screenName() const
         return "projects";
     case Screen::Prompt:
         return "new_task";
+    case Screen::SetupWifiList:
+        return "setup_wifi";
+    case Screen::SetupWifiPassword:
+        return "setup_password";
+    case Screen::SetupPair:
+        return "setup_pair";
     }
     return "";
 }
@@ -144,9 +150,9 @@ App::Out App::onKey(Key key, uint32_t nowMs)
     notice_.clear();
     switch (screen_) {
     case Screen::Connecting:
-        return {};
+        return key.name == KeyName::FnS ? openSetup() : Out{};
     case Screen::Home:
-        return homeKey(key);
+        return key.name == KeyName::FnS ? openSetup() : homeKey(key);
     case Screen::Thread:
         return threadKey(key);
     case Screen::Request:
@@ -155,6 +161,12 @@ App::Out App::onKey(Key key, uint32_t nowMs)
         return projectsKey(key);
     case Screen::Prompt:
         return promptKey(key);
+    case Screen::SetupWifiList:
+        return wifiListKey(key);
+    case Screen::SetupWifiPassword:
+        return wifiPasswordKey(key);
+    case Screen::SetupPair:
+        return pairKey(key);
     }
     return {};
 }
@@ -285,6 +297,15 @@ void App::draw(Grid &grid) const
         return;
     case Screen::Prompt:
         drawPrompt(grid);
+        return;
+    case Screen::SetupWifiList:
+        drawWifiList(grid);
+        return;
+    case Screen::SetupWifiPassword:
+        drawWifiPassword(grid);
+        return;
+    case Screen::SetupPair:
+        drawPair(grid);
         return;
     }
 }
