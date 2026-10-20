@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminRequest } from "../src/admin.js";
 import { SecretsStore } from "../src/secrets.js";
-import { startRelay } from "../src/serve.js";
+import { startRelay, tokenExpiryWarnings } from "../src/serve.js";
 import { Device, FakeApprovals, FakeT3, summary } from "./helpers/relay-fixture.js";
 import type { CanaryFailure, CanaryResult } from "../src/canary.js";
 import { relayEnvironment } from "./helpers/relay-env.js";
@@ -24,6 +24,42 @@ const alive = (pid: number) => {
     return false;
   }
 };
+
+async function pairedDevice(env: { socketPath: string; port: number }): Promise<{ device: Device; token: string }> {
+  const paired = await adminRequest(env.socketPath, { op: "pair" }, 2000);
+  if (!("code" in paired)) throw new Error(JSON.stringify(paired));
+  const response = await fetch(`http://127.0.0.1:${env.port}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: paired.code, name: "adv" }),
+  });
+  const { token } = (await response.json()) as { token: string };
+  const device = await Device.open(env.port);
+  cleanups.push(() => device.close());
+  return { device, token };
+}
+
+const DAY_MS = 86_400_000;
+
+describe("tokenExpiryWarnings", () => {
+  const now = Date.parse("2026-10-20T12:00:00.000Z");
+  const at = (ms: number) => new Date(now + ms).toISOString();
+
+  it("names each T3 token inside the warning window, the days left, and the re-pair command", () => {
+    expect(tokenExpiryWarnings({ t3McpToken: { token: "m", expiresAt: at(5 * DAY_MS + 3_600_000) }, t3InternalToken: { token: "i", expiresAt: at(DAY_MS) } }, now, 7 * DAY_MS)).toEqual([
+      "T3 MCP token expires in 5 days: run `t3-cardputer-relay pair-t3` on homelab",
+      "T3 internal token expires in 1 day: run `t3-cardputer-relay pair-t3` on homelab",
+    ]);
+  });
+
+  it("says under a day on the last day, and nothing outside the window, once expired, or for a missing token", () => {
+    expect(tokenExpiryWarnings({ t3McpToken: { token: "m", expiresAt: at(3_600_000) } }, now, 7 * DAY_MS)).toEqual([
+      "T3 MCP token expires in under a day: run `t3-cardputer-relay pair-t3` on homelab",
+    ]);
+    expect(tokenExpiryWarnings({ t3McpToken: { token: "m", expiresAt: at(8 * DAY_MS) }, t3InternalToken: { token: "i", expiresAt: at(-1) } }, now, 7 * DAY_MS)).toEqual([]);
+    expect(tokenExpiryWarnings({}, now, 7 * DAY_MS)).toEqual([]);
+  });
+});
 
 describe("startRelay", () => {
   it("serves devices, pairs through the admin socket, and cleans up on close", async () => {
@@ -232,5 +268,17 @@ describe("startRelay", () => {
     await device.next("home", (h) => h.approvals.reason === "approvals down: subscribeThread: expected snapshot, fix in progress");
     expect(failures).toEqual([broken]);
     expect(gates).toHaveLength(2);
+  });
+
+  it("shows a T3 token close to expiry on Home with the days left", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = await relayEnvironment();
+    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt: new Date(Date.now() + 3 * DAY_MS + 60_000).toISOString() } });
+    const relay = await startRelay(env);
+    cleanups.push(() => relay.close());
+    const { device, token } = await pairedDevice(env);
+    device.hello(token);
+    const home = await device.next("home");
+    expect(home.warnings).toContain("T3 MCP token expires in 3 days: run `t3-cardputer-relay pair-t3` on homelab");
   });
 });

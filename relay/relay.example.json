@@ -40,6 +40,7 @@
     "canaryRetryMaxMs": 3600000,
     "repairPollIntervalMs": 30000,
     "repairAttemptTimeoutMs": 7200000,
-    "repairStepTimeoutMs": 60000
+    "repairStepTimeoutMs": 60000,
+    "tokenExpiryWarningMs": 604800000
   }
 }

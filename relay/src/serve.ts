@@ -8,7 +8,7 @@ import { DefaultsStore } from "./defaults-store.js";
 import { deploy } from "./deploy.js";
 import { execRunner } from "./exec.js";
 import { RepairOrchestrator } from "./repair/orchestrator.js";
-import { SecretsStore } from "./secrets.js";
+import { SecretsStore, type Secrets } from "./secrets.js";
 import { startServer, type ApprovalsState, type T3Client } from "./server.js";
 import { createWhisperStt } from "./stt/whisper.js";
 import { clearWhisperPid, reapOrphanWhisper, recordWhisperPid } from "./stt/whisper-pid.js";
@@ -23,6 +23,23 @@ export const VERSION_STATE_NAME = "t3-version.json";
 const PAIR_T3_HINT = "run `t3-cardputer-relay pair-t3`";
 // receipt: docs/receipts/2026-10-20-canary.md, one version check is a single GET of the environment document that took 2.3-21.4 ms over 10 calls, so every pollIntervalMs x 10 (20 s) is negligible
 const VERSION_CHECK_EVERY_POLLS = 10;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TOKEN_LABELS = { t3McpToken: "T3 MCP token", t3InternalToken: "T3 internal token" } as const;
+
+export function tokenExpiryWarnings(secrets: Pick<Secrets, "t3McpToken" | "t3InternalToken">, nowMs: number, warnMs: number): string[] {
+  const warnings: string[] = [];
+  for (const [field, label] of Object.entries(TOKEN_LABELS) as [keyof typeof TOKEN_LABELS, string][]) {
+    const expiresAt = secrets[field]?.expiresAt;
+    if (expiresAt === undefined) continue;
+    const left = Date.parse(expiresAt) - nowMs;
+    if (!(left > 0 && left <= warnMs)) continue;
+    const days = Math.floor(left / DAY_MS);
+    const when = days === 0 ? "under a day" : `${days} ${days === 1 ? "day" : "days"}`;
+    warnings.push(`${label} expires in ${when}: ${PAIR_T3_HINT} on homelab`);
+  }
+  return warnings;
+}
 
 export type T3Connection = { t3: T3Client & Pick<T3Mcp, "waitForRun" | "settleThread">; approvals: ApprovalsAdapter; close(): Promise<void> };
 
@@ -96,6 +113,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       defaults: new DefaultsStore(join(stateDir, "defaults.json")),
       stt,
       approvalsState,
+      warnings: () => tokenExpiryWarnings(secrets.read(), Date.now(), limits.tokenExpiryWarningMs),
       onAdapterBroken: () => versionLoop?.recheck() ?? "none",
     });
     closers.push(server.close);

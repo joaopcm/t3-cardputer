@@ -34,6 +34,7 @@ export const limitsSchema = z.strictObject({
   repairPollIntervalMs: positiveInt,
   repairAttemptTimeoutMs: positiveInt,
   repairStepTimeoutMs: positiveInt,
+  tokenExpiryWarningMs: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -115,6 +116,8 @@ export const DEFAULT_LIMITS: Limits = {
   repairAttemptTimeoutMs: 2 * 60 * 60 * 1000,
   // receipt: Task 14 measured pnpm install --frozen-lockfile 0.76-1.47 s (cold store 1.44 s), pnpm build 0.66 s, cli start 0.2 s; gh and git fetch against GitHub pending Task 15; 60 s is 40x the slowest
   repairStepTimeoutMs: 60_000,
+  // receipt: docs/receipts/2026-10-20-approvals-spike.md (Refresh), both T3 bearers last 30 days and cannot be refreshed, so warning for the last 7 gives a week away from home to get back and run pair-t3
+  tokenExpiryWarningMs: 7 * 24 * 60 * 60 * 1000,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

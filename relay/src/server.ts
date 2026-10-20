@@ -23,6 +23,7 @@ export type ServerDeps = {
   defaults: Pick<DefaultsStore, "get" | "remember">;
   stt: Stt;
   approvalsState: () => ApprovalsState;
+  warnings?: () => string[];
   onAdapterBroken?: (reason: string) => ApprovalsDownPhase;
 };
 

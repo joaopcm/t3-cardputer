@@ -40,6 +40,7 @@ export type HubDeps = {
   defaults: Pick<DefaultsStore, "get" | "remember">;
   stt: Stt;
   approvalsState: () => ApprovalsState;
+  warnings?: () => string[];
   onAdapterBroken?: (reason: string) => ApprovalsDownPhase;
 };
 
@@ -132,7 +133,7 @@ export class Hub {
   }
 
   warnings(): string[] {
-    return [this.deps.stt.warning?.(), this.repairWarning].filter((warning) => warning !== undefined);
+    return [...(this.deps.warnings?.() ?? []), this.deps.stt.warning?.(), this.repairWarning].filter((warning) => warning !== undefined);
   }
 
   setRepairWarning(text: string | undefined): void {
