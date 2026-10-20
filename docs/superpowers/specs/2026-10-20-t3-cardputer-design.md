@@ -62,7 +62,15 @@ The approved screen mockups are in `docs/superpowers/specs/2026-10-20-t3-cardput
 
 **T3 Code on the homelab:**
 - Server on `127.0.0.1:3773`. T3 Connect is a T3-managed Cloudflare Tunnel to that port.
-- The server exposes **MCP at `/mcp`**, with its own OAuth (pairing code, PKCE, 30-day bearer token, selectable access level). Its tools cover everything this app needs: `t3_project_list`, `t3_thread_list`, `t3_thread_read`, `t3_thread_wait`, `t3_thread_send`, `t3_thread_launch`, `t3_pending_request_list`, `t3_pending_request_respond`. Queue-vs-steer for follow-ups is supported by T3 (`t3_queue_*`, `t3_queue_promote_to_steer`); the builder confirms which tool or argument the relay uses.
+- The server exposes **MCP at `/mcp`**, with its own OAuth: a pairing code, PKCE, a 30-day bearer token, and a selectable access level.
+  - Its tools cover everything **except permission approvals**: `t3_project_list`, `t3_thread_list` (filter by `statuses`, including `waiting`), `t3_thread_read`, `t3_thread_wait`, `t3_thread_send` (`mode`: `auto` | `queue` | `steer` | `restart`), `t3_thread_launch` (`runtimeMode` includes `approval-required`; `scratch: true` launches without a project), `t3_pending_request_list`/`read`/`respond`.
+  - `t3_pending_request_respond` **"cannot approve a permission request"**, and `t3_pending_request_list` excludes approvals. Both quotes come from the tool descriptions, read 2026-10-20. MCP only covers the agent's *questions*.
+- **Approvals go through T3's internal protocol.** The Mac client uses it.
+  - A bearer token comes from `t3 pair` traded at `POST /oauth/token`. Without DPoP it lasts 30 days.
+  - It talks over `GET /ws?orchestrationProtocol=2` using Effect RPC over JSON. Requests look like `{_tag:"Request",id,tag,payload}`, and every stream chunk needs an `Ack` back.
+  - The command is `orchestration.dispatchCommand` with `runtime-request.respond {requestId, decision}`.
+  - The server rejects unknown protocol versions with HTTP 426 and exposes capability flags.
+  - This protocol is internal and changes often.
 - Raw payloads are large: the thread list is ~100 KB of JSON for 57 threads, and one thread snapshot can be up to 1 MiB. The MCP list is ~700 B per thread.
 - Source: github.com/pingdotgg/t3code (MIT).
 
@@ -76,8 +84,9 @@ The approved screen mockups are in `docs/superpowers/specs/2026-10-20-t3-cardput
 ```
  Cardputer ADV ──── one wss, small JSON + binary audio ────▶ relay (homelab, Node/TS)
    firmware (ESP-IDF)                                          │
-   ▲ screen-sized view models                                  ├─ T3 MCP  http://127.0.0.1:3773/mcp
-   │ live updates while app open                               └─ whisper.cpp (local STT, English)
+   ▲ screen-sized view models                                  ├─ T3 MCP  http://127.0.0.1:3773/mcp   (everything but approvals)
+   │ live updates while app open                               ├─ approvals adapter  ws://127.0.0.1:3773/ws  (internal protocol, self-repairing)
+   │                                                           └─ whisper.cpp (local STT, English)
    └──────────────────────────────────────────────────────────────┘
            reachable from anywhere via Tailscale Funnel:
            https://<homelab>.<tailnet>.ts.net  →  relay port
@@ -86,10 +95,13 @@ The approved screen mockups are in `docs/superpowers/specs/2026-10-20-t3-cardput
 ### Relay (homelab)
 
 - **TypeScript on Node** (my call: João's stack, and the official MCP TypeScript SDK). Runs as a systemd user service.
-- **Talks to T3 only through MCP on localhost.** It never uses T3's internal WebSocket protocol, because MCP tool names are the most stable interface T3 has.
+- **Talks to T3 through MCP on localhost for everything except approvals.** MCP tool names are the most stable interface T3 has.
   - Paired once through T3's MCP OAuth with a pairing code, at the lowest access level that still allows send, queue/steer, launch, and respond.
-  - Token stored on the homelab with `0600` permissions, outside the repo.
-  - When the token expires or is rejected, the device shows the exact command to re-pair.
+- **Approvals go through one isolated adapter** that speaks T3's internal protocol (see below). It's the only relay code that knows that protocol.
+- **Credentials:** both T3 tokens (MCP and internal) are stored on the homelab with `0600` permissions, outside the repo.
+  - When a token is near expiry, the device shows how many days are left.
+  - When one is rejected, the device shows the exact command to re-pair.
+  - The builder checks whether either token can be refreshed without re-pairing, and does so if possible.
 - **Does all the shaping.** It turns MCP results into **screen-sized view models** (home rows, one approval, one reply split into pages, the project list), so the device never parses large JSON. Page and row budgets come from measuring real replies and threads; when a budget truncates, the device says so.
 - **Live updates:**
   - While a device is connected, the relay watches T3 and pushes diffs of the home screen and the open thread. It uses `t3_thread_wait` or polls `t3_thread_list`, whichever measures cheaper.
@@ -106,6 +118,50 @@ The approved screen mockups are in `docs/superpowers/specs/2026-10-20-t3-cardput
   - **Failed-auth lockout**, because the relay is on the public internet and the repo is public. Failed token and pairing attempts are rate-limited per source, with the limit sized as a tripwire a real device never hits. Lockouts are logged and visible in `t3-cardputer-relay devices`.
   - Tokens are compared in constant time, and pairing codes expire quickly and are single-use.
 - **Exposure:** Tailscale Funnel publishes the relay on HTTPS 443 at a stable `*.ts.net` address. João has accepted that this is public, protected by the device token. Funnel has to be allowed in the tailnet policy.
+
+### Approvals adapter and self-repair
+
+Approvals need T3's internal protocol, which changes often. The adapter is built to break loudly and fix itself.
+
+```
+T3 version changes ──▶ relay runs the canary
+                         │
+                passes ──┴── fails
+                  │            │
+               all good        ▼
+                         ADV: "approvals down, fix in progress" (+ the repair thread on Home)
+                         relay launches a repair thread on t3-cardputer
+                         │
+                         ▼
+                   PR from the repair thread ──▶ GitHub CI green
+                         │
+                         ▼
+                   relay runs the canary against the PR's adapter (staging copy)
+                         │
+                passes ──┴── fails ──▶ repair thread told why, keeps going
+                  │
+                  ▼
+           relay merges the PR, pulls main, restarts itself, re-runs the canary
+```
+
+- **Adapter boundary:** all internal-protocol code lives in `relay/src/approvals/`, behind one interface (list pending approvals for a thread, read one, respond). The rest of the relay never imports anything else from that folder.
+- **Version watch:** the relay reads the T3 server version and capability flags (`/.well-known/t3/environment`) at startup and on a schedule. A change triggers the canary.
+- **Canary:**
+  - Launches a scratch thread (`t3_thread_launch` with `scratch: true` and `runtimeMode: "approval-required"`) asking the agent to run a harmless command (`true`).
+  - Waits for the approval to appear through the adapter, approves it through the adapter, and confirms through MCP that the run completed.
+  - Archives or settles the scratch thread afterward.
+  - Runs only on version change, after a deploy, and on demand (`t3-cardputer-relay canary`), never on a timer, because each run costs one short agent turn.
+- **Failure path:**
+  - Approvals are marked unavailable. The device shows `approvals down: <reason>, fix in progress` on approval screens, and Home flags it.
+  - The relay launches **one** repair thread (deduplicated per T3 version) on the `t3-cardputer` project in a new worktree. The prompt includes the canary failure and the adapter error, the old and new T3 versions, the instruction to fix `relay/src/approvals/` against the `pingdotgg/t3code` source for the new version, and to make the contract tests pass and open a PR from a `repair/` branch.
+  - The repair thread runs in a mode that needs no approvals, since approvals are the thing that's broken.
+- **Auto-merge (decided by João), with guardrails (my call, because the repo is public and anyone can open a PR):**
+  - Only PRs opened from the repair thread the relay launched, which the relay tracks by thread ID and PR number, and only from a `repair/` branch.
+  - The PR diff touches only `relay/src/approvals/**` and its tests. Anything else blocks the merge and is reported in the repair thread.
+  - GitHub CI is green, **and** the homelab canary passes against the PR's adapter, built in a staging directory and run without touching the live relay.
+  - Then the relay merges with a fine-grained GitHub token scoped to this repo only, pulls `main`, restarts through systemd, and re-runs the canary on the live build.
+- **Redeploy from `main`** also covers normal changes: when `main` moves, the relay pulls, builds, restarts, and runs the canary.
+- **Tripwire:** if repair fails repeatedly for the same T3 version, the relay stops launching repair threads and the device says so, with the number of attempts. Approvals then wait for the laptop. The attempt limit is sized as a tripwire, with a receipt.
 
 ### Device ↔ relay protocol
 
@@ -168,6 +224,7 @@ Local config (relay URL, tokens, tailnet names) is gitignored; the repo ships `*
 - New-task flow: pick a project each time; other options remembered per project, changed with Tab.
 - Replies to a running thread queue by default; one key steers instead.
 - Relay exposed publicly via Tailscale Funnel, protected by device token.
+- Approvals via an internal-protocol adapter that repairs itself through an agent thread. Fix PRs **auto-merge** when CI and the canary pass.
 - All five screen mockups approved.
 - Keep other apps on the ADV (Launcher); a full image is also built.
 - Repo at `/srv/repositories/t3-cardputer`, public on GitHub as `joaopcm/t3-cardputer`.
@@ -185,8 +242,13 @@ Local config (relay URL, tokens, tailnet names) is gitignored; the repo ships `*
 - Screen dims/sleeps when idle; the device fetches full state again on wake.
 - Relay URL preloadable from the SD card.
 - Failed-auth lockout on the relay.
+- Auto-merge guardrails: repair-thread PRs only, `repair/` branch, diff limited to `relay/src/approvals/**`.
+- Canary runs on version change, deploy, or on demand, never on a timer.
 
 ## Left to the builder
+
+- How approvals show up through each interface: verify against a real approval in the first task (a spike) before building on it.
+- Which repair-thread runtime mode avoids approvals, and how the relay links a repair thread to its PR.
 
 - Exact device↔relay message schema and version handshake.
 - How the relay detects state changes (`t3_thread_wait` vs polling): pick by measurement.
