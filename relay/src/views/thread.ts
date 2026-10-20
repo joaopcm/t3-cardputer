@@ -31,15 +31,22 @@ export function buildThreadPage(input: ThreadPageInput): ThreadPageMessage {
     return { type: "thread_page", threadId: summary.threadId, header, page: 1, pages: 1, lines: [NO_REPLY] };
   }
 
-  const { pages, truncated } = paginate(wrap(toDeviceAscii(message.text), cols), bodyRows, input.maxPages);
-  const page = Math.min(Math.max(input.page, 1), pages.length);
-  const lines = pages[page - 1] ?? [];
+  const wrapped = wrap(toDeviceAscii(message.text), cols);
+  const first = paginate(wrapped, bodyRows, input.maxPages);
+  const truncated = first.truncated;
+  let pages = first.pages;
 
-  if (truncated === undefined) {
-    return { type: "thread_page", threadId: summary.threadId, header, page, pages: pages.length, lines };
+  if (truncated !== undefined) {
+    const notice = wrap(`reply truncated: ${truncated.budget}=${truncated.limit}, reply needed ${truncated.actual}`, cols);
+    const capacity = bodyRows * input.maxPages;
+    if (notice.length > capacity) {
+      throw new RangeError(`truncation notice needs ${notice.length} rows, max_reply_pages*bodyRows=${capacity}`);
+    }
+    pages = paginate([...wrapped.slice(0, capacity - notice.length), ...notice], bodyRows, input.maxPages).pages;
   }
 
-  const notice = wrap(`reply truncated: ${truncated.budget}=${truncated.limit}, reply needed ${truncated.actual}`, cols);
-  const shown = page === pages.length ? [...notice, ...lines].slice(0, bodyRows) : lines;
-  return { type: "thread_page", threadId: summary.threadId, header, page, pages: pages.length, lines: shown, truncated };
+  const page = Math.min(Math.max(input.page, 1), pages.length);
+  const lines = pages[page - 1] ?? [];
+  const view = { type: "thread_page" as const, threadId: summary.threadId, header, page, pages: pages.length, lines };
+  return truncated === undefined ? view : { ...view, truncated };
 }

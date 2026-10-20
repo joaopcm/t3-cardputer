@@ -47,6 +47,7 @@ const baseHome = {
   questions: new Map<string, T3Question[]>(),
   now,
   maxRows: 50,
+  cols: 40,
   approvalsState: { available: true },
   warnings: [] as string[],
   t3: "ok" as const,
@@ -144,6 +145,69 @@ describe("buildHome", () => {
     expect(home.rows[0]?.project).toBe("muller api");
   });
 
+  it("never drops an unknown status: shows it as failed and warns once per status", () => {
+    const home = buildHome({
+      ...baseHome,
+      threads: [
+        thread("a", "paused", hoursAgo(1), "first"),
+        thread("b", "paused", hoursAgo(2), "second"),
+        thread("c", "weird\u00e9", hoursAgo(3), "third"),
+        thread("d", "running", hoursAgo(4)),
+      ],
+      warnings: ["existing"],
+    });
+
+    expect(home.rows.map((r) => [r.threadId, r.kind])).toEqual([
+      ["c", "failed"],
+      ["b", "failed"],
+      ["a", "failed"],
+      ["d", "running"],
+    ]);
+    expect(home.counts).toEqual({ needs: 3, running: 1, done: 0 });
+    expect(home.warnings).toEqual(["existing", 'unknown thread status "paused" on first', 'unknown thread status "weirde" on third']);
+  });
+
+  it("warns on an unparseable updatedAt instead of silently using age 0", () => {
+    const home = buildHome({
+      ...baseHome,
+      threads: [thread("a", "running", "not a date", "broken one"), thread("b", "running", "", "other")],
+    });
+
+    expect(home.rows).toHaveLength(2);
+    expect(home.warnings).toEqual(["unparseable updatedAt on 2 thread(s), first: broken one"]);
+  });
+
+  it("clips project to a third of cols and title to the rest, ending with ~", () => {
+    const home = buildHome({
+      ...baseHome,
+      cols: 40,
+      threads: [{ ...thread("t", "running", hoursAgo(1), "t".repeat(30)), project: "p".repeat(20) }],
+    });
+
+    const row = home.rows[0];
+    expect(row?.project).toBe(`${"p".repeat(12)}~`);
+    expect(row?.title).toBe(`${"t".repeat(18)}~`);
+    expect(`X ${row?.project} ${row?.title} 999d`.length).toBe(40);
+  });
+
+  it("leaves short project and title untouched and gives title the spare room", () => {
+    const home = buildHome({
+      ...baseHome,
+      cols: 40,
+      threads: [{ ...thread("t", "running", hoursAgo(1), "t".repeat(28)), project: "api" }],
+    });
+
+    expect(home.rows[0]?.project).toBe("api");
+    expect(home.rows[0]?.title).toBe("t".repeat(28));
+  });
+
+  it("never clips below one column on a tiny screen", () => {
+    const home = buildHome({ ...baseHome, cols: 5, threads: [thread("t", "running", hoursAgo(1), "title")] });
+
+    expect(home.rows[0]?.project).toBe("~");
+    expect(home.rows[0]?.title).toBe("~");
+  });
+
   it("passes approvals state, warnings and t3 status through", () => {
     const home = buildHome({
       ...baseHome,
@@ -195,31 +259,39 @@ describe("buildThreadPage", () => {
     expect(buildThreadPage({ ...base, message, page: 0 }).page).toBe(1);
   });
 
-  it("says in words on the last page when the reply exceeds maxPages", () => {
+  it("reserves rows for the truncation notice so it ends the last page intact", () => {
     const text = Array.from({ length: 13 }, (_, i) => `l${i + 1}`).join("\n");
     const message = { text, model: "m", at: hoursAgo(1) };
-    const input = { ...base, message, bodyRows: 1, maxPages: 10, cols: 60 };
+    const input = { ...base, message, bodyRows: 2, maxPages: 5, cols: 60 };
 
-    const last = buildThreadPage({ ...input, page: 10 });
+    const last = buildThreadPage({ ...input, page: 5 });
     const first = buildThreadPage({ ...input, page: 1 });
 
-    expect(last.pages).toBe(10);
-    expect(last.truncated).toEqual({ budget: "max_reply_pages", limit: 10, actual: 13 });
-    expect(last.lines[0]).toBe("reply truncated: max_reply_pages=10, reply needed 13");
-    expect(last.lines.length).toBeLessThanOrEqual(1);
-    expect(first.lines).toEqual(["l1"]);
+    expect(last.pages).toBe(5);
+    expect(last.truncated).toEqual({ budget: "max_reply_pages", limit: 5, actual: 7 });
+    expect(last.lines).toEqual(["l9", "reply truncated: max_reply_pages=5, reply needed 7"]);
+    expect(first.lines).toEqual(["l1", "l2"]);
     expect(relayMessageSchema.safeParse(last).success).toBe(true);
   });
 
-  it("keeps the last page within bodyRows and cols when the notice is added", () => {
-    const text = Array.from({ length: 30 }, (_, i) => `row ${i + 1}`).join("\n");
+  it("keeps the whole notice and every other row of content with bodyRows=2 cols=20", () => {
+    const text = Array.from({ length: 30 }, (_, i) => `r${i + 1}`).join("\n");
     const message = { text, model: "m", at: hoursAgo(1) };
+    const input = { ...base, message, cols: 20, bodyRows: 2, maxPages: 5 };
 
-    const last = buildThreadPage({ ...base, message, cols: 24, bodyRows: 4, maxPages: 2, page: 2 });
+    const shown = [1, 2, 3, 4, 5].flatMap((page) => buildThreadPage({ ...input, page }).lines);
+    const notice = ["reply truncated:", "max_reply_pages=5,", "reply needed 15"];
 
-    expect(last.lines.join(" ")).toContain("max_reply_pages=2");
-    expect(last.lines.length).toBeLessThanOrEqual(4);
-    expect(last.lines.every((l) => l.length <= 24)).toBe(true);
+    expect(shown.slice(-notice.length)).toEqual(notice);
+    expect(shown.slice(0, shown.length - notice.length)).toEqual(Array.from({ length: 7 }, (_, i) => `r${i + 1}`));
+    expect(shown).toHaveLength(10);
+    expect(shown.every((l) => l.length <= 20)).toBe(true);
+  });
+
+  it("throws naming the budget when the notice cannot fit the page budget", () => {
+    const message = { text: "a\nb\nc\nd", model: "m", at: hoursAgo(1) };
+
+    expect(() => buildThreadPage({ ...base, message, cols: 20, bodyRows: 1, maxPages: 2 })).toThrow(/max_reply_pages\*bodyRows=2/);
   });
 
   it("cleans reply text to device ascii", () => {

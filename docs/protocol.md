@@ -288,6 +288,8 @@ HomeRow: `{threadId, kind, project, title, ageSec}`
 | `title` | string | printable ASCII, already shortened to fit |
 | `ageSec` | int | >= 0, seconds since the last activity |
 
+Row layout, shared by firmware and relay: the device draws one row per line as `<marker> <project> <title> <age>`. `marker` is 1 column (a symbol for `kind`), `age` is right-aligned in 4 columns (for example `42s`, `5m`, `3h`, `12d`), and there are 3 single-space separators, so 8 columns are fixed. The relay clips `project` to at most `floor(cols / 3)` columns and `title` to `cols - 8 - len(project)` columns, both at least 1. Clipped text ends with `~`, so a row never needs the device to cut it.
+
 ```json relay
 {"type":"home","rows":[{"threadId":"thr_01","kind":"approval","project":"api","title":"run migration","ageSec":42},{"threadId":"thr_02","kind":"running","project":"web","title":"fix flaky test","ageSec":310}],"counts":{"needs":1,"running":1,"done":6},"approvals":{"available":true},"warnings":[],"t3":"ok"}
 ```
