@@ -611,3 +611,26 @@ TEST_CASE("parse peak table for docs/receipts (host 64-bit upper bound)")
                                                   R"(],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]})", wide);
     reportPeak("projects 255 items", R"({"type":"projects","items":[)" + repeated(R"({"projectId":"proj_0123456789","name":"api-gateway","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}})", 255) + "]}", wide);
 }
+
+TEST_CASE("a parse over the json parse budget names the budget and the frame, and encoders ignore the budget")
+{
+    std::string degenerate = R"({"type":"home","rows":[],"counts":{"needs":0,"running":0,"done":0},"approvals":{"available":true},"t3":"ok","warnings":[)";
+    for (int i = 0; i < 1000; ++i) {
+        degenerate += i == 0 ? "\"\"" : ",\"\"";
+    }
+    degenerate += "]}";
+    const t3::HelloCaps caps{40, 11, 65536, 8};
+    const char *small = R"({"type":"ack","id":"a1","ok":true})";
+
+    t3::setJsonParseBudget(4096);
+    std::string err;
+    CHECK_FALSE(t3::parseRelay(degenerate, caps, err).has_value());
+    CHECK(err == "json_parse_budget=4096, frame of " + std::to_string(degenerate.size()) + " bytes needed more");
+    err.clear();
+    CHECK(t3::parseRelay(small, caps, err).has_value());
+    CHECK(err.empty());
+    CHECK(t3::encodeReply("a1", "thr", std::string(5000, 'x'), t3::Mode::Queue).has_value());
+
+    t3::setJsonParseBudget(0);
+    CHECK(t3::parseRelay(degenerate, caps, err).has_value());
+}

@@ -58,6 +58,7 @@ uint64_t mainEnd = 0;
 bool mainHolds = false;
 std::atomic<uint32_t> generation{0};
 std::atomic<uint32_t> wantedGen{0};
+uint32_t openGen = 0;
 TaskHandle_t controlTask;
 uint32_t startGen = 0;
 
@@ -386,7 +387,7 @@ void transport_close()
 
 std::optional<std::string> transport_send(std::string_view text)
 {
-    if (wantedGen.load() == 0 || !esp_websocket_client_is_connected(client)) {
+    if (openGen != generation.load() || wantedGen.load() == 0 || !esp_websocket_client_is_connected(client)) {
         return std::string("not connected, ") + std::to_string(text.size()) + " bytes not sent";
     }
     const int sent = esp_websocket_client_send_text(client, text.data(), static_cast<int>(text.size()), kSendWaitTicks);
@@ -412,6 +413,7 @@ std::optional<TransportEvent> transport_poll()
         }
         switch (item.kind) {
         case TransportEvent::Kind::Open:
+            openGen = item.gen;
             return TransportEvent{TransportEvent::Kind::Open, 0, {}};
         case TransportEvent::Kind::Text:
             mainEnd = item.end;

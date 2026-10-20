@@ -196,6 +196,7 @@ struct JsonAllocator {
 };
 
 void setJsonAllocator(const JsonAllocator &allocator);
+void setJsonParseBudget(size_t bytes);
 
 struct LaunchOptions {
     std::optional<std::string> model;

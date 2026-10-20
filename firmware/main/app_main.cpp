@@ -25,6 +25,8 @@ constexpr char TAG[] = "t3";
 constexpr TickType_t kMainPollTicks = pdMS_TO_TICKS(20);
 // receipt: RFC 6455 section 7.4.1, 1006 is a close with no close frame, which is what a dropped socket looks like to the link
 constexpr int kAbnormalClose = 1006;
+// receipt: docs/receipts/2026-10-21-firmware-network.md "json parse budget", 1.95x the ADV's honest worst parse (4.1 x 8192 = 33.6 KB) and 1.3x the host's honest bound (6 x 8192 = 49.2 KB)
+constexpr size_t kJsonParseBudgetBytes = 65536;
 
 // receipt: docs/receipts/2026-10-21-firmware-network.md "hello caps"; bodyRows 7 is the controller ruling (thread screen: bar, header, reply line, hint)
 constexpr t3::HelloCaps kCaps{t3::Grid::Cols, 7, 8192, 32};
@@ -336,6 +338,7 @@ extern "C" void app_main(void)
         halt();
     }
     log_heap("wifi init");
+    t3::setJsonParseBudget(kJsonParseBudgetBytes);
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
     device.boot(!settings::wifi().empty(), token.has_value());
