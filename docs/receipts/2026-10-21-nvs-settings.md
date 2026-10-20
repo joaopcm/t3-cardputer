@@ -23,7 +23,7 @@ Layout: namespace `t3`, keys `wifi` (blob, array of `WifiRecord {char ssid[33]; 
 | matrix | 7 rows x 8 cols = 56 keys = 4 x 14 | `KP_GPIO1=0x7F`, `KP_GPIO2=0xFF` from the Task 1 template |
 | free internal heap at `ready` | 339208 bytes (Task 2 baseline 347184: -7976) | `t3: ready heap_internal_free`; the difference is nvs_flash init, the i2c bus and the larger static App |
 
-The event-code to key mapping (`firmware/components/t3core/keymap.cpp`) is unit tested but its code layout (`x = row*2 + col/4`, `y = col%4`) is from the M5Cardputer ADV driver layout, not yet from a physical keypress; Checkpoint A confirms it with the `keyboard: event code=N down|up` log lines.
+The event-code to key mapping (`firmware/components/t3core/keymap.cpp`) is unit tested but its code layout (`x = row*2 + col/4`, `y = col%4`) is from the M5Cardputer ADV driver layout, not yet from a physical keypress; Checkpoint A confirms it with the `keyboard: event code=N down|up` log lines from a build with `CONFIG_T3_KEYBOARD_TRACE=y` (default n: the log would record typed passwords).
 
 ## display right edge
 

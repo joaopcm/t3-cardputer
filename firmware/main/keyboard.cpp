@@ -94,7 +94,7 @@ std::optional<t3::Key> keyboard_poll()
         const uint8_t code = event & kEventCodeMask;
         const bool pressed = (event & kEventPressed) != 0;
         const std::optional<t3::Key> key = decoder.onEvent(code, pressed);
-#ifdef CONFIG_T3_DEBUG_SERIAL
+#ifdef CONFIG_T3_KEYBOARD_TRACE
         ESP_LOGI(TAG, "event code=%u %s", static_cast<unsigned>(code), pressed ? "down" : "up");
 #endif
         if (key) {

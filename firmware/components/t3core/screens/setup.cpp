@@ -127,19 +127,54 @@ App::Out App::onPairResult(std::optional<std::string> token, std::string_view wh
     if (!pairing_) {
         return {};
     }
-    pairing_ = false;
     if (!token || token->empty()) {
+        pairing_ = false;
         inform(why.empty() ? "pairing failed" : std::string(why));
         return {};
     }
     Out out;
     out.storeToken = std::move(*token);
+    return out;
+}
+
+App::Out App::onTokenStored(bool ok, std::string_view why)
+{
+    if (!pairing_) {
+        return {};
+    }
+    pairing_ = false;
+    pairCode_.clear();
+    if (!ok) {
+        inform(why.empty() ? "token not saved" : std::string(why));
+        return {};
+    }
+    Out out;
     out.reconnect = true;
     hasToken_ = true;
-    pairCode_.clear();
     pairNote_.clear();
     leaveSetup();
     inform("paired", Color::Ok);
+    return out;
+}
+
+void App::onWifiForgotten(std::string_view ssid, bool ok, std::string_view why)
+{
+    if (!ok) {
+        inform(why.empty() ? "wifi not forgotten" : std::string(why));
+        return;
+    }
+    for (WifiNet &net : nets_) {
+        if (net.ssid == ssid) {
+            net.saved = false;
+        }
+    }
+}
+
+App::Out App::showWifiList()
+{
+    Out out;
+    screen_ = Screen::SetupWifiList;
+    out.scanWifi = !scanned_;
     return out;
 }
 
@@ -177,7 +212,6 @@ App::Out App::wifiListKey(Key key)
             out.scanWifi = true;
         } else if (upper(key.ch) == 'D' && count > 0 && nets_[netSelected_].saved) {
             out.forgetWifi = nets_[netSelected_].ssid;
-            nets_[netSelected_].saved = false;
         }
         return out;
     default:
@@ -199,14 +233,12 @@ App::Out App::wifiPasswordKey(Key key)
         break;
     case KeyName::Backspace:
         if (wifiPassword_.empty()) {
-            screen_ = Screen::SetupWifiList;
-        } else {
-            wifiPassword_.pop_back();
+            return showWifiList();
         }
+        wifiPassword_.pop_back();
         break;
     case KeyName::Esc:
-        screen_ = Screen::SetupWifiList;
-        break;
+        return showWifiList();
     case KeyName::Enter:
         if (joining_) {
             inform("joining...", Color::Ok);
@@ -237,14 +269,12 @@ App::Out App::pairKey(Key key)
         break;
     case KeyName::Backspace:
         if (pairCode_.empty()) {
-            screen_ = Screen::SetupWifiList;
-        } else {
-            pairCode_.pop_back();
+            return showWifiList();
         }
+        pairCode_.pop_back();
         break;
     case KeyName::Esc:
-        screen_ = Screen::SetupWifiList;
-        break;
+        return showWifiList();
     case KeyName::Enter:
         if (pairing_) {
             inform("pairing...", Color::Ok);

@@ -6,4 +6,10 @@ menu "T3"
         help
             Compiles and starts the debug channel. Release builds turn it off.
 
+    config T3_KEYBOARD_TRACE
+        bool "Log the raw keyboard event code of every key (records typed passwords by matrix position)"
+        default n
+        help
+            For checking the key map on a physical keyboard at a checkpoint. Never leave it on: the log shows what is typed, passwords included.
+
 endmenu

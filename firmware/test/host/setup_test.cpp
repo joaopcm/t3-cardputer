@@ -368,7 +368,7 @@ TEST_CASE("a join result nobody asked for changes nothing")
     CHECK(app.screenName() == "setup_wifi");
 }
 
-TEST_CASE("D forgets the saved network under the cursor and only that one")
+TEST_CASE("D asks to forget the saved network under the cursor and only that one, the row changes when it is forgotten")
 {
     App app = onList();
     CHECK_FALSE(press(app, ch('d')).forgetWifi.has_value());
@@ -376,7 +376,20 @@ TEST_CASE("D forgets the saved network under the cursor and only that one")
     const App::Out out = press(app, ch('d'));
     REQUIRE(out.forgetWifi.has_value());
     CHECK(*out.forgetWifi == "home-5g");
+    CHECK(contains(allText(app), "saved"));
+    app.onWifiForgotten("home-5g", true, "");
     CHECK_FALSE(contains(allText(app), "saved"));
+}
+
+TEST_CASE("a forget that was not written says why and keeps the saved tag")
+{
+    App app = onList();
+    press(app, named(KeyName::Down));
+    press(app, ch('d'));
+    app.onWifiForgotten("home-5g", false, "nvs: wifi not saved: ESP_ERR_NVS_NOT_ENOUGH_SPACE");
+    CHECK(rows(app)[0].rfind("nvs: wifi not saved:", 0) == 0);
+    CHECK(contains(allText(app), "ESP_ERR_NVS_NOT_ENOUGH_SPACE"));
+    CHECK(contains(allText(app), "saved"));
 }
 
 TEST_CASE("escape climbs one level at a time and leaves setup from the list")
@@ -437,7 +450,7 @@ TEST_CASE("a full code emits one pair request named cardputer")
     CHECK_FALSE(press(app, named(KeyName::Enter)).pair.has_value());
 }
 
-TEST_CASE("a paired token is handed out to store, setup closes and the link reconnects")
+TEST_CASE("a paired token is handed out to store, and only a stored token closes setup and reconnects")
 {
     App app = onPair();
     type(app, "7KQ2M9XA");
@@ -445,9 +458,38 @@ TEST_CASE("a paired token is handed out to store, setup closes and the link reco
     const App::Out out = app.onPairResult("tok_abc", "");
     REQUIRE(out.storeToken.has_value());
     CHECK(*out.storeToken == "tok_abc");
-    CHECK(out.reconnect);
+    CHECK_FALSE(out.reconnect);
+    CHECK(app.screenName() == "setup_pair");
+    CHECK_FALSE(contains(allText(app), "paired"));
+    const App::Out done = app.onTokenStored(true, "");
+    CHECK(done.reconnect);
     CHECK(app.screenName() == "connecting");
     CHECK(contains(allText(app), "paired"));
+}
+
+TEST_CASE("a token that was not written says why, never says paired and asks for a new code")
+{
+    App app = onPair();
+    type(app, "7KQ2M9XA");
+    press(app, named(KeyName::Enter));
+    app.onPairResult("tok_abc", "");
+    const App::Out out = app.onTokenStored(false, "nvs: token not saved: ESP_ERR_NVS_NOT_ENOUGH_SPACE");
+    CHECK_FALSE(out.reconnect);
+    CHECK(app.screenName() == "setup_pair");
+    CHECK(rows(app)[0].rfind("nvs: token not saved:", 0) == 0);
+    CHECK(contains(allText(app), "ESP_ERR_NVS_NOT_ENOUGH_SPACE"));
+    CHECK_FALSE(contains(allText(app), "paired"));
+    CHECK(contains(allText(app), "code 0/8"));
+    type(app, "7KQ2M9XA");
+    CHECK(press(app, named(KeyName::Enter)).pair.has_value());
+}
+
+TEST_CASE("a token result nobody asked for is ignored")
+{
+    App app = onPair();
+    const App::Out out = app.onTokenStored(true, "");
+    CHECK_FALSE(out.reconnect);
+    CHECK(app.screenName() == "setup_pair");
 }
 
 TEST_CASE("a failed pairing says why, keeps the code and lets the user retry")
@@ -471,13 +513,32 @@ TEST_CASE("a pair result nobody asked for is ignored")
     CHECK(app.screenName() == "setup_pair");
 }
 
-TEST_CASE("pairing a device that has no wifi yet goes back to wifi on escape")
+TEST_CASE("escape from a pair screen opened without a scan goes to the wifi list and asks for one")
 {
-    App app(kCaps, 7);
-    app.onBoot(false, false);
-    app.onWifiScan(kNets);
+    App app = onPair();
+    const App::Out out = press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "setup_wifi");
+    CHECK(out.scanWifi);
+    CHECK(contains(allText(app), "scanning"));
+}
+
+TEST_CASE("backspace on an empty code does the same, also after a 4401")
+{
+    App app = live();
+    app.onAuthRejected();
+    const App::Out out = press(app, named(KeyName::Backspace));
+    CHECK(app.screenName() == "setup_wifi");
+    CHECK(out.scanWifi);
+}
+
+TEST_CASE("escape from a pair screen reached from a scanned list does not scan again")
+{
+    App app = onList();
     press(app, named(KeyName::Tab));
-    CHECK(app.screenName() == "setup_pair");
+    const App::Out out = press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "setup_wifi");
+    CHECK_FALSE(out.scanWifi);
+    CHECK(contains(allText(app), "corner-cafe"));
 }
 
 TEST_CASE("a request pushed during setup is a notice, not a screen change")

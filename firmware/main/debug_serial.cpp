@@ -92,8 +92,8 @@ void handleKey(std::string_view name)
 {
     const auto key = t3::parseKeyName(name);
     if (!key) {
-        ESP_LOGW(TAG, "key name unknown: %.*s", static_cast<int>(name.size()), name.data());
-        emitLine("ERR key name unknown: %.*s", static_cast<int>(name.size()), name.data());
+        ESP_LOGW(TAG, "key name unknown, %u bytes", static_cast<unsigned>(name.size()));
+        emitLine("ERR key name unknown, %u bytes", static_cast<unsigned>(name.size()));
         return;
     }
     if (xQueueSend(keyQueue, &*key, 0) != pdTRUE) {
@@ -101,7 +101,7 @@ void handleKey(std::string_view name)
         emitLine("ERR key_queue=%u, queue full", static_cast<unsigned>(kKeyQueueDepth));
         return;
     }
-    emitLine("KEY %.*s", static_cast<int>(name.size()), name.data());
+    emitLine("KEY ok");
 }
 
 void handleLine(std::string_view line)

@@ -67,7 +67,8 @@ void feed(t3::App &app, const t3::App::Out &out)
         app.onWifiScan(demo_scan());
     }
     if (out.forgetWifi) {
-        settings::removeWifi(*out.forgetWifi);
+        const std::optional<std::string> error = settings::removeWifi(*out.forgetWifi);
+        app.onWifiForgotten(*out.forgetWifi, !error, error.value_or(""));
     }
     if (out.joinWifi) {
         const std::optional<std::string> error = settings::addWifi({out.joinWifi->ssid, out.joinWifi->password});
@@ -77,7 +78,8 @@ void feed(t3::App &app, const t3::App::Out &out)
         feed(app, app.onPairResult("demo-token-" + out.pair->code, ""));
     }
     if (out.storeToken) {
-        settings::setToken(*out.storeToken);
+        const std::optional<std::string> error = settings::setToken(*out.storeToken);
+        feed(app, app.onTokenStored(!error, error.value_or("")));
     }
     for (const std::string &frame : out.send) {
         for (const std::string &answer : demo_relay_answer(frame)) {
@@ -86,15 +88,27 @@ void feed(t3::App &app, const t3::App::Out &out)
     }
 }
 
-std::string loggedKey(const t3::App &app, const t3::Key &key)
+std::string loggedKey(const t3::Key &key)
 {
-    const bool secret = key.name == t3::KeyName::Char && app.screenName() == "setup_password";
-    return secret ? "char:*" : t3::keyNameString(key);
+    return key.name == t3::KeyName::Char ? "char:*" : t3::keyNameString(key);
+}
+
+void show_fatal(std::string_view message)
+{
+    ESP_LOGE(TAG, "%.*s", static_cast<int>(message.size()), message.data());
+    t3::Grid grid;
+    grid.put(0, 0, "setup", t3::Color::Text);
+    int row = 2;
+    for (const std::string &line : t3::wrapWords(message, t3::Grid::Cols)) {
+        grid.put(row++, 0, line, t3::Color::Red);
+    }
+    grid.put(row + 1, 0, "wifi and the token cannot be saved", t3::Color::Warn);
+    display_draw(grid);
 }
 
 void handle_key(t3::App &app, const t3::Key &key)
 {
-    ESP_LOGI(TAG, "key %s", loggedKey(app, key).c_str());
+    ESP_LOGI(TAG, "key %s", loggedKey(key).c_str());
     feed(app, app.onKey(key, now_ms()));
     draw(app);
     ESP_LOGI(TAG, "screen %.*s", static_cast<int>(app.screenName().size()), app.screenName().data());
@@ -105,10 +119,17 @@ void handle_key(t3::App &app, const t3::Key &key)
 extern "C" void app_main(void)
 {
     log_heap("boot");
-    if (!settings::init() || !display_init()) {
+    if (!display_init()) {
         return;
     }
     log_heap("sprite");
+    if (const std::optional<std::string> error = settings::init()) {
+        show_fatal(*error);
+        debug_serial_start();
+        for (;;) {
+            vTaskDelay(portMAX_DELAY);
+        }
+    }
     const bool keyboard_ok = keyboard_init();
     ESP_LOGI(TAG, "keyboard %s", keyboard_ok ? "ready" : "missing");
     static t3::App app(kDemoCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random());

@@ -58,6 +58,8 @@ public:
     void onWifiScan(std::vector<WifiNet> nets);
     Out onWifiResult(bool ok, std::string_view why);
     Out onPairResult(std::optional<std::string> token, std::string_view why);
+    Out onTokenStored(bool ok, std::string_view why);
+    void onWifiForgotten(std::string_view ssid, bool ok, std::string_view why);
     void draw(Grid &grid) const;
     std::string_view screenName() const;
 
@@ -117,6 +119,7 @@ private:
 
     Out openSetup();
     void leaveSetup();
+    Out showWifiList();
     Out wifiListKey(Key key);
     Out wifiPasswordKey(Key key);
     Out pairKey(Key key);
