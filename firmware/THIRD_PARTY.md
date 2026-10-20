@@ -28,7 +28,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## pinned at build time (not vendored, cloned by scripts/deps.sh)
+## pinned at build time (not vendored, fetched by the IDF component manager, see firmware/main/idf_component.yml and firmware/dependencies.lock)
 
 - M5GFX 0.2.33 (MIT) https://github.com/m5stack/M5GFX
 - M5Unified 0.2.27 (MIT) https://github.com/m5stack/M5Unified

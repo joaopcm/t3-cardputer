@@ -7,6 +7,4 @@ firmware/local.cmake
 firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
-firmware/dependencies.lock
-firmware/components/
 firmware/test/host/build/
