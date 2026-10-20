@@ -19,7 +19,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 2. Relay answers `welcome`, then `home`. Nothing else is sent before `welcome`. `home` is immediate when the relay already watches T3 for another connection; otherwise it waits for the relay's first T3 poll, which a hung T3 can stretch. The wait is capped at `mcpRequestTimeoutMs` (30 s by default): past it the relay sends a `home` with no rows, `t3:"unreachable"`, and the warning `T3 slow: no answer within mcpRequestTimeoutMs=30000, home follows when it answers`, then the real `home` once T3 answers. Show a "connecting" screen between `welcome` and the first `home`.
 3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted. `thread_page` is pushed for the thread last opened with `open_thread` or `page`, at the page the device is on (clamped if the reply got shorter), whenever that thread's status or latest activity changes.
 4. Every device message with an `id` gets exactly one `ack` with the same `id`. If the message fails validation but still has a usable `id` (a string of 1 to 16 characters), the ack is `ack {ok:false, error}` and `error` names the field. Only a malformed frame with no usable `id` gets a bare `error {code:"bad_message"}`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
-5. On reconnect the device sends `hello` again and gets `welcome` then `home`. Nothing is replayed, the relay sends full state.
+5. On reconnect the device sends `hello` again and gets `welcome` then `home`. Nothing is replayed, the relay sends full state. The open thread does not survive a reconnect either: a device that was showing a thread sends `open_thread` for it again after `welcome` to get its `thread_page` and pending `request` pushes back.
 
 ## Message ids
 
@@ -71,7 +71,7 @@ POST /v1/pair
 | 4401 | auth: the relay rejected the token (unknown, wrong, or revoked), preceded by `error auth`. Also sent mid-session, after `welcome`, when the device is revoked on the relay (`error auth` "device revoked, re-pair this device", then close 4401). Only a token problem closes with 4401 | stop reconnecting, show "re-pair", clear the stored token |
 | 4402 | bad_hello: the first frame was not a `hello`, or `hello` failed validation (preceded by `error bad_message` naming the problem) | stop reconnecting, show the error message; firmware bug or incompatible build, re-pairing will not help |
 | 4408 | hello_timeout: no `hello` within `helloTimeoutMs` (preceded by `error hello_timeout` naming the budget), usually a stalled hotspot | keep the token, reconnect with backoff |
-| 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "taken over by another connection" |
+| 4000 | replaced: a newer connection from the same device took over | stop reconnecting, show "replaced by another connection" |
 
 Any other close (network drop, relay restart) is reconnected with backoff.
 
@@ -143,7 +143,7 @@ Ask for another page of an open thread. Answered by `ack`, then `thread_page`.
 
 ### reply
 
-Send a message into a thread. `queue` waits for the running turn to finish, `steer` interrupts it.
+Send a message into a thread. `queue` waits for the running turn to finish, `steer` delivers the message into the running turn (T3 `steer`), it does not interrupt.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
@@ -166,7 +166,7 @@ Answer a `request`. `requestId` and `value` come from the `request` message and 
 | `type` | `"respond"` | yes | |
 | `id` | string | yes | 1-16 chars |
 | `threadId` | string | yes | 1-128 chars |
-| `requestId` | string | yes | 1-128 chars, from `request.requestId` |
+| `requestId` | string | yes | 1-128 chars, the opaque handle from `request.requestId` |
 | `value` | string | yes | 1-128 chars, from `request.options[].value` |
 | `text?` | string | no | 1-1000 chars |
 
@@ -188,7 +188,7 @@ Start a new thread in a project. Omitted `model`, `workspace`, `runtimeMode` use
 | `id` | string | yes | 1-16 chars |
 | `projectId` | string | yes | 1-128 chars, from `projects` |
 | `text` | string | yes | 1-4000 chars, the first prompt |
-| `model?` | string | no | 1-128 chars, a model id from `projects.defaults.model` |
+| `model?` | string | no | 1-128 chars, a model id from `projects.models[].id` or `projects.defaults.model` |
 | `workspace?` | `"root"` or `"worktree"` | no | |
 | `runtimeMode?` | string | no | `"approval-required"`, `"auto-accept-edits"`, `"auto"`, or `"full-access"` |
 
@@ -373,20 +373,20 @@ One page of a thread, already wrapped to `cols` and cut to at most `bodyRows` li
 
 A thread is waiting on the user. The device shows `lines` and the `options`, then answers with `respond`.
 
-The relay sends `request` after the `thread_page` of an `open_thread` when that thread is waiting, and again whenever a new request shows up on the open thread. A T3 question can hold several questions under one `requestId`: the relay sends them one at a time with the same `requestId`, each `respond` answers the question on screen, and T3 gets all the answers after the last one.
+The relay sends `request` after the `thread_page` of an `open_thread` when that thread is waiting, and again whenever a new request shows up on the open thread. The `requestId` is a handle the relay makes up, not T3's own id (T3 ids run past 300 characters). It stays the same while the request is pending, so a re-sent `request` carries the same value. A `respond` whose handle is no longer pending gets `ack {ok:false}` with the error `request no longer pending, refresh`. A T3 question can hold several questions under one `requestId`: the relay sends them one at a time with the same `requestId`, each `respond` answers the question on screen, and T3 gets all the answers after the last one.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"request"` | yes | |
 | `threadId` | string | yes | |
-| `requestId` | string | yes | echo it in `respond.requestId` |
+| `requestId` | string | yes | opaque handle, 1-128 chars, chosen by the relay with no shape guarantees; echo it in `respond.requestId` |
 | `kind` | `"approval"` or `"question"` | yes | |
 | `lines` | string[] | yes | wrapped to `cols`, printable ASCII |
 | `options` | Option[] | yes | |
 
 Option: `{key, label, value}`. `key` is one character, the key the user presses; `label` is 1-64 printable ASCII chars; `value` is 1-128 chars, echoed in `respond.value`.
 
-Fit rule: the device draws `lines`, then one row per option. The relay keeps `lines.length + options.length <= bodyRows` (at least one line) and the whole frame within `maxFrameBytes`, so every request fits one screen. When the text is longer, the relay cuts it and ends `lines` with a notice that names the budget that cut it, wrapped to `cols`: `command truncated: 113 more lines, bodyRows=11` for an approval, `question truncated: ...` for a question, or `..., maxFrameBytes=4096` when bytes, not rows, were the limit. Options are never cut, and a question's notes (`(showing 9 of 12 options, T to type another)`, `(pick one)`) stay after the notice. If even the options alone do not fit `maxFrameBytes`, the relay sends `error {code:"internal"}` naming `max_frame_bytes` once for that request instead of the request.
+Fit rule: the device draws `lines`, then one row per option. The relay keeps `lines.length + options.length <= bodyRows` (at least one line) and the whole frame within `maxFrameBytes`, so every request fits one screen. When the text is longer, the relay cuts it and ends `lines` with a notice that names the budget that cut it, wrapped to `cols`: `command truncated: 113 more lines, bodyRows=11` for an approval, `question truncated: ...` for a question, or `..., maxFrameBytes=4096` when bytes, not rows, were the limit. Options are never cut, and a question's notes (`(showing 9 of 12 options, T to type another)`, `(pick one)`) stay after the notice. If even the options alone do not fit `maxFrameBytes`, the relay sends `error {code:"internal"}` naming `max_frame_bytes` once for that request instead of the request. A device should still accept a `request` taller than `bodyRows` (a question with more options than rows can produce one) and scroll it, with every option reachable, rather than reject the frame.
 
 - Approval requests use keys `Y` (value `allow_once`), `A` (`allow_always`), `N` (`deny`), `T` (`deny_with_reason`). On `T` the device asks for a reason and sends it as `respond.text`.
 - Question requests use keys `1` to `9` for the choices. Whenever free text is allowed (a question with no choices, or more choices than fit in keys `1` to `9`), `options` carries an explicit entry `{key:"T", label:"Type answer", value:"text"}`. On `T` the device collects text and sends `respond` with `value` `"text"` and the answer in `respond.text`. A device should also treat a question whose `options` list is empty as free text, so it never shows a screen with nothing to press.
@@ -409,18 +409,25 @@ Fit rule: the device draws `lines`, then one row per option. The relay keeps `li
 
 ### projects
 
-Projects the device can launch into, with the defaults a `launch` gets when it omits a field. Sorted most recently active first (latest thread activity in the project, else the project's own update time), already in display order.
+Projects the device can launch into, with the defaults a `launch` gets when it omits a field, and the models a `launch` may name. Sorted most recently active first (latest thread activity in the project, else the project's own update time), already in display order.
 
 The list fits the same budgets as home: at most `hello.maxHomeRows` items (and the relay's own `maxHomeRows` limit, whichever is lower), and a frame within `maxFrameBytes`. When projects are left out, `truncated` says how many and which budget did it; the device shows it under the list, for example `+32 more projects: maxHomeRows=8, needed 40`. Left-out projects are the least recently active ones.
+
+`models` are the models T3 can run now, in catalog order: only provider instances with no constraints (not disabled, installed, signed in), each id once even when two instances offer it. `label` is T3's own label as printable ASCII, 1-24 chars, clipped with a trailing `~`; `id` is what `launch.model` takes. The relay remembers which provider instance offers each id and launches on it; the device never sees instances. The list shares the frame budget with the projects: it is kept whole while at least one project fits beside it, and cut from the end only when it would otherwise push every project out. `models` is absent when T3 offers none. A device with no `models` offers only the project's default model. When the relay cannot read T3's catalog it sends `projects` without `models` and adds `model list unavailable: <why>` to the `warnings` of the next `home`; launching is not blocked.
 
 | Field | Type | Req | Constraint |
 | --- | --- | --- | --- |
 | `type` | `"projects"` | yes | |
 | `items` | object[] | yes | `{projectId, name, defaults: {model, workspace, runtimeMode}}`; `workspace` is `"root"` or `"worktree"`, `runtimeMode` is one of the four launch values |
+| `models?` | object[] | no | `{id, label}`; `id` is 1-128 chars, `label` 1-24 printable ASCII chars |
 | `truncated?` | object | no | `{budget: string, limit: int, actual: int, hidden: int}`; present when projects were left out: `budget` is `maxHomeRows` or `maxFrameBytes`, `limit` its value, `actual` what all projects needed (a count for `maxHomeRows`, bytes for `maxFrameBytes`), `hidden` how many projects are not in `items` |
 
 ```json relay
 {"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}]}
+```
+
+```json relay
+{"type":"projects","items":[{"projectId":"proj_1","name":"api","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}}],"models":[{"id":"claude-opus-5-5","label":"Claude Opus 5.5"},{"id":"claude-sonnet-5-5","label":"Claude Sonnet 5.5"},{"id":"claude-haiku-5-5","label":"Claude Haiku 5.5"}]}
 ```
 
 ```json relay

@@ -21,15 +21,15 @@ import {
 } from "./protocol/messages.js";
 import { AudioBuffer, BudgetError } from "./stt/audio-buffer.js";
 import type { Stt } from "./stt/types.js";
-import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
+import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Model, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
 import { toDeviceAscii } from "./text/device-text.js";
 import { buildHome } from "./views/home.js";
 import { buildProjects } from "./views/projects.js";
-import { buildRequest } from "./views/request.js";
+import { buildRequest, requestHandle } from "./views/request.js";
 import { buildThreadPage, type ThreadPageMessage } from "./views/thread.js";
 import { EMPTY_SNAPSHOT, T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, type WatcherT3 } from "./watcher.js";
 
-export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch">;
+export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch" | "listModels">;
 export type ApprovalsState = { available: boolean; reason?: string };
 export type ApprovalsDownPhase = "checking" | "fixing" | "none";
 const DOWN_PHASE_SUFFIX: Record<ApprovalsDownPhase, string> = { checking: ", checking again", fixing: ", fix in progress", none: "" };
@@ -91,6 +91,8 @@ export class Hub {
   private canaryCleared: string | undefined;
   private canaryDown: { reason: string; phase: ApprovalsDownPhase } | undefined;
   private repairWarning: string | undefined;
+  private catalogWarning: string | undefined;
+  private modelCatalog = new Map<string, T3Model>();
   private adapter: AdapterHealth = { state: "idle" };
 
   constructor(
@@ -136,7 +138,31 @@ export class Hub {
   }
 
   warnings(): string[] {
-    return [...(this.deps.warnings?.() ?? []), this.deps.stt.warning?.(), this.repairWarning].filter((warning) => warning !== undefined);
+    return [...(this.deps.warnings?.() ?? []), this.deps.stt.warning?.(), this.repairWarning, this.catalogWarning].filter((warning) => warning !== undefined);
+  }
+
+  async loadModels(): Promise<T3Model[]> {
+    try {
+      const models = await this.deps.t3.listModels();
+      this.modelCatalog = new Map(models.map((model) => [model.id, model]));
+      this.setCatalogWarning(undefined);
+      return models;
+    } catch (error) {
+      console.error("model list unavailable", error);
+      this.setCatalogWarning(clipText(`model list unavailable: ${(error as Error).message}`));
+      return [];
+    }
+  }
+
+  async providerInstanceFor(model: string): Promise<string | undefined> {
+    if (!this.modelCatalog.has(model)) await this.loadModels();
+    return this.modelCatalog.get(model)?.providerInstanceId;
+  }
+
+  private setCatalogWarning(text: string | undefined): void {
+    if (text === this.catalogWarning) return;
+    this.catalogWarning = text;
+    for (const session of this.sessions.values()) session.refreshHome();
   }
 
   setRepairWarning(text: string | undefined): void {
@@ -581,13 +607,15 @@ export class Session {
     const project = (await this.hub.watcher.current()).projects.find((p) => p.projectId === msg.projectId);
     if (!project) return fail(msg.id, `project not found: ${msg.projectId}`);
     const used = { ...t3Defaults(project), ...defaults.get(project.projectId), ...definedLaunchOptions(msg) };
+    const sendsModel = used.model !== "" && used.model !== project.defaultModel;
+    const providerInstanceId = sendsModel ? await this.hub.providerInstanceFor(used.model) : undefined;
     await t3.launch({
       projectId: project.projectId,
       title: msg.text.split("\n").find((line) => line.trim() !== "")?.trim() ?? msg.text,
       message: msg.text,
       workspace: used.workspace,
       runtimeMode: used.runtimeMode,
-      ...(used.model !== "" && used.model !== project.defaultModel ? { model: used.model } : {}),
+      ...(sendsModel ? { model: used.model, ...(providerInstanceId === undefined ? {} : { providerInstanceId }) } : {}),
     });
     if (used.model !== "") defaults.remember(project.projectId, used);
     return ok(msg.id);
@@ -595,11 +623,13 @@ export class Session {
 
   private async respond(msg: Of<"respond">, clientRequestId: string): Promise<Ack> {
     const snapshot = await this.hub.watcher.current();
-    const approval = snapshot.approvals.find((a) => a.threadId === msg.threadId && a.requestId === msg.requestId);
+    const isHandle = (t3RequestId: string) => requestHandle(msg.threadId, t3RequestId) === msg.requestId;
+    const approval = snapshot.approvals.find((a) => a.threadId === msg.threadId && isHandle(a.requestId));
     if (approval) return this.respondApproval(msg, approval, clientRequestId);
-    const questions = (snapshot.questions.get(msg.threadId) ?? []).filter((q) => q.requestId === msg.requestId);
-    if (questions.length > 0) return this.respondQuestion(msg, questions);
-    return fail(msg.id, "request is not pending");
+    const questions = (snapshot.questions.get(msg.threadId) ?? []).filter((q) => isHandle(q.requestId));
+    const [first] = questions;
+    if (first) return this.respondQuestion(msg, first.requestId, questions);
+    return fail(msg.id, "request no longer pending, refresh");
   }
 
   private async respondApproval(msg: Of<"respond">, approval: PendingApproval, clientRequestId: string): Promise<Ack> {
@@ -619,8 +649,8 @@ export class Session {
     return ok(msg.id);
   }
 
-  private async respondQuestion(msg: Of<"respond">, questions: T3Question[]): Promise<Ack> {
-    const collected = this.hub.answersFor(msg.threadId, msg.requestId);
+  private async respondQuestion(msg: Of<"respond">, t3RequestId: string, questions: T3Question[]): Promise<Ack> {
+    const collected = this.hub.answersFor(msg.threadId, t3RequestId);
     const current = questions.find((q) => !(q.questionId in collected));
     if (current) {
       const answer = msg.value === "text" ? msg.text : current.options.find((o) => o.value === msg.value)?.value;
@@ -634,8 +664,8 @@ export class Session {
         return ok(msg.id);
       }
     }
-    await this.hub.deps.t3.answerQuestion(msg.threadId, msg.requestId, collected);
-    this.hub.forgetAnswers(msg.threadId, msg.requestId);
+    await this.hub.deps.t3.answerQuestion(msg.threadId, t3RequestId, collected);
+    this.hub.forgetAnswers(msg.threadId, t3RequestId);
     return ok(msg.id);
   }
 
@@ -729,6 +759,7 @@ export class Session {
 
   private async listProjects(id: string): Promise<Ack> {
     const projects = await this.hub.deps.t3.listProjects();
+    const models = await this.hub.loadModels();
     const byId = new Map(projects.map((p) => [p.projectId, p]));
     const activity = new Map<string, number>();
     for (const thread of (await this.hub.watcher.current()).threads) {
@@ -741,6 +772,7 @@ export class Session {
       { get: (projectId) => this.hub.deps.defaults.get(projectId) ?? t3Defaults(byId.get(projectId)) },
       { model: "", workspace: "root", runtimeMode: FALLBACK_RUNTIME_MODE },
       { maxRows: Math.min(hello.maxHomeRows, this.hub.deps.limits.maxHomeRows), maxFrameBytes: hello.maxFrameBytes, activity },
+      models,
     );
     this.send(view);
     return ok(id);

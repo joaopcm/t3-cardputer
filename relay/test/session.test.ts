@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PendingApproval } from "../src/approvals/index.js";
 import type { Limits } from "../src/config.js";
 import type { RelayMessage } from "../src/protocol/messages.js";
 import { T3UnavailableError } from "../src/t3/mcp.js";
+import { requestHandle } from "../src/views/request.js";
 import { Watcher, type WatchSnapshot } from "../src/watcher.js";
 import { Device, FakeApprovals, FakeT3, HOURS_AGO, POLL_MS, cleanupAfterEach, deferred, onCleanup, startRelay, summary } from "./helpers/relay-fixture.js";
 
@@ -214,7 +216,7 @@ describe("device session", () => {
     const page = await device.next("thread_page");
     expect(page.lines).toEqual(["reply on t1"]);
     const request = await device.next("request");
-    expect(request).toMatchObject({ threadId: "t1", requestId: "req1", kind: "approval" });
+    expect(request).toMatchObject({ threadId: "t1", requestId: requestHandle("t1", "req1"), kind: "approval" });
   });
 
   it("a 120-line command approval reaches a 4096-byte device with its options and a truncation line, and can be answered", async () => {
@@ -229,7 +231,7 @@ describe("device session", () => {
     expect(request.lines.join(" ")).toMatch(/command truncated: \d+ more lines, bodyRows=11/);
     expect(request.lines.length + request.options.length).toBeLessThanOrEqual(11);
     expect(device.received.some((m) => m.type === "error")).toBe(false);
-    device.send({ type: "respond", id: "a1", threadId: "t1", requestId: "req1", value: "deny" });
+    device.send({ type: "respond", id: "a1", threadId: "t1", requestId: request.requestId, value: "deny" });
     expect(await device.next("ack", (a) => a.id === "a1")).toMatchObject({ ok: true });
     expect(approvals.responses).toEqual([{ threadId: "t1", requestId: "req1", decision: { kind: "deny" } }]);
   });
@@ -260,6 +262,78 @@ describe("device session", () => {
     expect(projects.items.slice(0, 2).map((p) => p.projectId)).toEqual(["p12", "p30"]);
     expect(projects.truncated).toEqual({ budget: "maxHomeRows", limit: 8, actual: 40, hidden: 32 });
     expect(device.received.some((m) => m.type === "error")).toBe(false);
+  });
+
+  it("list_projects offers the usable models and launch sends the chosen model's provider instance", async () => {
+    const { t3, connected } = await setup();
+    t3.models = [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", providerInstanceId: "claudeAgent" },
+      { id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "grokAgent" },
+    ];
+    const device = await connected();
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect((await device.next("ack")).id).toBe("l1");
+    expect(projects.models).toEqual([
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+      { id: "grok-4.7", label: "Grok 4.7" },
+    ]);
+
+    device.send({ type: "launch", id: "l2", projectId: "p1", text: "go", model: projects.models![1]!.id });
+    expect(await device.next("ack")).toMatchObject({ id: "l2", ok: true });
+    expect(t3.launches[0]).toMatchObject({ projectId: "p1", model: "grok-4.7", providerInstanceId: "grokAgent" });
+  });
+
+  it("launch with a model the device never listed asks the catalog, and falls back to the default instance when it is unknown", async () => {
+    const { t3, connected } = await setup();
+    t3.models = [{ id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "grokAgent" }];
+    const device = await connected();
+    device.send({ type: "launch", id: "l1", projectId: "p1", text: "go", model: "grok-4.7" });
+    await device.next("ack");
+    device.send({ type: "launch", id: "l2", projectId: "p1", text: "go", model: "claude-opus-4" });
+    await device.next("ack");
+
+    expect(t3.launches[0]).toMatchObject({ model: "grok-4.7", providerInstanceId: "grokAgent" });
+    expect(t3.launches[1]?.model).toBe("claude-opus-4");
+    expect("providerInstanceId" in t3.launches[1]!).toBe(false);
+  });
+
+  it("launch without a chosen model sends no provider instance", async () => {
+    const { t3, connected } = await setup();
+    t3.models = [{ id: "grok-4.7", label: "Grok 4.7", providerInstanceId: "grokAgent" }];
+    const device = await connected();
+    device.send({ type: "launch", id: "l1", projectId: "p1", text: "go" });
+    await device.next("ack");
+    expect("providerInstanceId" in t3.launches[0]!).toBe(false);
+    expect("model" in t3.launches[0]!).toBe(false);
+  });
+
+  it("list_projects without a model catalog sends no models", async () => {
+    const { connected } = await setup();
+    const device = await connected();
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect("models" in projects).toBe(false);
+  });
+
+  it("a broken model catalog still lists projects, with a home warning naming the failure, cleared once it works", async () => {
+    const { t3, connected } = await setup();
+    const device = await connected();
+    t3.modelsError = "orchestrator_capabilities schema drift";
+    device.send({ type: "list_projects", id: "l1" });
+    const projects = await device.next("projects");
+    expect(projects.items).toHaveLength(1);
+    expect("models" in projects).toBe(false);
+    expect(await device.next("ack")).toMatchObject({ id: "l1", ok: true });
+    const warned = await device.next("home");
+    expect(warned.warnings).toContain("model list unavailable: orchestrator_capabilities schema drift");
+
+    t3.modelsError = undefined;
+    t3.models = [{ id: "claude-opus-5-5", label: "Claude Opus 5.5", providerInstanceId: "claudeAgent" }];
+    device.send({ type: "list_projects", id: "l2" });
+    expect((await device.next("projects")).models).toHaveLength(1);
+    const cleared = await device.next("home");
+    expect(cleared.warnings.some((w) => w.startsWith("model list unavailable"))).toBe(false);
   });
 
   it("a failed reply repeated with the same id gets the same failure, and a new id runs it", async () => {
@@ -295,7 +369,7 @@ describe("device session", () => {
     expect(await device.next("ack", (a) => a.id === "f2")).toMatchObject({ ok: true });
     await device.next("home");
     expect(await device.next("thread_page")).toMatchObject({ threadId: "t1", page: 1 });
-    expect(await device.next("request")).toMatchObject({ requestId: "req1" });
+    expect(await device.next("request")).toMatchObject({ requestId: requestHandle("t1", "req1") });
   });
 
   it("respond on approval calls adapter.respond with mapped decision", async () => {
@@ -307,9 +381,9 @@ describe("device session", () => {
       { threadId: "t1", requestId: "req2", summary: "b", detail: [], decisions },
     ];
     const device = await connected();
-    device.send({ type: "respond", id: "p1", threadId: "t1", requestId: "req1", value: "allow_always" });
+    device.send({ type: "respond", id: "p1", threadId: "t1", requestId: requestHandle("t1", "req1"), value: "allow_always" });
     expect(await device.next("ack")).toEqual({ type: "ack", id: "p1", ok: true });
-    device.send({ type: "respond", id: "p2", threadId: "t1", requestId: "req2", value: "deny_with_reason", text: "use staging" });
+    device.send({ type: "respond", id: "p2", threadId: "t1", requestId: requestHandle("t1", "req2"), value: "deny_with_reason", text: "use staging" });
     expect(await device.next("ack")).toEqual({ type: "ack", id: "p2", ok: true });
 
     expect(approvals.responses).toEqual([
@@ -330,14 +404,14 @@ describe("device session", () => {
     device.send({ type: "open_thread", id: "o1", threadId: "t2" });
     expect((await device.next("request")).lines).toEqual(["Red or blue?"]);
 
-    device.send({ type: "respond", id: "a1", threadId: "t2", requestId: "q1", value: "Blue" });
+    device.send({ type: "respond", id: "a1", threadId: "t2", requestId: requestHandle("t2", "q1"), value: "Blue" });
     expect(await device.next("ack")).toMatchObject({ id: "o1", ok: true });
     expect(await device.next("ack")).toEqual({ type: "ack", id: "a1", ok: true });
     const second = await device.next("request");
-    expect(second).toMatchObject({ requestId: "q1", lines: ["Why?"] });
+    expect(second).toMatchObject({ requestId: requestHandle("t2", "q1"), lines: ["Why?"] });
     expect(t3.answers).toEqual([]);
 
-    device.send({ type: "respond", id: "a2", threadId: "t2", requestId: "q1", value: "text", text: "it matches" });
+    device.send({ type: "respond", id: "a2", threadId: "t2", requestId: requestHandle("t2", "q1"), value: "text", text: "it matches" });
     expect(await device.next("ack")).toEqual({ type: "ack", id: "a2", ok: true });
     expect(t3.answers).toEqual([{ threadId: "t2", requestId: "q1", answers: { color: "Blue", why: "it matches" } }]);
   });
@@ -524,6 +598,97 @@ describe("device session", () => {
     expect(await device.next("ack")).toMatchObject({ id: "x1", ok: false });
     device.send({ type: "open_thread", id: "x2", threadId: "missing" });
     expect(await device.next("ack")).toEqual({ type: "ack", id: "x2", ok: false, error: "thread not found: missing" });
+  });
+});
+
+describe("request handles", () => {
+  const fixture = readFileSync(new URL("../src/approvals/__fixtures__/ws-pending-snapshot.jsonl", import.meta.url), "utf8");
+  const REAL_ID = fixture.match(/"requestId":"(runtime-request:[^"\\]{200,})"/)![1]!;
+  const decisions: PendingApproval["decisions"] = ["allow_once", "allow_always", "deny", "deny_with_reason"];
+
+  it("a long T3 request id reaches the device as a short handle and respond maps it back to the original id", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1")];
+    approvals.pending = [{ threadId: "t1", requestId: REAL_ID, summary: "pnpm db:migrate", detail: [], decisions }];
+    const device = await connected();
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    const request = await device.next("request");
+    expect(REAL_ID.length).toBeGreaterThan(128);
+    expect(request.requestId).toMatch(/^[0-9a-f]{20}$/);
+    expect(request.requestId).not.toContain(REAL_ID);
+    device.send({ type: "respond", id: "a1", threadId: "t1", requestId: request.requestId, value: "allow_once" });
+    expect(await device.next("ack", (a) => a.id === "a1")).toEqual({ type: "ack", id: "a1", ok: true });
+    expect(approvals.responses).toEqual([{ threadId: "t1", requestId: REAL_ID, decision: { kind: "allow_once" } }]);
+  });
+
+  it("a re-sent request keeps its handle", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1")];
+    approvals.pending = [{ threadId: "t1", requestId: REAL_ID, summary: "pnpm db:migrate", detail: [], decisions }];
+    const device = await connected();
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    const first = await device.next("request");
+    device.send({ type: "refresh", id: "f1" });
+    await device.next("ack", (a) => a.id === "f1");
+    const second = await device.next("request");
+    expect(second.requestId).toBe(first.requestId);
+  });
+
+  it("the same T3 id on two threads gets two handles", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1"), summary("t2")];
+    approvals.pending = [
+      { threadId: "t1", requestId: REAL_ID, summary: "a", detail: [], decisions },
+      { threadId: "t2", requestId: REAL_ID, summary: "b", detail: [], decisions },
+    ];
+    const device = await connected();
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    const first = await device.next("request");
+    device.send({ type: "open_thread", id: "o2", threadId: "t2" });
+    const second = await device.next("request");
+    expect(second.requestId).not.toBe(first.requestId);
+  });
+
+  it("an unknown handle is refused and nothing reaches the adapter", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1")];
+    approvals.pending = [{ threadId: "t1", requestId: REAL_ID, summary: "x", detail: [], decisions }];
+    const device = await connected();
+    device.send({ type: "respond", id: "a1", threadId: "t1", requestId: "deadbeefdeadbeefdead", value: "allow_once" });
+    expect(await device.next("ack", (a) => a.id === "a1")).toEqual({ type: "ack", id: "a1", ok: false, error: "request no longer pending, refresh" });
+    device.send({ type: "respond", id: "a2", threadId: "t1", requestId: REAL_ID.slice(0, 128), value: "allow_once" });
+    expect(await device.next("ack", (a) => a.id === "a2")).toMatchObject({ ok: false, error: "request no longer pending, refresh" });
+    expect(approvals.responses).toEqual([]);
+  });
+
+  it("a long question id becomes a short handle and the answers reach T3 under the original id", async () => {
+    const { t3, connected } = await setup();
+    t3.threads = [summary("t2")];
+    t3.questions.set("t2", [
+      { requestId: REAL_ID, questionId: "color", prompt: "Red or blue?", options: [{ label: "Red", value: "Red" }, { label: "Blue", value: "Blue" }], multiSelect: false },
+      { requestId: REAL_ID, questionId: "why", prompt: "Why?", options: [], multiSelect: false },
+    ]);
+    const device = await connected();
+    device.send({ type: "open_thread", id: "o1", threadId: "t2" });
+    const first = await device.next("request");
+    expect(first.requestId).toMatch(/^[0-9a-f]{20}$/);
+    device.send({ type: "respond", id: "a1", threadId: "t2", requestId: first.requestId, value: "Blue" });
+    await device.next("ack", (a) => a.id === "a1");
+    const second = await device.next("request");
+    expect(second.requestId).toBe(first.requestId);
+    device.send({ type: "respond", id: "a2", threadId: "t2", requestId: second.requestId, value: "text", text: "it matches" });
+    expect(await device.next("ack", (a) => a.id === "a2")).toMatchObject({ ok: true });
+    expect(t3.answers).toEqual([{ threadId: "t2", requestId: REAL_ID, answers: { color: "Blue", why: "it matches" } }]);
+  });
+
+  it("an unknown question handle is refused", async () => {
+    const { t3, connected } = await setup();
+    t3.threads = [summary("t2")];
+    t3.questions.set("t2", [{ requestId: REAL_ID, questionId: "color", prompt: "?", options: [], multiSelect: false }]);
+    const device = await connected();
+    device.send({ type: "respond", id: "a1", threadId: "t2", requestId: "deadbeefdeadbeefdead", value: "text", text: "x" });
+    expect(await device.next("ack", (a) => a.id === "a1")).toEqual({ type: "ack", id: "a1", ok: false, error: "request no longer pending, refresh" });
+    expect(t3.answers).toEqual([]);
   });
 });
 

@@ -62,6 +62,28 @@ describe("simulator against the real server", () => {
     expect(shown).toMatch(/1 \|api /);
   });
 
+  it("sim shows the model list on the new task screen", async () => {
+    const { server, auth, t3 } = await startRelay();
+    t3.models = [
+      { id: "claude-opus-5-5", label: "Opus 5.5", providerInstanceId: "claudeAgent" },
+      { id: "claude-haiku-5-5", label: "Haiku 5.5", providerInstanceId: "claudeAgent" },
+    ];
+
+    const url = `http://127.0.0.1:${server.port}`;
+    const result = await runSim({
+      url,
+      token: await pairDevice(url, auth.createPairingCode().code, "sim"),
+      cols: 40,
+      bodyRows: 8,
+      maxFrameBytes: 4096,
+      write: () => {},
+      script: ["N", "1", "?Opus 5.5"],
+    });
+
+    expect(result.problems).toEqual([]);
+    expect(result.screens.join("\n")).toContain("models Opus 5.5 Haiku 5.5");
+  });
+
   it("sim denies with a reason and answers a free-text question", async () => {
     const { server, auth, t3, approvals } = await startRelay();
     t3.threads = [summary("t1"), summary("t3")];

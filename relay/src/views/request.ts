@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ApprovalDecision, PendingApproval } from "../approvals/index.js";
 import { FrameBudgetError } from "../protocol/frame.js";
 import { LABEL_MAX, REF_MAX, type RelayMessage } from "../protocol/messages.js";
@@ -21,6 +22,11 @@ const APPROVAL_OPTIONS: ReadonlyArray<{ decision: ApprovalDecision["kind"]; key:
   { decision: "deny_with_reason", key: "T", label: "Deny, say why" },
 ];
 
+// receipt: 80 bits of sha256 over (threadId, T3 request id); at 1000 live requests the chance of any two colliding is about 4e-19, and a collision needs the same thread anyway since respond looks up within one thread
+export function requestHandle(threadId: string, t3RequestId: string): string {
+  return createHash("sha256").update(`${threadId}\n${t3RequestId}`).digest("hex").slice(0, 20);
+}
+
 export function buildRequest(approval: PendingApproval, screen: RequestScreen): RequestMessage;
 export function buildRequest(question: T3Question, screen: RequestScreen, threadId: string): RequestMessage;
 export function buildRequest(item: PendingApproval | T3Question, screen: RequestScreen, threadId?: string): RequestMessage {
@@ -39,7 +45,7 @@ function approvalRequest(approval: PendingApproval, screen: RequestScreen): Requ
   }));
   const lines = [...wrap(toDeviceAscii(approval.summary).trim(), cols), ...(detail.length > 0 ? ["", ...detail] : [])];
   return fitToScreen(
-    (fitted) => ({ type: "request", threadId: approval.threadId, requestId: approval.requestId, kind: "approval", lines: fitted, options }),
+    (fitted) => ({ type: "request", threadId: approval.threadId, requestId: requestHandle(approval.threadId, approval.requestId), kind: "approval", lines: fitted, options }),
     { body: lines, tail: [], options: options.length, what: "command" },
     screen,
   );
@@ -63,7 +69,7 @@ function questionRequest(question: T3Question, screen: RequestScreen, threadId: 
   if (question.options.length !== shown.length || question.options.length === 0) options.push(FREE_TEXT_OPTION);
 
   return fitToScreen(
-    (fitted) => ({ type: "request", threadId, requestId: question.requestId, kind: "question", lines: fitted, options }),
+    (fitted) => ({ type: "request", threadId, requestId: requestHandle(threadId, question.requestId), kind: "question", lines: fitted, options }),
     { body: wrap(oneLine(question.prompt), cols), tail: notes.flatMap((note) => wrap(`(${note})`, cols)), options: options.length, what: "question" },
     screen,
   );

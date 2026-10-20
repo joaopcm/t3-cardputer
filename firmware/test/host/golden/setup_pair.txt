@@ -1,0 +1,11 @@
+setup                           pair 3/3
+pair with the relay                     
+run t3-cardputer-relay pair on the relay
+host and type the code                  
+                                        
+                                        
+code 4/8                                
+> 7KQ2_                                 
+                                        
+                                        
+Enter pair  Esc back                    

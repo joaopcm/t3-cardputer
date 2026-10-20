@@ -49,3 +49,10 @@ jobs:
               exit 1
               ;;
           esac
+
+  firmware-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host tests
+        run: firmware/scripts/test-host.sh

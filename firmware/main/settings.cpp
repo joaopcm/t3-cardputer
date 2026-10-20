@@ -1,0 +1,238 @@
+#include "settings.h"
+
+#include <algorithm>
+#include <cstring>
+
+#include "esp_log.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+
+namespace settings {
+
+namespace {
+
+constexpr char TAG[] = "settings";
+constexpr char kNamespace[] = "t3";
+constexpr char kWifiKey[] = "wifi";
+constexpr char kTokenKey[] = "token";
+constexpr char kRelayUrlKey[] = "relay_url";
+
+struct WifiRecord {
+    char ssid[kSsidMax + 1];
+    char password[kPasswordMax + 1];
+};
+
+class Handle {
+public:
+    explicit Handle(nvs_open_mode_t mode)
+    {
+        const esp_err_t err = nvs_open(kNamespace, mode, &handle_);
+        open_ = err == ESP_OK;
+        if (!open_ && !(err == ESP_ERR_NVS_NOT_FOUND && mode == NVS_READONLY)) {
+            ESP_LOGE(TAG, "nvs_open %s failed: %s", kNamespace, esp_err_to_name(err));
+            openError_ = std::string("nvs: open failed: ") + esp_err_to_name(err);
+        }
+    }
+    ~Handle()
+    {
+        if (open_) {
+            nvs_close(handle_);
+        }
+    }
+    Handle(const Handle &) = delete;
+    Handle &operator=(const Handle &) = delete;
+
+    bool open() const { return open_; }
+    nvs_handle_t get() const { return handle_; }
+
+    const std::string &openError() const { return openError_; }
+
+    std::optional<std::string> commit(const char *what, esp_err_t err)
+    {
+        if (err == ESP_OK) {
+            err = nvs_commit(handle_);
+        }
+        if (err == ESP_OK) {
+            return std::nullopt;
+        }
+        ESP_LOGE(TAG, "%s not saved: %s", what, esp_err_to_name(err));
+        return std::string("nvs: ") + what + " not saved: " + esp_err_to_name(err);
+    }
+
+private:
+    nvs_handle_t handle_ = 0;
+    bool open_ = false;
+    std::string openError_;
+};
+
+std::optional<std::string> readString(const char *key)
+{
+    Handle nvs(NVS_READONLY);
+    if (!nvs.open()) {
+        return std::nullopt;
+    }
+    size_t size = 0;
+    if (nvs_get_str(nvs.get(), key, nullptr, &size) != ESP_OK || size <= 1) {
+        return std::nullopt;
+    }
+    std::string value(size, '\0');
+    if (nvs_get_str(nvs.get(), key, value.data(), &size) != ESP_OK) {
+        return std::nullopt;
+    }
+    value.resize(size - 1);
+    return value;
+}
+
+std::optional<std::string> writeString(const char *key, std::string_view value)
+{
+    Handle nvs(NVS_READWRITE);
+    if (!nvs.open()) {
+        return nvs.openError();
+    }
+    return nvs.commit(key, nvs_set_str(nvs.get(), key, std::string(value).c_str()));
+}
+
+std::optional<std::string> eraseKey(const char *key)
+{
+    Handle nvs(NVS_READWRITE);
+    if (!nvs.open()) {
+        return nvs.openError();
+    }
+    const esp_err_t err = nvs_erase_key(nvs.get(), key);
+    return nvs.commit(key, err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err);
+}
+
+std::string budget(const char *name, size_t limit, const char *what, size_t needed)
+{
+    return std::string(name) + "=" + std::to_string(limit) + ", " + what + " needed " + std::to_string(needed);
+}
+
+std::vector<WifiRecord> readRecords()
+{
+    Handle nvs(NVS_READONLY);
+    if (!nvs.open()) {
+        return {};
+    }
+    size_t size = 0;
+    if (nvs_get_blob(nvs.get(), kWifiKey, nullptr, &size) != ESP_OK) {
+        return {};
+    }
+    if (size % sizeof(WifiRecord) != 0 || size > kMaxWifi * sizeof(WifiRecord)) {
+        ESP_LOGE(TAG, "wifi blob is %u bytes, records are %u bytes and at most %u fit: ignoring it", static_cast<unsigned>(size),
+                 static_cast<unsigned>(sizeof(WifiRecord)), static_cast<unsigned>(kMaxWifi));
+        return {};
+    }
+    std::vector<WifiRecord> records(size / sizeof(WifiRecord));
+    if (nvs_get_blob(nvs.get(), kWifiKey, records.data(), &size) != ESP_OK) {
+        return {};
+    }
+    return records;
+}
+
+std::optional<std::string> writeRecords(const std::vector<WifiRecord> &records)
+{
+    Handle nvs(NVS_READWRITE);
+    if (!nvs.open()) {
+        return nvs.openError();
+    }
+    if (records.empty()) {
+        const esp_err_t err = nvs_erase_key(nvs.get(), kWifiKey);
+        return nvs.commit(kWifiKey, err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err);
+    }
+    return nvs.commit(kWifiKey, nvs_set_blob(nvs.get(), kWifiKey, records.data(), records.size() * sizeof(WifiRecord)));
+}
+
+bool sameSsid(const WifiRecord &record, std::string_view ssid)
+{
+    return ssid == record.ssid;
+}
+
+}
+
+std::optional<std::string> init()
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "nvs unusable (%s), erasing it: wifi and token are lost", esp_err_to_name(err));
+        nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+    if (err == ESP_OK) {
+        return std::nullopt;
+    }
+    ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
+    return std::string("nvs: init failed: ") + esp_err_to_name(err);
+}
+
+std::vector<WifiCred> wifi()
+{
+    std::vector<WifiCred> creds;
+    for (const WifiRecord &record : readRecords()) {
+        creds.push_back({record.ssid, record.password});
+    }
+    return creds;
+}
+
+std::optional<std::string> addWifi(const WifiCred &cred)
+{
+    if (cred.ssid.empty() || cred.ssid.size() > kSsidMax) {
+        return budget("wifi_ssid_max", kSsidMax, "ssid", cred.ssid.size());
+    }
+    if (cred.password.size() > kPasswordMax) {
+        return budget("wifi_password_max", kPasswordMax, "password", cred.password.size());
+    }
+    std::vector<WifiRecord> records = readRecords();
+    auto at = std::find_if(records.begin(), records.end(), [&](const WifiRecord &record) { return sameSsid(record, cred.ssid); });
+    if (at == records.end()) {
+        if (records.size() >= kMaxWifi) {
+            return budget("wifi_max", kMaxWifi, "saved networks", records.size() + 1) + ", forget one first";
+        }
+        records.emplace_back();
+        at = records.end() - 1;
+    }
+    std::memset(&*at, 0, sizeof(WifiRecord));
+    std::memcpy(at->ssid, cred.ssid.data(), cred.ssid.size());
+    std::memcpy(at->password, cred.password.data(), cred.password.size());
+    return writeRecords(records);
+}
+
+std::optional<std::string> removeWifi(std::string_view ssid)
+{
+    std::vector<WifiRecord> records = readRecords();
+    const auto end = std::remove_if(records.begin(), records.end(), [&](const WifiRecord &record) { return sameSsid(record, ssid); });
+    if (end == records.end()) {
+        return std::nullopt;
+    }
+    records.erase(end, records.end());
+    return writeRecords(records);
+}
+
+std::optional<std::string> token()
+{
+    return readString(kTokenKey);
+}
+
+std::optional<std::string> setToken(std::string_view token)
+{
+    if (token.empty() || token.size() > kTokenMax) {
+        return budget("token_max", kTokenMax, "token", token.size());
+    }
+    return writeString(kTokenKey, token);
+}
+
+std::optional<std::string> wipeToken()
+{
+    return eraseKey(kTokenKey);
+}
+
+std::string relayUrl()
+{
+    return readString(kRelayUrlKey).value_or(T3_RELAY_URL);
+}
+
+std::optional<std::string> setRelayUrl(std::string_view url)
+{
+    return writeString(kRelayUrlKey, url);
+}
+
+}

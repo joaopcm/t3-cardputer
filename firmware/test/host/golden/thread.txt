@@ -1,0 +1,11 @@
+weaver - layout engine              done
+Opus 5.5 - 2m ago - 1/3                 
+Measured 14 real widgets. Max nodes     
+seen was 212, so I set the tripwire     
+at 2048 and made the error name the     
+limit and the ask. All 38 tests pass.   
+PR #41 is open against main.            
+                                        
+> _                                     
+                                        
+type to reply  ^v page  Bksp back       

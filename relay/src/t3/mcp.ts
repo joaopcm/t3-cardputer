@@ -11,7 +11,7 @@ import type { SecretsStore } from "../secrets.js";
 const PAGE_SIZE = 100;
 // receipt: t3_thread_read declares maxCharsPerItem maximum 50000 in its tool schema
 const MAX_CHARS_PER_ITEM = 50_000;
-// receipt: docs/receipts/2026-10-20-approvals-spike.md (f), claudeAgent is the only usable provider instance
+// receipt: docs/receipts/2026-10-20-approvals-spike.md (f), claudeAgent is the only usable provider instance, the launch default when no catalog model is chosen
 const PROVIDER_INSTANCE_ID = "claudeAgent";
 const DEFAULT_BASE_REF = "main";
 
@@ -44,6 +44,7 @@ export function isConnectionError(error: unknown): boolean {
 }
 
 export type T3Project = { projectId: string; name: string; defaultModel?: string; defaultWorkspace?: "root" | "worktree"; updatedAt?: string };
+export type T3Model = { id: string; label: string; providerInstanceId: string };
 export type T3ThreadSummary = { threadId: string; projectId: string; title: string; status: string; updatedAt: string };
 export type T3Question = {
   requestId: string;
@@ -58,6 +59,7 @@ export type T3LaunchInput = {
   title: string;
   message: string;
   model?: string;
+  providerInstanceId?: string;
   options?: { id: string; value: string }[];
   workspace: "root" | "worktree";
   branch?: string;
@@ -83,6 +85,16 @@ const projectListSchema = z.object({
     }),
   ),
   nextCursor: z.number().nullish(),
+});
+
+const capabilitiesSchema = z.object({
+  providers: z.array(
+    z.object({
+      providerInstanceId: z.string(),
+      constraints: z.array(z.unknown()).nullish(),
+      models: z.array(z.object({ id: z.string(), label: z.string().nullish() })),
+    }),
+  ),
 });
 
 const threadListSchema = z.object({
@@ -156,6 +168,19 @@ export class T3Mcp {
     return projects;
   }
 
+  async listModels(): Promise<T3Model[]> {
+    const { providers } = capabilitiesSchema.parse(await this.call("orchestrator_capabilities", {}));
+    const byId = new Map<string, T3Model>();
+    // receipt: relay/test/fixtures/t3/mcp-orchestrator-capabilities.json (live capture), only instances with an empty constraints array are usable, and an id can sit under two instances (claude-sonnet-5-5 under claudeAgent and cursor)
+    for (const provider of providers) {
+      if ((provider.constraints ?? []).length > 0) continue;
+      for (const model of provider.models) {
+        if (!byId.has(model.id)) byId.set(model.id, { id: model.id, label: model.label || model.id, providerInstanceId: provider.providerInstanceId });
+      }
+    }
+    return [...byId.values()];
+  }
+
   async listThreads(projectId: string): Promise<T3ThreadSummary[]> {
     return this.listThreadPages(projectId, {});
   }
@@ -213,7 +238,7 @@ export class T3Mcp {
     const args: Record<string, unknown> = { title: input.title, message: input.message };
     if (input.scratch) args.scratch = true;
     else args.projectId = input.projectId;
-    if (input.model) args.modelSelection = { instanceId: PROVIDER_INSTANCE_ID, model: input.model, ...(input.options ? { options: input.options } : {}) };
+    if (input.model) args.modelSelection = { instanceId: input.providerInstanceId ?? PROVIDER_INSTANCE_ID, model: input.model, ...(input.options ? { options: input.options } : {}) };
     if (input.runtimeMode) args.runtimeMode = input.runtimeMode;
     if (!input.scratch) {
       args.workspaceStrategy =

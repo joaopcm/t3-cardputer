@@ -86,6 +86,41 @@ describe("T3Mcp", () => {
     expect(projects[0]).toEqual({ projectId: "<project-id-1>", name: "project-1", defaultModel: "claude-opus-5", defaultWorkspace: "worktree", updatedAt: "2026-08-23T14:52:53.124Z" });
   });
 
+  it("listModels returns only usable instances' models from the live capture, each with its instance and label", async () => {
+    const { mcp, calls } = fakeMcp({ orchestrator_capabilities: () => fixture("mcp-orchestrator-capabilities.json") });
+
+    const models = await mcp.listModels();
+
+    expect(models.map((m) => m.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-5-5"]);
+    expect(models.every((m) => m.providerInstanceId === "claudeAgent")).toBe(true);
+    expect(models.find((m) => m.id === "claude-sonnet-5-5")?.label).toBe("Claude Sonnet 5.5");
+    expect(calls).toEqual([{ name: "orchestrator_capabilities", args: {} }]);
+  });
+
+  it("listModels dedupes an id across usable instances, the first usable instance wins", async () => {
+    const { mcp } = fakeMcp({
+      orchestrator_capabilities: () => ({
+        providers: [
+          { providerInstanceId: "a", constraints: [], models: [{ id: "m1", label: "M one" }] },
+          { providerInstanceId: "b", constraints: [], models: [{ id: "m1", label: "M one b" }, { id: "m2" }] },
+        ],
+      }),
+    });
+
+    expect(await mcp.listModels()).toEqual([
+      { id: "m1", label: "M one", providerInstanceId: "a" },
+      { id: "m2", label: "m2", providerInstanceId: "b" },
+    ]);
+  });
+
+  it("listModels is empty when every instance is constrained", async () => {
+    const capture = fixture("mcp-orchestrator-capabilities.json");
+    capture.providers = capture.providers.map((p: { constraints: string[] }) => ({ ...p, constraints: ["Provider instance is disabled."] }));
+    const { mcp } = fakeMcp({ orchestrator_capabilities: () => capture });
+
+    expect(await mcp.listModels()).toEqual([]);
+  });
+
   it("listThreads follows nextCursor until null", async () => {
     const pages: Record<string, unknown> = {
       first: { projectId: "p1", threads: [thread("a"), thread("b")], nextCursor: 2 },
@@ -188,6 +223,12 @@ describe("T3Mcp", () => {
       modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5-5" },
       runtimeMode: "approval-required",
     });
+  });
+
+  it("launch sends the chosen model's provider instance", async () => {
+    const { mcp, calls } = fakeMcp({ t3_thread_launch: () => ({ threadId: "t" }) });
+    await mcp.launch({ projectId: "p1", title: "t", message: "m", model: "grok-4.7", providerInstanceId: "other", workspace: "root" });
+    expect(calls[0]?.args.modelSelection).toEqual({ instanceId: "other", model: "grok-4.7" });
   });
 
   it("launch passes model options into modelSelection", async () => {

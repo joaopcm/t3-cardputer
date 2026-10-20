@@ -12,7 +12,7 @@ import { SecretsStore } from "../../src/secrets.js";
 import { startServer, type T3Client } from "../../src/server.js";
 import type { ApprovalsDownPhase } from "../../src/session.js";
 import type { Stt } from "../../src/stt/types.js";
-import { T3AuthError, T3UnavailableError, type T3LaunchInput, type T3Project, type T3Question, type T3ThreadSummary } from "../../src/t3/mcp.js";
+import { T3AuthError, T3UnavailableError, type T3LaunchInput, type T3Model, type T3Project, type T3Question, type T3ThreadSummary } from "../../src/t3/mcp.js";
 
 function nonPrintable(value: unknown): string | undefined {
   if (typeof value === "string") return /[^\x20-\x7e]/.test(value) ? JSON.stringify(value) : undefined;
@@ -41,6 +41,8 @@ export class FakeT3 implements T3Client {
   down = false;
   authBroken = false;
   projects: T3Project[] = [{ projectId: "p1", name: "api", defaultModel: "claude-opus-5", defaultWorkspace: "worktree" }];
+  models: T3Model[] = [];
+  modelsError: string | undefined;
   threads: T3ThreadSummary[] = [];
   questions = new Map<string, T3Question[]>();
   sends: { threadId: string; text: string; mode: string; clientRequestId: string }[] = [];
@@ -58,6 +60,11 @@ export class FakeT3 implements T3Client {
   async listProjects() {
     this.guard();
     return this.projects;
+  }
+  async listModels() {
+    this.guard();
+    if (this.modelsError !== undefined) throw new Error(this.modelsError);
+    return this.models;
   }
   async listThreads(projectId: string) {
     this.guard();

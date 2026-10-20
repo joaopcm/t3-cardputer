@@ -3,7 +3,7 @@
 how i run the relay on the homelab. placeholders: `<homelab>`, `<tailnet>`, `<port>` (default 8787).
 
 ```
- device / sim ──https──► funnel (tailscaled) ──► 127.0.0.1:<port> relay ──► T3 (127.0.0.1:3773)
+ device / sim ──https :8443──► funnel (tailscaled) ──► 127.0.0.1:<port> relay ──► T3 (127.0.0.1:3773)
                                                        │
                                                        └──► whisper-server (127.0.0.1:8788)
 ```
@@ -118,18 +118,20 @@ linger keeps the unit alive after logout. stop waits up to 240 s (a canary can b
 the relay binds `127.0.0.1:<port>` only. tailscaled is the public edge.
 
 ```
-tailscale funnel --bg <port>
+tailscale funnel --bg --https=8443 8787
 tailscale funnel status
 ```
 
-the tailnet policy needs the `funnel` node attribute for this machine, or the command tells you to enable it. the url is `https://<homelab>.<tailnet>.ts.net`.
+8787 is the default relay `<port>`; use yours if you changed it. the tailnet policy needs the `funnel` node attribute for this machine, or the command tells you to enable it. the url is `https://<homelab>.<tailnet>.ts.net:8443`.
+
+443 on the tailnet address is shared with anything else serving https there (a reverse proxy, say), and funnel on 443 would take it over, so the relay uses 8443.
 
 check which client address the relay sees. the lockout is keyed on it, and the relay trusts `X-Forwarded-For` only when the tcp peer is loopback, taking the last entry.
 
 1. from a network outside the tailnet (phone hotspot), post a wrong code 20 times (`authFailuresPerWindow`):
 
    ```
-   for i in $(seq 20); do curl -s -o /dev/null -X POST https://<homelab>.<tailnet>.ts.net/v1/pair -d '{"code":"WRONGCODE","name":"probe"}'; done
+   for i in $(seq 20); do curl -s -o /dev/null -X POST https://<homelab>.<tailnet>.ts.net:8443/v1/pair -d '{"code":"WRONGCODE","name":"probe"}'; done
    ```
 
 2. on the homelab run `t3-cardputer-relay devices`.
@@ -148,7 +150,7 @@ type the printed code on the ADV. it expires after `pairingCodeTtlMs` (10 min).
 without the device, drive the relay from a laptop (clone, build and symlink as in section 1; `jfk.wav` is in the whisper clone's `samples/`, adjust the path if the laptop's differs):
 
 ```
-t3-cardputer-relay sim pair https://<homelab>.<tailnet>.ts.net <code>
+t3-cardputer-relay sim pair https://<homelab>.<tailnet>.ts.net:8443 <code>
 t3-cardputer-relay sim --wav ~/.local/share/t3-cardputer/whisper/samples/jfk.wav
 ```
 
