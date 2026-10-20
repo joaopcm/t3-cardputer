@@ -93,6 +93,7 @@ export const deviceMessageSchema = z.discriminatedUnion("type", [
     runtimeMode: runtimeMode.optional(),
   }),
   z.strictObject({ type: z.literal("list_projects"), id: requestId }),
+  z.strictObject({ type: z.literal("refresh"), id: requestId }),
   z.strictObject({ type: z.literal("audio_start"), id: requestId, sampleRate: z.literal(16000) }),
   z.strictObject({ type: z.literal("audio_end"), id: requestId }),
   z.strictObject({ type: z.literal("audio_cancel"), id: requestId }),

@@ -390,13 +390,17 @@ class DeviceSim {
       this.openId = this.act((id) => ({ type: "open_thread", id, threadId: row.threadId }), "thread_page");
     } else if (line.toUpperCase() === "N") {
       this.act((id) => ({ type: "list_projects", id }), "projects");
-    } else if (line.toUpperCase() !== "R") {
+    } else if (line.toUpperCase() === "R") {
+      this.act((id) => ({ type: "refresh", id }));
+    } else {
       this.notice = "home keys: row number, N new task, R refresh";
     }
   }
 
   private onThread(threadId: string, line: string): void {
-    if (line === "/n" || line === "/p") {
+    if (line === "/r") {
+      this.act((id) => ({ type: "refresh", id }));
+    } else if (line === "/n" || line === "/p") {
       const page = (this.page?.page ?? 1) + (line === "/n" ? 1 : -1);
       this.act((id) => ({ type: "page", id, threadId, page }), "thread_page");
     } else if (line !== "") {
@@ -581,7 +585,7 @@ class DeviceSim {
         return {
           bar: [`T3 sim  needs ${counts?.needs ?? 0} run ${counts?.running ?? 0} done ${counts?.done ?? 0}`],
           body: rows.map((row) => homeLine(row, cols)),
-          hint: "1-8 open  N new  R redraw  /q quit",
+          hint: "1-8 open  N new  R refresh  /q quit",
           numbered: true,
         };
       }
@@ -592,7 +596,7 @@ class DeviceSim {
             ? [spread(`${page.header.project} ${page.header.title}`, page.header.status, cols), `${page.header.model} ${page.page}/${page.pages}`]
             : [`thread ${s.threadId}`, "loading"],
           body: page?.lines ?? [],
-          hint: "text reply !steer x /n /p /talk /b",
+          hint: "text reply !steer x /n /p /r /talk /b",
           numbered: false,
         };
       }

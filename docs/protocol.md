@@ -23,7 +23,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 
 ## Message ids
 
-Every device message except `hello` carries `id`: a string of 1 to 16 characters. Ids are unique per device, across reconnects and reboots. For `reply`, `respond`, and `launch` the relay uses `id` as an idempotency key: a repeated `id` gets the original `ack` again and the action is not run twice, even when the repeat arrives on a new connection while the first is still running. The relay remembers an id for `idempotencyTtlMs` (24 h by default) and forgets everything when it restarts. `open_thread`, `page`, and `list_projects` only read, so a repeat runs again and sends a fresh view. Do not reuse an id for a different request. A counter that restarts at boot will collide; use random characters (8+ hex digits is plenty).
+Every device message except `hello` carries `id`: a string of 1 to 16 characters. Ids are unique per device, across reconnects and reboots. For `reply`, `respond`, and `launch` the relay uses `id` as an idempotency key: a repeated `id` gets the original `ack` again and the action is not run twice, even when the repeat arrives on a new connection while the first is still running. The relay remembers an id for `idempotencyTtlMs` (24 h by default) and forgets everything when it restarts. `open_thread`, `page`, `list_projects`, and `refresh` only read, so a repeat runs again and sends a fresh view. Do not reuse an id for a different request. A counter that restarts at boot will collide; use random characters (8+ hex digits is plenty).
 
 ## Versioning
 
@@ -205,6 +205,19 @@ Ask for the project list. Answered by `ack`, then `projects`.
 
 ```json device
 {"type":"list_projects","id":"a1b2c3da"}
+```
+
+### refresh
+
+The `R` key. Answered by `ack`, then `home` (sent even when it did not change), then, if a thread is open (the last `open_thread` or `page`), its `thread_page` at the page the device is on and its pending `request`, if any. Built from the relay's latest view of T3, which is at most `pollIntervalMs` (2 s by default) old.
+
+| Field | Type | Req | Constraint |
+| --- | --- | --- | --- |
+| `type` | `"refresh"` | yes | |
+| `id` | string | yes | 1-16 chars |
+
+```json device
+{"type":"refresh","id":"a1b2c3de"}
 ```
 
 ### audio_start

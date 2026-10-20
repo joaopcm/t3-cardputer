@@ -464,6 +464,8 @@ export class Session {
         return this.guarded(msg.id, () => this.openThread(msg.id, msg.threadId, msg.page));
       case "list_projects":
         return this.guarded(msg.id, () => this.listProjects(msg.id));
+      case "refresh":
+        return this.guarded(msg.id, () => this.refresh(msg.id));
       case "audio_start":
         return this.audioStart(msg.id);
       case "audio_cancel":
@@ -635,6 +637,24 @@ export class Session {
     this.openThreadId = threadId;
     this.openPage = view.page;
     this.shownPageVersion = pageVersion(summary);
+    this.showOpenRequest(snapshot);
+    return ok(id);
+  }
+
+  private async refresh(id: string): Promise<Ack> {
+    const snapshot = await this.hub.watcher.current();
+    this.lastHomeKey = undefined;
+    this.pushHome(snapshot);
+    const threadId = this.openThreadId;
+    const summary = snapshot.threads.find((t) => t.threadId === threadId);
+    if (summary === undefined) return ok(id);
+    const view = await this.threadPage(summary, this.openPage);
+    if (this.openThreadId !== summary.threadId) return ok(id);
+    this.send(view);
+    this.openPage = view.page;
+    this.shownPageVersion = pageVersion(summary);
+    this.shownRequestKey = undefined;
+    this.refusedRequestKey = undefined;
     this.showOpenRequest(snapshot);
     return ok(id);
   }

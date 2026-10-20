@@ -239,6 +239,26 @@ describe("device session", () => {
     expect(device.received.some((m) => m.type === "error")).toBe(false);
   });
 
+  it("refresh re-sends home even when nothing changed, plus the open thread page and its pending request", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1")];
+    approvals.pending = [{ threadId: "t1", requestId: "req1", summary: "pnpm db:migrate", detail: [], decisions: ["allow_once", "deny"] }];
+    const device = await connected();
+    device.send({ type: "refresh", id: "f1" });
+    expect(await device.next("ack", (a) => a.id === "f1")).toEqual({ type: "ack", id: "f1", ok: true });
+    expect((await device.next("home")).rows.map((r) => r.threadId)).toEqual(["t1"]);
+    expect(device.received.some((m) => m.type === "thread_page")).toBe(false);
+
+    device.send({ type: "open_thread", id: "o1", threadId: "t1" });
+    await device.next("thread_page");
+    await device.next("request");
+    device.send({ type: "refresh", id: "f2" });
+    expect(await device.next("ack", (a) => a.id === "f2")).toMatchObject({ ok: true });
+    await device.next("home");
+    expect(await device.next("thread_page")).toMatchObject({ threadId: "t1", page: 1 });
+    expect(await device.next("request")).toMatchObject({ requestId: "req1" });
+  });
+
   it("respond on approval calls adapter.respond with mapped decision", async () => {
     const { t3, approvals, connected, deviceId } = await setup();
     t3.threads = [summary("t1")];

@@ -132,7 +132,7 @@ describe("simulator wire behavior", () => {
       ws.send(JSON.stringify(HOME));
       ws.ping();
     });
-    await runSim({ ...base, url, script: ["R"] });
+    await runSim({ ...base, url, script: ["/b"] });
     expect(pongs).toHaveLength(1);
   });
 
@@ -212,5 +212,16 @@ describe("simulator wire behavior", () => {
     const result = await runSim({ ...base, url, write: (text) => output.push(text), script: ["N"] });
     expect(result.problems).toEqual([]);
     expect(output.join("")).toContain("+39 more projects: maxHomeRows=1, needed 40");
+  });
+
+  it("R sends refresh and redraws from the home that follows", async () => {
+    const { url, frames } = await stub((ws, f) => {
+      if (f.binary) return;
+      ack(ws, f.msg);
+      if (f.msg.type === "refresh") ws.send(JSON.stringify({ ...HOME, rows: [{ ...HOME.rows[0], title: "refreshed" }] }));
+    });
+    const result = await runSim({ ...base, url, script: ["R", "?refreshed"] });
+    expect(result.problems).toEqual([]);
+    expect(frames.some((f) => !f.binary && f.msg.type === "refresh")).toBe(true);
   });
 });
