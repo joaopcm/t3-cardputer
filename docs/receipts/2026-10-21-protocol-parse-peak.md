@@ -1,6 +1,6 @@
 # relay frame parse peak
 
-Receipt for `parseRelay` memory (`firmware/components/t3core/protocol.cpp`). Measured on the host, 64-bit glibc, by the test `parse peak table for docs/receipts (host 64-bit upper bound)` in `firmware/test/host/protocol_test.cpp` (run `firmware/test/host/build/host_tests -tc="parse peak*"`). Device pointers are 4 bytes and cJSON nodes are smaller, so these are upper bounds. Task 8 re-measures on the ADV with `heap_caps` and replaces this table.
+Receipt for `parseRelay` memory (`firmware/components/t3core/protocol.cpp`). Measured on the host, 64-bit glibc, by the test `parse peak table for docs/receipts (host 64-bit upper bound)` in `firmware/test/host/protocol_test.cpp` (run `firmware/test/host/build/host_tests -tc="parse peak*"`). Device pointers are 4 bytes and cJSON nodes are smaller, so these are upper bounds. The ADV numbers (3.1x live home, 4.1x a 50-row home, 16.9x degenerate) are in `2026-10-21-firmware-network.md`.
 
 - `tree`: peak bytes requested by cJSON through the t3core allocator hook (`setJsonAllocator`), not counting malloc overhead.
 - `typed`: live bytes of the parsed `RelayMsg` left after the call (`mallinfo2` delta, includes malloc overhead and vector slack).

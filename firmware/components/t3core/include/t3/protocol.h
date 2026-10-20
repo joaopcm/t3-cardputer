@@ -216,6 +216,15 @@ std::optional<std::string> encodeAudioStart(std::string_view id);
 std::optional<std::string> encodeAudioEnd(std::string_view id);
 std::optional<std::string> encodeAudioCancel(std::string_view id);
 
+std::optional<std::string> encodePair(std::string_view code, std::string_view name);
+
+struct PairReply {
+    std::optional<std::string> token;
+    std::string error;
+};
+
+PairReply parsePairReply(int status, std::string_view body);
+
 class IdGen {
 public:
     explicit IdGen(uint64_t seed) : state_(seed) {}

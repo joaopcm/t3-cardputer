@@ -224,6 +224,11 @@ App::Out App::onLinkStatus(std::string_view status)
     return out;
 }
 
+void App::onTransportError(std::string_view why)
+{
+    inform(std::string(why));
+}
+
 std::string App::threadTitle(std::string_view threadId) const
 {
     if (page_ && page_->threadId == threadId) {

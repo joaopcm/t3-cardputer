@@ -7,6 +7,7 @@
 
 bool debug_serial_start();
 bool debug_serial_poll_key(t3::Key *key);
+bool debug_serial_poll_drop();
 
 #else
 
@@ -16,6 +17,11 @@ inline bool debug_serial_start()
 }
 
 inline bool debug_serial_poll_key(t3::Key *)
+{
+    return false;
+}
+
+inline bool debug_serial_poll_drop()
 {
     return false;
 }

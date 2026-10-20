@@ -165,7 +165,7 @@ App::Out App::respond(Option option, std::optional<std::string> text)
 App::Out App::requestKey(Key key, uint32_t nowMs)
 {
     const bool typed = key.name == KeyName::Char || key.name == KeyName::Enter || key.name == KeyName::FnEnter;
-    if (guardSinceMs_ && nowMs - *guardSinceMs_ < kRequestGuardMs) {
+    if (guardSinceMs_ && static_cast<int32_t>(nowMs - *guardSinceMs_) < static_cast<int32_t>(kRequestGuardMs)) {
         if (typed) {
             guardSinceMs_ = nowMs;
             inform("request just arrived, press again", Color::Warn);

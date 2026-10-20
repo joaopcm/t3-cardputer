@@ -387,6 +387,38 @@ TEST_CASE("encoders emit the documented shapes")
     CHECK(sameJson(t3::encodeAudioCancel("a1"), R"({"type":"audio_cancel","id":"a1"})"));
 }
 
+TEST_CASE("the pair body is the code and the device name")
+{
+    CHECK(sameJson(t3::encodePair("7KQ2M9XA", "cardputer"), R"({"code":"7KQ2M9XA","name":"cardputer"})"));
+}
+
+TEST_CASE("a 200 pair reply gives the token, anything else names the status and the relay's reason")
+{
+    const t3::PairReply ok = t3::parsePairReply(200, R"({"token":"tok_abc"})");
+    CHECK(ok.token == std::optional<std::string>("tok_abc"));
+    CHECK(ok.error.empty());
+
+    const t3::PairReply refused = t3::parsePairReply(401, R"({"error":"pairing failed"})");
+    CHECK_FALSE(refused.token);
+    CHECK(refused.error == "pairing failed (401): pairing failed");
+
+    const t3::PairReply locked = t3::parsePairReply(429, R"({"error":"auth locked out: auth_failures_max=5, retry in 600s"})");
+    CHECK(locked.error == "pairing failed (429): auth locked out: auth_failures_max=5, retry in 600s");
+
+    CHECK(t3::parsePairReply(502, "<html>bad gateway</html>").error == "pairing failed (502): no error message");
+    CHECK(t3::parsePairReply(200, R"({"nope":1})").error == "pairing returned 200 without a token");
+    CHECK(t3::parsePairReply(200, R"({"token":""})").error == "pairing returned 200 without a token");
+    const std::string longToken(t3::kTokenMax + 1, 'a');
+    CHECK(t3::parsePairReply(200, R"({"token":")" + longToken + R"("})").error == "token_max=256, token needed 257");
+}
+
+TEST_CASE("a pair reason longer than the screen allows is clipped to error_message_max")
+{
+    const std::string reason(300, 'r');
+    const t3::PairReply reply = t3::parsePairReply(429, R"({"error":")" + reason + R"("})");
+    CHECK(reply.error.size() == std::string("pairing failed (429): ").size() + t3::kErrorMessageMax);
+}
+
 TEST_CASE("encoders escape quotes, backslashes and newlines")
 {
     const std::string text = "say \"hi\"\n\\path\ttab";

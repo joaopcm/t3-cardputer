@@ -33,6 +33,7 @@ SOFTWARE.
 - M5GFX 0.2.33 (MIT) https://github.com/m5stack/M5GFX
 - M5Unified 0.2.27 (MIT) https://github.com/m5stack/M5Unified
 - ESP-IDF v5.4.2 (Apache-2.0) https://github.com/espressif/esp-idf
+- esp_websocket_client 1.8.0 (Apache-2.0) https://github.com/espressif/esp-protocols
 
 ## vendored for host tests (test/host/third_party, license headers kept in the files)
 

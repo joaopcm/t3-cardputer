@@ -800,6 +800,27 @@ TEST_CASE("option keys wait kRequestGuardMs after a pushed request replaces the 
     CHECK(respond.str("value") == "allow_once");
 }
 
+TEST_CASE("a transport error shows on the status bar of the current screen")
+{
+    App app = live();
+    push(app, relay(kHome));
+    app.onTransportError("max_frame_bytes=16384, needed 20000");
+    CHECK(contains(row(app, 0), "max_frame_bytes=16384, needed 20000"));
+    CHECK(app.screenName() == "home");
+}
+
+TEST_CASE("a key stamped before the pushed request arrived is still guarded")
+{
+    App app = live();
+    app.onRelay(relay(kHome), 0);
+    app.onKey(named(KeyName::Enter), 10);
+    app.onRelay(relay(kBouncePage), 20);
+    app.onRelay(relay(kBounceRequest), 1000);
+    CHECK(app.onKey(ch('Y'), 999).send.empty());
+    CHECK(app.screenName() == "approval");
+    CHECK(contains(row(app, 0), "just arrived"));
+}
+
 TEST_CASE("a failed reply goes back only to its own thread")
 {
     App app = live();

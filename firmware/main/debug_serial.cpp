@@ -1,5 +1,6 @@
 #include "debug_serial.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -31,6 +32,7 @@ constexpr UBaseType_t kKeyQueueDepth = 16;
 constexpr size_t kMaxRowHexBytes = 2 * 120 + 1;
 
 QueueHandle_t keyQueue;
+std::atomic<bool> dropRequested{false};
 
 void emit(const char *text, size_t len)
 {
@@ -113,6 +115,9 @@ void handleLine(std::string_view line)
                  static_cast<unsigned>(kTaskStackBytes));
     } else if (line == "HEAP") {
         sendHeap();
+    } else if (line == "DROP") {
+        dropRequested = true;
+        emitLine("DROP ok");
     } else if (line.substr(0, kKeyPrefix.size()) == kKeyPrefix) {
         handleKey(line.substr(kKeyPrefix.size()));
     } else {
@@ -175,4 +180,9 @@ bool debug_serial_start()
 bool debug_serial_poll_key(t3::Key *key)
 {
     return keyQueue != nullptr && xQueueReceive(keyQueue, key, 0) == pdTRUE;
+}
+
+bool debug_serial_poll_drop()
+{
+    return dropRequested.exchange(false);
 }

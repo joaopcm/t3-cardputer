@@ -12,11 +12,11 @@ namespace t3 {
 
 // why: the relay is back 0.24 s after a restart (241-249 ms over 5 starts, relay/deploy/t3-cardputer-relay.service); 500 ms is a tripwire past that, so the first retry lands after a restart and never before it
 inline constexpr uint32_t kBackoffMinMs = 500;
-// receipt: pending Task 8 (hotspot reconnect measurements)
+// receipt: docs/receipts/2026-10-21-firmware-network.md "backoff": a retry costs one 3.8 s TLS connect and ~50 KB of transient heap on the ADV, so at 30 s retries hold the radio and CPU at most ~13% of an outage and a relay that comes back is reached within 30 s
 inline constexpr uint32_t kBackoffMaxMs = 30000;
 // receipt: relay/src/config.ts helloTimeoutMs=10000 (relay answers 4408 at 10 s) + 2000 ms margin, so a live relay speaks first
 inline constexpr uint32_t kHelloWaitMs = 12000;
-// why: tripwire past any good TLS connect on home WiFi or a hotspot, so only a wedged connect touches it; receipt: pending Task 8 (measured connect times)
+// why: tripwire past any good TLS connect, so only a wedged connect touches it; receipt: docs/receipts/2026-10-21-firmware-network.md "connect", worst measured connect 11.1 s on home WiFi (7.2 s DNS + 3.8 s TLS and upgrade), 30 s is 2.7x
 inline constexpr uint32_t kConnectWaitMs = 30000;
 
 class Link {

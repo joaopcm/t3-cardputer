@@ -706,6 +706,50 @@ std::optional<std::string> encodeAudioCancel(std::string_view id)
     return Builder("audio_cancel").str("id", id).print();
 }
 
+std::optional<std::string> encodePair(std::string_view code, std::string_view name)
+{
+    const JsonPtr root(cJSON_CreateObject());
+    if (!root || cJSON_AddStringToObject(root.get(), "code", std::string(code).c_str()) == nullptr ||
+        cJSON_AddStringToObject(root.get(), "name", std::string(name).c_str()) == nullptr) {
+        return std::nullopt;
+    }
+    char *raw = cJSON_PrintUnformatted(root.get());
+    if (raw == nullptr) {
+        return std::nullopt;
+    }
+    std::string out(raw);
+    cJSON_free(raw);
+    return out;
+}
+
+PairReply parsePairReply(int status, std::string_view body)
+{
+    installJsonHooks();
+    const JsonPtr root(cJSON_ParseWithLength(body.data(), body.size()));
+    const auto field = [&](const char *key) -> std::optional<std::string> {
+        const cJSON *item = root ? cJSON_GetObjectItemCaseSensitive(root.get(), key) : nullptr;
+        if (!cJSON_IsString(item)) {
+            return std::nullopt;
+        }
+        return std::string(item->valuestring);
+    };
+    PairReply reply;
+    if (status != 200) {
+        const std::string why = field("error").value_or("no error message");
+        reply.error = "pairing failed (" + std::to_string(status) + "): " + why.substr(0, kErrorMessageMax);
+        return reply;
+    }
+    std::optional<std::string> token = field("token");
+    if (!token || token->empty()) {
+        reply.error = "pairing returned 200 without a token";
+    } else if (token->size() > static_cast<size_t>(kTokenMax)) {
+        reply.error = "token_max=" + std::to_string(kTokenMax) + ", token needed " + std::to_string(token->size());
+    } else {
+        reply.token = std::move(token);
+    }
+    return reply;
+}
+
 std::string IdGen::next()
 {
     state_ += 0x9e3779b97f4a7c15ULL;
