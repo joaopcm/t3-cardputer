@@ -60,6 +60,20 @@ std::vector<Example> docExamples()
     return examples;
 }
 
+t3::HelloCaps docHelloCaps()
+{
+    for (const Example &example : docExamples()) {
+        if (example.side == "device" && example.json.find("\"type\":\"hello\"") != std::string::npos) {
+            const JsonPtr json(cJSON_Parse(example.json.c_str()));
+            REQUIRE(json);
+            const auto number = [&](const char *key) { return static_cast<int>(cJSON_GetObjectItemCaseSensitive(json.get(), key)->valuedouble); };
+            return {number("cols"), number("bodyRows"), number("maxFrameBytes"), number("maxHomeRows")};
+        }
+    }
+    FAIL("docs/protocol.md has no hello example");
+    return {};
+}
+
 std::string typeOf(const std::string &json)
 {
     const JsonPtr parsed(cJSON_Parse(json.c_str()));
@@ -103,7 +117,7 @@ t3::RuntimeMode runtimeModeOf(const std::string &text)
     return t3::RuntimeMode::Auto;
 }
 
-std::string encodeFromExample(const std::string &type, const cJSON *json)
+std::optional<std::string> encodeFromExample(const std::string &type, const cJSON *json)
 {
     if (type == "hello") {
         return t3::encodeHello({num(json, "cols"), num(json, "bodyRows"), num(json, "maxFrameBytes"), num(json, "maxHomeRows")}, str(json, "token"), str(json, "fw"));
@@ -149,7 +163,7 @@ std::string encodeFromExample(const std::string &type, const cJSON *json)
         return t3::encodeAudioCancel(str(json, "id"));
     }
     FAIL("no encoder for device message type " << type);
-    return "";
+    return std::nullopt;
 }
 
 size_t variantIndexFor(const std::string &type)
@@ -167,6 +181,7 @@ size_t variantIndexFor(const std::string &type)
 
 TEST_CASE("every relay example in protocol.md parses")
 {
+    const t3::HelloCaps caps = docHelloCaps();
     std::set<std::string> seen;
     int count = 0;
     for (const Example &example : docExamples()) {
@@ -175,7 +190,7 @@ TEST_CASE("every relay example in protocol.md parses")
         }
         ++count;
         std::string err;
-        const auto msg = t3::parseRelay(example.json, err);
+        const auto msg = t3::parseRelay(example.json, caps, err);
         INFO("docs/protocol.md:" << example.line << " " << example.json);
         REQUIRE_MESSAGE(msg.has_value(), err);
         const std::string type = typeOf(example.json);
@@ -199,7 +214,9 @@ TEST_CASE("every device message we encode parses back to the doc's shape")
         const JsonPtr expected(cJSON_Parse(example.json.c_str()));
         REQUIRE(expected);
         const std::string type = typeOf(example.json);
-        const std::string encoded = encodeFromExample(type, expected.get());
+        const auto produced = encodeFromExample(type, expected.get());
+        REQUIRE(produced.has_value());
+        const std::string &encoded = *produced;
         const JsonPtr actual(cJSON_Parse(encoded.c_str()));
         REQUIRE_MESSAGE(actual, encoded);
         CHECK_MESSAGE(cJSON_Compare(actual.get(), expected.get(), true), encoded << " != " << example.json);

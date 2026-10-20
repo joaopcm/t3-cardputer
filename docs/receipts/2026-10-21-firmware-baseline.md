@@ -32,7 +32,7 @@ Measured on the ADV with the task 2 firmware at HEAD ffa124c plus the `sdkconfig
 | free internal heap at boot (app_main entry) | 374436 bytes, largest block 311296 | `t3: boot heap_internal_free` / `largest_block` |
 | free internal heap after `display_init()` (panel init + sprite) | 355228 bytes, largest block 286720 | `t3: sprite heap_internal_free` / `largest_block` |
 | boot to after sprite | 19208 bytes of heap, 24576 bytes of largest block | 374436 - 355228, 311296 - 286720 |
-| free internal heap after `debug_serial_start()` | 347272 bytes, largest block 278528 | `t3: ready ...` and `\x02HEAP` reply, same numbers |
+| free internal heap after `debug_serial_start()` | 347184 bytes, largest block 278528 | `t3: ready ...` and `\x02HEAP` reply, same numbers |
 | first `display_draw()` (panel push buffer) | 1456 bytes of heap | `t3: sprite` to `t3: ready` with the debug channel off |
 | debug task stack | 2340 bytes used of 4096 (1756 free at the worst point, during `SHOT`) | `debug: task_stack_free_min` |
 | longest command | 13 bytes (`KEY talk-down`), line buffer 64 | `debug_serial.cpp` `kMaxLineBytes`, an over-long line logs `line_buf=64, command needed more` |

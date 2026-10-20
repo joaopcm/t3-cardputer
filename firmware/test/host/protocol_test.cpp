@@ -1,6 +1,13 @@
 #include "doctest.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
+#include <functional>
+#include <malloc.h>
+#include <new>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -21,9 +28,14 @@ JsonPtr parseJson(const std::string &text)
     return JsonPtr(cJSON_Parse(text.c_str()));
 }
 
-bool sameJson(const std::string &actual, const std::string &expected)
+const t3::HelloCaps kCaps{40, 11, 4096, 8};
+
+bool sameJson(const std::optional<std::string> &actual, const std::string &expected)
 {
-    const JsonPtr a = parseJson(actual);
+    if (!actual) {
+        return false;
+    }
+    const JsonPtr a = parseJson(*actual);
     const JsonPtr b = parseJson(expected);
     return a && b && cJSON_Compare(a.get(), b.get(), true);
 }
@@ -33,7 +45,7 @@ T parseAs(const std::string &json)
 {
     static std::optional<t3::RelayMsg> keep;
     std::string err;
-    keep = t3::parseRelay(json, err);
+    keep = t3::parseRelay(json, kCaps, err);
     REQUIRE_MESSAGE(keep.has_value(), err);
     const T *msg = std::get_if<T>(&*keep);
     REQUIRE(msg != nullptr);
@@ -43,7 +55,7 @@ T parseAs(const std::string &json)
 std::string parseError(const std::string &json)
 {
     std::string err;
-    const auto msg = t3::parseRelay(json, err);
+    const auto msg = t3::parseRelay(json, kCaps, err);
     CHECK_FALSE(msg.has_value());
     return err;
 }
@@ -170,8 +182,8 @@ TEST_CASE("wrong types, unknown values and bad frames are named")
     CHECK(parseError(R"({"type":"thread_page","threadId":"t","header":{"project":"p","title":"t","model":"m","status":"s"},"page":1.5,"pages":1,"lines":[]})") == "page: expected integer");
     CHECK(parseError(R"({"type":"thread_page","threadId":"t","header":{"project":"p","title":"t","model":"m","status":"s"},"page":0,"pages":1,"lines":[]})") == "page: min=1, got 0");
     CHECK(parseError(R"({"type":"thread_page","threadId":"t","header":{"project":"p","title":"t","model":"m","status":"s"},"page":1,"pages":1,"lines":[3]})") == "lines[0]: expected string");
-    CHECK(parseError(R"({"type":"home","rows":[{"threadId":"t","kind":"sleeping","project":"p","title":"t","age":"1m"}],"counts":{"needs":0,"running":0,"done":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})") == "rows[0].kind: unknown 'sleeping'");
     CHECK(parseError(R"({"type":"nope"})") == "type: unknown 'nope'");
+    CHECK(parseError(R"({"type":"request","threadId":"t","requestId":"r","kind":"maybe","lines":[],"options":[]})") == "kind: unknown 'maybe'");
     CHECK(parseError("[1,2]") == "message: expected object");
     CHECK_FALSE(parseError("{not json").empty());
     CHECK_FALSE(parseError("").empty());
@@ -183,23 +195,90 @@ TEST_CASE("parser limits name the budget, the limit and the ask")
     CHECK(parseError(R"({"type":"ack","id":"","ok":true})") == "id: min_chars=1, got 0");
 
     std::string tooManyLines = R"({"type":"thread_page","threadId":"t","header":{"project":"p","title":"t","model":"m","status":"s"},"page":1,"pages":1,"lines":[)";
-    for (int i = 0; i < 65; ++i) {
+    for (int i = 0; i < 12; ++i) {
         tooManyLines += i == 0 ? "\"x\"" : ",\"x\"";
     }
     tooManyLines += "]}";
-    CHECK(parseError(tooManyLines) == "lines: body_rows_max=64, got 65");
+    CHECK(parseError(tooManyLines) == "lines: body_rows=11, got 12");
 
-    const std::string wide(256, 'x');
+    const std::string wide(41, 'x');
     CHECK(parseError(R"({"type":"request","threadId":"t","requestId":"r","kind":"approval","lines":[")" + wide + R"("],"options":[]})") ==
-          "lines[0]: cols_max=255, got 256");
+          "lines[0]: cols=40, got 41");
     CHECK(parseError(R"({"type":"request","threadId":"t","requestId":"r","kind":"approval","lines":[],"options":[{"key":"YN","label":"a","value":"v"}]})") ==
           "options[0].key: key_chars=1, got 2");
     CHECK(parseError(R"({"type":"request","threadId":"t","requestId":"r","kind":"approval","lines":[],"options":[{"key":"Y","label":")" + std::string(65, 'l') + R"(","value":"v"}]})") ==
           "options[0].label: label_max=64, got 65");
     CHECK(parseError(R"({"type":"error","code":"internal","message":")" + std::string(121, 'm') + R"("})") == "message: error_message_max=120, got 121");
+}
 
-    const std::string oversize = R"({"type":"transcript_final","text":")" + std::string(t3::kFrameBytesMax, 'a') + R"("})";
-    CHECK(parseError(oversize) == "frame: frame_bytes_max=1048576, got " + std::to_string(oversize.size()));
+TEST_CASE("the device's declared caps bound the frame and every array")
+{
+    const std::string oversize = R"({"type":"transcript_final","text":")" + std::string(4096, 'a') + R"("})";
+    CHECK(parseError(oversize) == "frame: max_frame_bytes=4096, got " + std::to_string(oversize.size()));
+
+    std::string rows;
+    for (int i = 0; i < 9; ++i) {
+        rows += std::string(i == 0 ? "" : ",") + R"({"threadId":"t","kind":"done","project":"p","title":"t","age":"1m"})";
+    }
+    CHECK(parseError(R"({"type":"home","rows":[)" + rows + R"(],"counts":{"needs":0,"running":0,"done":9},"approvals":{"available":true},"warnings":[],"t3":"ok"})") ==
+          "rows: max_home_rows=8, got 9");
+
+    CHECK(parseError(R"({"type":"home","rows":[{"threadId":"t","kind":"done","project":")" + std::string(41, 'p') +
+                     R"(","title":"t","age":"1m"}],"counts":{"needs":0,"running":0,"done":1},"approvals":{"available":true},"warnings":[],"t3":"ok"})") ==
+          "rows[0].project: cols=40, got 41");
+
+    std::string items;
+    for (int i = 0; i < 9; ++i) {
+        items += std::string(i == 0 ? "" : ",") + R"({"projectId":"p","name":"n","defaults":{"model":"m","workspace":"root","runtimeMode":"auto"}})";
+    }
+    CHECK(parseError(R"({"type":"projects","items":[)" + items + "]}") == "items: max_home_rows=8, got 9");
+
+    std::string options;
+    for (int i = 0; i < 6; ++i) {
+        options += std::string(i == 0 ? "" : ",") + R"({"key":"1","label":"a","value":"v"})";
+    }
+    CHECK(parseError(R"({"type":"request","threadId":"t","requestId":"r","kind":"question","lines":["1","2","3","4","5","6"],"options":[)" + options + "]}") ==
+          "lines+options: body_rows=11, got 12");
+
+    t3::HelloCaps small = kCaps;
+    small.maxFrameBytes = 64;
+    std::string err;
+    CHECK_FALSE(t3::parseRelay(R"({"type":"transcript_final","text":"fix the flaky test in the auth module, please"})", small, err).has_value());
+    CHECK(err.rfind("frame: max_frame_bytes=64, got ", 0) == 0);
+}
+
+TEST_CASE("warnings past the tripwire are dropped and counted, not rejected")
+{
+    std::string warnings;
+    for (int i = 0; i < 20; ++i) {
+        warnings += std::string(i == 0 ? "" : ",") + "\"w" + std::to_string(i) + "\"";
+    }
+    const auto home = parseAs<t3::Home>(R"({"type":"home","rows":[],"counts":{"needs":0,"running":0,"done":0},"approvals":{"available":true},"warnings":[)" + warnings +
+                                        R"(],"t3":"ok"})");
+    CHECK(home.warnings.size() == static_cast<size_t>(t3::kWarningsMax));
+    CHECK(home.warnings[0] == "w0");
+    CHECK(home.warningsDropped == 20 - t3::kWarningsMax);
+
+    CHECK(parseAs<t3::Home>(kHome).warningsDropped == 0);
+    CHECK(parseError(R"({"type":"home","rows":[],"counts":{"needs":0,"running":0,"done":0},"approvals":{"available":true},"warnings":[")" + std::string(121, 'w') +
+                     R"("],"t3":"ok"})") == "warnings[0]: error_message_max=120, got 121");
+}
+
+TEST_CASE("unknown error codes and home kinds keep the frame")
+{
+    const auto error = parseAs<t3::Error>(R"({"type":"error","code":"quota_exceeded","message":"slow down"})");
+    CHECK(error.code == t3::ErrorCode::Unknown);
+    CHECK(error.message == "slow down");
+
+    const auto home = parseAs<t3::Home>(
+        R"({"type":"home","rows":[{"threadId":"a","kind":"sleeping","project":"p","title":"t","age":"1m"},{"threadId":"b","kind":"done","project":"p","title":"t","age":"1m"}],"counts":{"needs":0,"running":0,"done":2},"approvals":{"available":true},"warnings":[],"t3":"ok"})");
+    REQUIRE(home.rows.size() == 2);
+    CHECK(home.rows[0].kind == t3::HomeKind::Unknown);
+    CHECK(home.rows[0].threadId == "a");
+    CHECK(home.rows[1].kind == t3::HomeKind::Done);
+
+    CHECK(parseError(R"({"type":"error","message":"x"})") == "code");
+    CHECK(parseError(R"({"type":"error","code":5,"message":"x"})") == "code: expected string");
 }
 
 TEST_CASE("4401 maps to RePair and nothing else does")
@@ -280,7 +359,7 @@ TEST_CASE("encoders emit the documented shapes")
 TEST_CASE("encoders escape quotes, backslashes and newlines")
 {
     const std::string text = "say \"hi\"\n\\path\ttab";
-    const std::string encoded = t3::encodeReply("a1", "thr", text, t3::Mode::Queue);
+    const std::string encoded = t3::encodeReply("a1", "thr", text, t3::Mode::Queue).value();
     const JsonPtr json = parseJson(encoded);
     REQUIRE(json);
     CHECK(std::string(cJSON_GetObjectItemCaseSensitive(json.get(), "text")->valuestring) == text);
@@ -306,4 +385,166 @@ TEST_CASE("every limit constant equals the relay's messages.ts")
     CHECK(t3::kHomeAgeCols == messagesConstant(source, "HOME_AGE_COLS"));
     CHECK(t3::kDeviceFrameBytesMax == messagesConstant(source, "DEVICE_FRAME_BYTES_MAX"));
     CHECK(source.find("sampleRate: z.literal(" + std::to_string(t3::kAudioSampleRate) + ")") != std::string::npos);
+}
+
+namespace {
+
+struct FaultHeap {
+    static inline int count = 0;
+    static inline int failAt = 0;
+    static inline size_t live = 0;
+    static inline size_t peak = 0;
+
+    static void *allocate(size_t size)
+    {
+        ++count;
+        if (failAt != 0 && count == failAt) {
+            return nullptr;
+        }
+        auto *block = static_cast<size_t *>(std::malloc(size + sizeof(size_t) * 2));
+        if (block == nullptr) {
+            return nullptr;
+        }
+        block[0] = size;
+        live += size;
+        peak = std::max(peak, live);
+        return block + 2;
+    }
+
+    static void release(void *pointer)
+    {
+        if (pointer == nullptr) {
+            return;
+        }
+        auto *block = static_cast<size_t *>(pointer) - 2;
+        live -= block[0];
+        std::free(block);
+    }
+
+    static void reset(int failOn = 0)
+    {
+        count = 0;
+        failAt = failOn;
+        live = 0;
+        peak = 0;
+    }
+};
+
+struct AllocatorScope {
+    AllocatorScope() { t3::setJsonAllocator({FaultHeap::allocate, FaultHeap::release}); }
+    ~AllocatorScope() { t3::setJsonAllocator({std::malloc, std::free}); }
+};
+
+using Encoder = std::function<std::optional<std::string>()>;
+
+}
+
+TEST_CASE("an encoder that cannot allocate returns nothing, never a partial frame")
+{
+    const std::vector<std::pair<const char *, Encoder>> encoders = {
+        {"hello", [] { return t3::encodeHello(kCaps, "tok", "0.1.0"); }},
+        {"open_thread", [] { return t3::encodeOpenThread("a1", "thr"); }},
+        {"page", [] { return t3::encodePage("a1", "thr", 2); }},
+        {"reply", [] { return t3::encodeReply("a1", "thr", "hello there", t3::Mode::Steer); }},
+        {"respond", [] { return t3::encodeRespond("a1", "thr", "req", "deny_with_reason", std::string_view("why")); }},
+        {"launch", [] { return t3::encodeLaunch("a1", "proj", "go", {std::string("m"), t3::Workspace::Root, t3::RuntimeMode::Auto}); }},
+        {"list_projects", [] { return t3::encodeListProjects("a1"); }},
+        {"refresh", [] { return t3::encodeRefresh("a1"); }},
+        {"audio_start", [] { return t3::encodeAudioStart("a1"); }},
+        {"audio_end", [] { return t3::encodeAudioEnd("a1"); }},
+        {"audio_cancel", [] { return t3::encodeAudioCancel("a1"); }},
+    };
+    for (const auto &[name, encode] : encoders) {
+        INFO(name);
+        const AllocatorScope scope;
+        FaultHeap::reset();
+        const auto complete = encode();
+        REQUIRE(complete.has_value());
+        const int allocations = FaultHeap::count;
+        REQUIRE(allocations > 1);
+        for (int failOn = 1; failOn <= allocations; ++failOn) {
+            FaultHeap::reset(failOn);
+            CHECK_MESSAGE(!encode().has_value(), "allocation " << failOn << " of " << allocations << " failed and a frame still came out");
+        }
+        FaultHeap::reset(allocations + 1);
+        CHECK(encode() == complete);
+    }
+}
+
+TEST_CASE("a parse that cannot allocate says heap, not invalid json")
+{
+    const AllocatorScope scope;
+    FaultHeap::reset();
+    std::string err;
+    REQUIRE(t3::parseRelay(kHome, kCaps, err).has_value());
+    const int allocations = FaultHeap::count;
+    REQUIRE(allocations > 10);
+    for (int failOn = 1; failOn <= allocations; ++failOn) {
+        FaultHeap::reset(failOn);
+        err.clear();
+        CHECK_FALSE(t3::parseRelay(kHome, kCaps, err).has_value());
+        CHECK_MESSAGE(err == "heap: parse needed more than available, frame was " + std::to_string(std::strlen(kHome)) + " bytes", "allocation " << failOn << ": " << err);
+    }
+
+    FaultHeap::reset();
+    err.clear();
+    CHECK_FALSE(t3::parseRelay("{not json", kCaps, err).has_value());
+    CHECK(err.rfind("frame: not valid json", 0) == 0);
+}
+
+TEST_CASE("a frame over the declared cap is rejected before anything is allocated")
+{
+    const AllocatorScope scope;
+    FaultHeap::reset();
+    std::string err;
+    const std::string oversize = R"({"type":"transcript_final","text":")" + std::string(5000, 'a') + R"("})";
+    CHECK_FALSE(t3::parseRelay(oversize, kCaps, err).has_value());
+    CHECK(FaultHeap::count == 0);
+}
+
+namespace {
+
+std::string repeated(const std::string &item, int times)
+{
+    std::string out;
+    for (int i = 0; i < times; ++i) {
+        out += (i == 0 ? "" : ",") + item;
+    }
+    return out;
+}
+
+void reportPeak(const char *name, const std::string &frame, const t3::HelloCaps &caps)
+{
+    const AllocatorScope scope;
+    FaultHeap::reset();
+    const size_t before = mallinfo2().uordblks;
+    std::string err;
+    const auto parsed = t3::parseRelay(frame, caps, err);
+    const size_t after = mallinfo2().uordblks;
+    REQUIRE_MESSAGE(parsed.has_value(), name << ": " << err);
+    const size_t typed = after > before ? after - before : 0;
+    const size_t total = FaultHeap::peak + typed;
+    std::printf("PEAK %-28s frame=%6zu tree=%7zu typed=%7zu total=%7zu ratio=%.1fx\n", name, frame.size(), FaultHeap::peak, typed, total,
+                static_cast<double>(total) / static_cast<double>(frame.size()));
+}
+
+}
+
+TEST_CASE("parse peak table for docs/receipts (host 64-bit upper bound)")
+{
+    const t3::HelloCaps wide{40, 11, 65536, 255};
+    const std::string row = R"({"threadId":"thr_0123456789","kind":"running","project":"api-gateway","title":"fix flaky test sweep","age":"5m"})";
+    const std::string homeTail = R"(],"counts":{"needs":0,"running":255,"done":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})";
+    reportPeak("home 255 rows", R"({"type":"home","rows":[)" + repeated(row, 255) + homeTail, wide);
+    reportPeak("home 8 rows", R"({"type":"home","rows":[)" + repeated(row, 8) + homeTail, wide);
+
+    const std::string warning = "\"" + std::string(120, 'w') + "\"";
+    reportPeak("home 16 warnings x 120", R"({"type":"home","rows":[],"counts":{"needs":0,"running":0,"done":0},"approvals":{"available":true},"warnings":[)" + repeated(warning, 16) + R"(],"t3":"ok"})", wide);
+    reportPeak("home 1000 empty warnings", R"({"type":"home","rows":[],"counts":{"needs":0,"running":0,"done":0},"approvals":{"available":true},"warnings":[)" + repeated("\"\"", 1000) + R"(],"t3":"ok"})", wide);
+
+    const std::string line = "\"" + std::string(40, 'l') + "\"";
+    reportPeak("thread_page 11 lines x 40", R"({"type":"thread_page","threadId":"thr_01","header":{"project":"api","title":"run migration","model":"claude-opus-5","status":"running"},"page":1,"pages":3,"lines":[)" + repeated(line, 11) + "]}", wide);
+    reportPeak("request 7 lines + 4 options", R"({"type":"request","threadId":"t","requestId":"r","kind":"approval","lines":[)" + repeated(line, 7) +
+                                                  R"(],"options":[{"key":"Y","label":"Allow once","value":"allow_once"},{"key":"A","label":"Always allow","value":"allow_always"},{"key":"N","label":"Deny","value":"deny"},{"key":"T","label":"Deny, say why","value":"deny_with_reason"}]})", wide);
+    reportPeak("projects 255 items", R"({"type":"projects","items":[)" + repeated(R"({"projectId":"proj_0123456789","name":"api-gateway","defaults":{"model":"claude-opus-5","workspace":"worktree","runtimeMode":"approval-required"}})", 255) + "]}", wide);
 }

@@ -1,6 +1,8 @@
 #include "t3/protocol.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -28,7 +30,6 @@ constexpr TextRule kRef{1, kRefMax, "ref_max"};
 constexpr TextRule kLabel{1, kLabelMax, "label_max"};
 constexpr TextRule kOptionKey{1, 1, "key_chars"};
 constexpr TextRule kAge{1, kHomeAgeCols, "home_age_cols"};
-constexpr TextRule kCol{0, kColsMax, "cols_max"};
 constexpr TextRule kErrorMessage{0, kErrorMessageMax, "error_message_max"};
 constexpr TextRule kFrameBound{0, kUnbounded, ""};
 // receipt: longest relay message type is transcript_partial (18 chars), a clipped echo of an unknown type only has to be readable on a 40 column screen
@@ -72,7 +73,11 @@ std::string element(const std::string &path, int index)
 
 class Parser {
 public:
-    explicit Parser(std::string &err) : err_(err) {}
+    Parser(std::string &err, const HelloCaps &caps) : err_(err), caps_(caps) {}
+
+    const HelloCaps &caps() const { return caps_; }
+
+    TextRule cols() const { return TextRule{0, static_cast<size_t>(caps_.cols), "cols"}; }
 
     bool fail(const std::string &text)
     {
@@ -214,17 +219,28 @@ public:
         return fail(join(base, key) + ": unknown '" + word.substr(0, kTypeEchoMax) + "'");
     }
 
-    bool stringList(const cJSON *obj, const char *key, const std::string &base, int maxItems, const char *budget, const TextRule &rule,
-                    std::vector<std::string> &out)
+    template <typename E, size_t N>
+    bool enumerationOr(const cJSON *obj, const char *key, const std::string &base, const Name<E> (&names)[N], E fallback, E &out)
     {
-        const cJSON *list = array(obj, key, base, maxItems, budget);
-        if (list == nullptr) {
+        std::string word;
+        if (!text(obj, key, base, kFrameBound, word)) {
             return false;
         }
-        const std::string path = join(base, key);
+        out = fallback;
+        for (const Name<E> &name : names) {
+            if (name.text == word) {
+                out = name.value;
+                break;
+            }
+        }
+        return true;
+    }
+
+    bool copyStrings(const cJSON *list, const std::string &path, const TextRule &rule, int limit, std::vector<std::string> &out)
+    {
         out.clear();
         int index = 0;
-        for (const cJSON *item = list->child; item != nullptr; item = item->next, ++index) {
+        for (const cJSON *item = list->child; item != nullptr && index < limit; item = item->next, ++index) {
             std::string value;
             if (!textValue(item, element(path, index), rule, value)) {
                 return false;
@@ -234,8 +250,16 @@ public:
         return true;
     }
 
+    bool stringList(const cJSON *obj, const char *key, const std::string &base, int maxItems, const char *budget, const TextRule &rule,
+                    std::vector<std::string> &out)
+    {
+        const cJSON *list = array(obj, key, base, maxItems, budget);
+        return list != nullptr && copyStrings(list, join(base, key), rule, maxItems, out);
+    }
+
 private:
     std::string &err_;
+    const HelloCaps &caps_;
 };
 
 bool parseWelcome(Parser &p, const cJSON *json, Welcome &out)
@@ -252,14 +276,15 @@ bool parseAck(Parser &p, const cJSON *json, Ack &out)
 bool parseHomeRow(Parser &p, const cJSON *json, const std::string &path, HomeRow &out)
 {
     return p.elementObject(json, path) && p.text(json, "threadId", path, kRef, out.threadId) &&
-           p.enumeration(json, "kind", path, kHomeKinds, out.kind) && p.text(json, "project", path, kCol, out.project) &&
-           p.text(json, "title", path, kCol, out.title) && p.text(json, "age", path, kAge, out.age);
+           p.enumerationOr(json, "kind", path, kHomeKinds, HomeKind::Unknown, out.kind) && p.text(json, "project", path, p.cols(), out.project) &&
+           p.text(json, "title", path, p.cols(), out.title) && p.text(json, "age", path, kAge, out.age);
 }
 
 bool parseHome(Parser &p, const cJSON *json, Home &out)
 {
-    const cJSON *rows = p.array(json, "rows", "", kHomeRowsMax, "home_rows_max");
-    if (rows == nullptr) {
+    const cJSON *rows = p.array(json, "rows", "", p.caps().maxHomeRows, "max_home_rows");
+    const cJSON *warnings = rows == nullptr ? nullptr : p.array(json, "warnings", "", std::numeric_limits<int>::max(), "warnings");
+    if (warnings == nullptr) {
         return false;
     }
     int index = 0;
@@ -283,13 +308,17 @@ bool parseHome(Parser &p, const cJSON *json, Home &out)
         return false;
     }
 
-    return p.stringList(json, "warnings", "", std::numeric_limits<int>::max(), "warnings", kFrameBound, out.warnings) &&
-           p.enumeration(json, "t3", "", kT3Statuses, out.t3);
+    if (!p.copyStrings(warnings, "warnings", kErrorMessage, kWarningsMax, out.warnings)) {
+        return false;
+    }
+    out.warningsDropped = std::max(0, cJSON_GetArraySize(warnings) - kWarningsMax);
+    return p.enumeration(json, "t3", "", kT3Statuses, out.t3);
 }
 
 bool parseThreadPage(Parser &p, const cJSON *json, ThreadPage &out)
 {
-    if (!p.text(json, "threadId", "", kRef, out.threadId)) {
+    const cJSON *lines = p.array(json, "lines", "", p.caps().bodyRows, "body_rows");
+    if (lines == nullptr || !p.text(json, "threadId", "", kRef, out.threadId)) {
         return false;
     }
     const cJSON *header = p.object(json, "header", "");
@@ -299,7 +328,7 @@ bool parseThreadPage(Parser &p, const cJSON *json, ThreadPage &out)
         return false;
     }
     if (!p.integer(json, "page", "", 1, out.page) || !p.integer(json, "pages", "", 1, out.pages) ||
-        !p.stringList(json, "lines", "", kBodyRowsMax, "body_rows_max", kCol, out.lines)) {
+        !p.copyStrings(lines, "lines", p.cols(), p.caps().bodyRows, out.lines)) {
         return false;
     }
     if (const cJSON *truncated = Parser::optional(json, "truncated")) {
@@ -329,13 +358,18 @@ bool parseOption(Parser &p, const cJSON *json, const std::string &path, Option &
 
 bool parseRequest(Parser &p, const cJSON *json, Request &out)
 {
-    if (!p.text(json, "threadId", "", kRef, out.threadId) || !p.text(json, "requestId", "", kRef, out.requestId) ||
-        !p.enumeration(json, "kind", "", kRequestKinds, out.kind) ||
-        !p.stringList(json, "lines", "", kBodyRowsMax, "body_rows_max", kCol, out.lines)) {
+    const int bodyRows = p.caps().bodyRows;
+    const cJSON *lines = p.array(json, "lines", "", bodyRows, "body_rows");
+    const cJSON *options = lines == nullptr ? nullptr : p.array(json, "options", "", bodyRows, "body_rows");
+    if (options == nullptr) {
         return false;
     }
-    const cJSON *options = p.array(json, "options", "", kBodyRowsMax, "body_rows_max");
-    if (options == nullptr) {
+    const int needed = cJSON_GetArraySize(lines) + cJSON_GetArraySize(options);
+    if (needed > bodyRows) {
+        return p.fail("lines+options: body_rows=" + std::to_string(bodyRows) + ", got " + std::to_string(needed));
+    }
+    if (!p.text(json, "threadId", "", kRef, out.threadId) || !p.text(json, "requestId", "", kRef, out.requestId) ||
+        !p.enumeration(json, "kind", "", kRequestKinds, out.kind) || !p.copyStrings(lines, "lines", p.cols(), bodyRows, out.lines)) {
         return false;
     }
     int index = 0;
@@ -351,7 +385,7 @@ bool parseRequest(Parser &p, const cJSON *json, Request &out)
 
 bool parseProjectItem(Parser &p, const cJSON *json, const std::string &path, ProjectItem &out)
 {
-    if (!p.elementObject(json, path) || !p.text(json, "projectId", path, kRef, out.projectId) || !p.text(json, "name", path, kCol, out.name)) {
+    if (!p.elementObject(json, path) || !p.text(json, "projectId", path, kRef, out.projectId) || !p.text(json, "name", path, p.cols(), out.name)) {
         return false;
     }
     const cJSON *defaults = p.object(json, "defaults", path);
@@ -363,7 +397,7 @@ bool parseProjectItem(Parser &p, const cJSON *json, const std::string &path, Pro
 
 bool parseProjects(Parser &p, const cJSON *json, Projects &out)
 {
-    const cJSON *items = p.array(json, "items", "", kHomeRowsMax, "home_rows_max");
+    const cJSON *items = p.array(json, "items", "", p.caps().maxHomeRows, "max_home_rows");
     if (items == nullptr) {
         return false;
     }
@@ -391,7 +425,7 @@ bool parseProjects(Parser &p, const cJSON *json, Projects &out)
 
 bool parseErrorMessage(Parser &p, const cJSON *json, Error &out)
 {
-    return p.enumeration(json, "code", "", kErrorCodes, out.code) && p.text(json, "message", "", kErrorMessage, out.message);
+    return p.enumerationOr(json, "code", "", kErrorCodes, ErrorCode::Unknown, out.code) && p.text(json, "message", "", kErrorMessage, out.message);
 }
 
 template <typename T, typename Fn>
@@ -406,28 +440,31 @@ std::optional<RelayMsg> build(Parser &p, const cJSON *json, Fn parse)
 
 class Builder {
 public:
-    explicit Builder(const char *type) : root_(cJSON_CreateObject())
+    explicit Builder(const char *type) : root_(createRoot())
     {
         str("type", type);
     }
 
     Builder &str(const char *key, std::string_view value)
     {
-        cJSON_AddStringToObject(root_.get(), key, std::string(value).c_str());
+        ok_ = ok_ && root_ && cJSON_AddStringToObject(root_.get(), key, std::string(value).c_str()) != nullptr;
         return *this;
     }
 
     Builder &num(const char *key, int value)
     {
-        cJSON_AddNumberToObject(root_.get(), key, value);
+        ok_ = ok_ && root_ && cJSON_AddNumberToObject(root_.get(), key, value) != nullptr;
         return *this;
     }
 
-    std::string print()
+    std::optional<std::string> print()
     {
+        if (!ok_) {
+            return std::nullopt;
+        }
         char *raw = cJSON_PrintUnformatted(root_.get());
         if (raw == nullptr) {
-            return {};
+            return std::nullopt;
         }
         std::string out(raw);
         cJSON_free(raw);
@@ -435,8 +472,52 @@ public:
     }
 
 private:
+    static JsonPtr createRoot();
+
     JsonPtr root_;
+    bool ok_ = true;
 };
+
+struct JsonHeap {
+    JsonAllocator allocator{std::malloc, std::free};
+    bool exhausted = false;
+};
+
+JsonHeap &jsonHeap()
+{
+    static JsonHeap heap;
+    return heap;
+}
+
+void *hookedAllocate(size_t size)
+{
+    void *block = jsonHeap().allocator.allocate(size);
+    if (block == nullptr) {
+        jsonHeap().exhausted = true;
+    }
+    return block;
+}
+
+void hookedRelease(void *block)
+{
+    jsonHeap().allocator.release(block);
+}
+
+void installJsonHooks()
+{
+    static const bool installed = [] {
+        cJSON_Hooks hooks{hookedAllocate, hookedRelease};
+        cJSON_InitHooks(&hooks);
+        return true;
+    }();
+    static_cast<void>(installed);
+}
+
+JsonPtr Builder::createRoot()
+{
+    installJsonHooks();
+    return JsonPtr(cJSON_CreateObject());
+}
 
 bool startsWith(std::string_view text, std::string_view prefix)
 {
@@ -465,20 +546,32 @@ std::string_view runtimeModeName(RuntimeMode value)
     return {};
 }
 
+void setJsonAllocator(const JsonAllocator &allocator)
+{
+    installJsonHooks();
+    jsonHeap().allocator = allocator;
+}
+
 std::string_view modeName(Mode value)
 {
     return value == Mode::Steer ? "steer" : "queue";
 }
 
-std::optional<RelayMsg> parseRelay(std::string_view json, std::string &err)
+std::optional<RelayMsg> parseRelay(std::string_view json, const HelloCaps &caps, std::string &err)
 {
-    Parser p(err);
-    if (json.size() > static_cast<size_t>(kFrameBytesMax)) {
-        p.fail("frame: frame_bytes_max=" + std::to_string(kFrameBytesMax) + ", got " + std::to_string(json.size()));
+    Parser p(err, caps);
+    if (json.size() > static_cast<size_t>(caps.maxFrameBytes)) {
+        p.fail("frame: max_frame_bytes=" + std::to_string(caps.maxFrameBytes) + ", got " + std::to_string(json.size()));
         return std::nullopt;
     }
+    installJsonHooks();
+    jsonHeap().exhausted = false;
     const char *parseEnd = nullptr;
     const JsonPtr root(cJSON_ParseWithLengthOpts(json.data(), json.size(), &parseEnd, false));
+    if (!root && jsonHeap().exhausted) {
+        p.fail("heap: parse needed more than available, frame was " + std::to_string(json.size()) + " bytes");
+        return std::nullopt;
+    }
     if (!root) {
         p.fail("frame: not valid json at byte " + std::to_string(parseEnd == nullptr ? 0 : parseEnd - json.data()));
         return std::nullopt;
@@ -512,7 +605,7 @@ std::optional<RelayMsg> parseRelay(std::string_view json, std::string &err)
     return std::nullopt;
 }
 
-std::string encodeHello(const HelloCaps &caps, std::string_view token, std::string_view fw)
+std::optional<std::string> encodeHello(const HelloCaps &caps, std::string_view token, std::string_view fw)
 {
     return Builder("hello")
         .num("v", ProtocolVersion)
@@ -525,22 +618,22 @@ std::string encodeHello(const HelloCaps &caps, std::string_view token, std::stri
         .print();
 }
 
-std::string encodeOpenThread(std::string_view id, std::string_view threadId)
+std::optional<std::string> encodeOpenThread(std::string_view id, std::string_view threadId)
 {
     return Builder("open_thread").str("id", id).str("threadId", threadId).print();
 }
 
-std::string encodePage(std::string_view id, std::string_view threadId, int page)
+std::optional<std::string> encodePage(std::string_view id, std::string_view threadId, int page)
 {
     return Builder("page").str("id", id).str("threadId", threadId).num("page", page).print();
 }
 
-std::string encodeReply(std::string_view id, std::string_view threadId, std::string_view text, Mode mode)
+std::optional<std::string> encodeReply(std::string_view id, std::string_view threadId, std::string_view text, Mode mode)
 {
     return Builder("reply").str("id", id).str("threadId", threadId).str("text", text).str("mode", modeName(mode)).print();
 }
 
-std::string encodeRespond(std::string_view id, std::string_view threadId, std::string_view requestId, std::string_view value,
+std::optional<std::string> encodeRespond(std::string_view id, std::string_view threadId, std::string_view requestId, std::string_view value,
                           std::optional<std::string_view> text)
 {
     Builder builder("respond");
@@ -551,7 +644,7 @@ std::string encodeRespond(std::string_view id, std::string_view threadId, std::s
     return builder.print();
 }
 
-std::string encodeLaunch(std::string_view id, std::string_view projectId, std::string_view text, const LaunchOptions &options)
+std::optional<std::string> encodeLaunch(std::string_view id, std::string_view projectId, std::string_view text, const LaunchOptions &options)
 {
     Builder builder("launch");
     builder.str("id", id).str("projectId", projectId).str("text", text);
@@ -567,27 +660,27 @@ std::string encodeLaunch(std::string_view id, std::string_view projectId, std::s
     return builder.print();
 }
 
-std::string encodeListProjects(std::string_view id)
+std::optional<std::string> encodeListProjects(std::string_view id)
 {
     return Builder("list_projects").str("id", id).print();
 }
 
-std::string encodeRefresh(std::string_view id)
+std::optional<std::string> encodeRefresh(std::string_view id)
 {
     return Builder("refresh").str("id", id).print();
 }
 
-std::string encodeAudioStart(std::string_view id)
+std::optional<std::string> encodeAudioStart(std::string_view id)
 {
     return Builder("audio_start").str("id", id).num("sampleRate", kAudioSampleRate).print();
 }
 
-std::string encodeAudioEnd(std::string_view id)
+std::optional<std::string> encodeAudioEnd(std::string_view id)
 {
     return Builder("audio_end").str("id", id).print();
 }
 
-std::string encodeAudioCancel(std::string_view id)
+std::optional<std::string> encodeAudioCancel(std::string_view id)
 {
     return Builder("audio_cancel").str("id", id).print();
 }

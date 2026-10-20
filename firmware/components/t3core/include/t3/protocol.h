@@ -42,16 +42,18 @@ inline constexpr int kErrorMessageMax = 120;
 inline constexpr int kHomeAgeCols = 4;
 // receipt: DEVICE_FRAME_BYTES_MAX in relay/src/protocol/messages.ts, also the audio chunk cap
 inline constexpr int kDeviceFrameBytesMax = 65536;
+// why: the relay has no cap on warnings (relay/src/session.ts clips each to kErrorMessageMax); about 7 conditions can warn at once, so 16 is a tripwire and Home.warningsDropped says how many were cut
+inline constexpr int kWarningsMax = 16;
 // receipt: docs/protocol.md audio_start, sampleRate must be 16000
 inline constexpr int kAudioSampleRate = 16000;
 
 enum class Mode { Queue, Steer };
 enum class Workspace { Root, Worktree };
 enum class RuntimeMode { ApprovalRequired, AutoAcceptEdits, Auto, FullAccess };
-enum class HomeKind { Approval, Question, Failed, Running, Done };
+enum class HomeKind { Approval, Question, Failed, Running, Done, Unknown };
 enum class RequestKind { Approval, Question };
 enum class T3Status { Ok, Unreachable };
-enum class ErrorCode { ProtocolVersion, Auth, HelloTimeout, BadMessage, BadAudio, AudioNotStarted, Internal };
+enum class ErrorCode { ProtocolVersion, Auth, HelloTimeout, BadMessage, BadAudio, AudioNotStarted, Internal, Unknown };
 
 std::string_view workspaceName(Workspace value);
 std::string_view runtimeModeName(RuntimeMode value);
@@ -99,6 +101,7 @@ struct Home {
     HomeCounts counts;
     Approvals approvals;
     std::vector<std::string> warnings;
+    int warningsDropped = 0;
     T3Status t3 = T3Status::Ok;
 };
 
@@ -177,7 +180,14 @@ struct Error {
 
 using RelayMsg = std::variant<Welcome, Ack, Home, ThreadPage, Request, Projects, TranscriptPartial, TranscriptFinal, Error>;
 
-std::optional<RelayMsg> parseRelay(std::string_view json, std::string &err);
+std::optional<RelayMsg> parseRelay(std::string_view json, const HelloCaps &caps, std::string &err);
+
+struct JsonAllocator {
+    void *(*allocate)(size_t);
+    void (*release)(void *);
+};
+
+void setJsonAllocator(const JsonAllocator &allocator);
 
 struct LaunchOptions {
     std::optional<std::string> model;
@@ -185,18 +195,18 @@ struct LaunchOptions {
     std::optional<RuntimeMode> runtimeMode;
 };
 
-std::string encodeHello(const HelloCaps &caps, std::string_view token, std::string_view fw);
-std::string encodeOpenThread(std::string_view id, std::string_view threadId);
-std::string encodePage(std::string_view id, std::string_view threadId, int page);
-std::string encodeReply(std::string_view id, std::string_view threadId, std::string_view text, Mode mode);
-std::string encodeRespond(std::string_view id, std::string_view threadId, std::string_view requestId, std::string_view value,
+std::optional<std::string> encodeHello(const HelloCaps &caps, std::string_view token, std::string_view fw);
+std::optional<std::string> encodeOpenThread(std::string_view id, std::string_view threadId);
+std::optional<std::string> encodePage(std::string_view id, std::string_view threadId, int page);
+std::optional<std::string> encodeReply(std::string_view id, std::string_view threadId, std::string_view text, Mode mode);
+std::optional<std::string> encodeRespond(std::string_view id, std::string_view threadId, std::string_view requestId, std::string_view value,
                           std::optional<std::string_view> text);
-std::string encodeLaunch(std::string_view id, std::string_view projectId, std::string_view text, const LaunchOptions &options);
-std::string encodeListProjects(std::string_view id);
-std::string encodeRefresh(std::string_view id);
-std::string encodeAudioStart(std::string_view id);
-std::string encodeAudioEnd(std::string_view id);
-std::string encodeAudioCancel(std::string_view id);
+std::optional<std::string> encodeLaunch(std::string_view id, std::string_view projectId, std::string_view text, const LaunchOptions &options);
+std::optional<std::string> encodeListProjects(std::string_view id);
+std::optional<std::string> encodeRefresh(std::string_view id);
+std::optional<std::string> encodeAudioStart(std::string_view id);
+std::optional<std::string> encodeAudioEnd(std::string_view id);
+std::optional<std::string> encodeAudioCancel(std::string_view id);
 
 class IdGen {
 public:
