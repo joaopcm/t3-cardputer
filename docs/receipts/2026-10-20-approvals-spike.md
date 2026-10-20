@@ -57,6 +57,8 @@ The fields the device needs come from these places:
 | available decisions | Claude approvals carry **no `options`** (the field is absent in all 5 captures). The web UI then falls back to `cancel`, `decline`, `acceptForSession` ("Always allow this session"), and `accept` (`ComposerPendingApprovalActions.tsx`). Other providers (Codex MCP elicitation, Antigravity) do send `options`. |
 | kind | `payload.kind`: `command` here. Other values: `file-read`, `file-change`, `mcp-elicitation`, `permission`, `user_input`, `dynamic_tool_call`, `auth_refresh`. |
 
+**Pending snapshot, captured live (2026-10-20, Task 6 fix round):** subscribing while a command approval was already pending gave a single first `Chunk` with one `snapshot` value (~21 KB). `projection.runtimeRequests[0]` has exactly the `runtime-request.updated` payload shape with `status:"pending"`. `projection.turnItems` holds the matching `command_execution` item (`nativeItemRef.nativeId` = the request's `nativeRequestRef.nativeId`, `input` = the command) and the `approval_request` item (`requestId`, `prompt`). App-level `command_execution` items ("Preparing workspace") have `nativeItemRef: null`. Spike phase `pending-snapshot`; fixture `relay/src/approvals/__fixtures__/ws-pending-snapshot.jsonl`.
+
 On resolution, the server emits `runtime-request.updated` with `status:"resolved"`, `resolvedAt`, and `decision`. The `approval_request` item becomes `completed` (accept, acceptForSession, acceptAlways) or `cancelled` (decline, cancel).
 
 A side finding: `true` ran **without** any approval, because Claude treats it as read-only. The canary needs a command that writes. The spike uses `touch t3-cardputer-canary.txt` inside the scratch folder. Task 14's canary must not use `true`.
@@ -81,6 +83,11 @@ Reply: `{"_tag":"Exit","requestId":"2","exit":{"_tag":"Success","value":{"sequen
 | always allow (Claude) | `"acceptForSession"` | the first run was approved; the identical second `touch` ran with no second approval |
 | `"acceptAlways"` (Claude) | **landmine** | Exit was `Success` and the item was marked `completed`, **but Claude was told "User declined tool execution."** `ClaudeAdapterV2.permissionResultFromDecision` maps anything other than `accept`/`acceptForSession` to deny. Never send `acceptAlways` to a Claude thread. |
 | interrupt the turn | `"cancel"` | not exercised. Per source, it denies and sets `interrupt: true`. |
+
+Measured `Exit` failures (same capture):
+- an unknown `decision` literal while the request is pending → `{"_tag":"Failure","cause":[{"_tag":"Die","defect":"Expected \"accept\" | \"acceptForSession\" | \"acceptAlways\" | \"decline\" | \"cancel\"\n  at [\"decision\"]"}]}`
+- `accept` again after the request resolved → `{"_tag":"Failure","cause":[{"_tag":"Fail","error":{"_tag":"OrchestrationV2DispatchCommandError","message":"Runtime request … is resolved.",…}}]}`
+- an `Interrupt`ed subscription ends with `Exit` `Failure` whose cause is a list of `{"_tag":"Interrupt"}`.
 
 Server-side errors (from source) for a stale request: the dispatch fails when the request is not found, is no longer `pending`, or is `not_resumable`.
 

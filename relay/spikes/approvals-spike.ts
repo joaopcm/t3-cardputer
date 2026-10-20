@@ -690,6 +690,89 @@ const fixtures = async () => {
   console.log(`wrote fixtures to ${dir}`);
 };
 
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> => Promise.race([promise, sleep(ms).then(() => "timeout" as const)]);
+
+const pendingSnapshot = async () => {
+  const s = await secrets();
+  const mcp = await mcpClient(await mcpToken("approval-required"));
+  const title = "t3-cardputer canary (pending snapshot)";
+  const { launched, threadId } = await launchScratch(
+    mcp,
+    { title, message: SCENARIOS[0]!.message, runtimeMode: "approval-required", modelSelection: CANARY_MODEL },
+    "approval pending-snapshot",
+  );
+  if (!threadId) throw new Error(`launch failed: ${JSON.stringify(launched)}`);
+  const projectId = launched.result?.projectId;
+  const watchFile = join(OUT, "ws-pending-watch.jsonl");
+  const snapshotFile = join(OUT, "ws-pending-snapshot.jsonl");
+  rmSync(watchFile, { force: true });
+  rmSync(snapshotFile, { force: true });
+  const result: Json = { threadId, projectId };
+  const watch = await internalWs(s.internal, watchFile);
+  try {
+    let found: Json | undefined;
+    let notify: () => void = () => {};
+    watch.request("orchestration.subscribeThread", { threadId }, (values) => {
+      found ??= findPendingRequests(values)[0];
+      notify();
+    });
+    const deadline = Date.now() + 180_000;
+    while (!found && Date.now() < deadline) await Promise.race([new Promise<void>((r) => (notify = r)), sleep(1000)]);
+    if (!found) throw new Error("no pending approval within 180 s");
+    result.requestId = found.id;
+
+    const late = await internalWs(s.internal, snapshotFile);
+    let gotSnapshot: () => void = () => {};
+    const snapshotSeen = new Promise<void>((r) => (gotSnapshot = r));
+    const lateSub = late.request("orchestration.subscribeThread", { threadId }, () => gotSnapshot());
+    result.snapshot = await withTimeout(snapshotSeen, 15_000);
+    late.interrupt(lateSub.id);
+    const respond = (decision: string) =>
+      withTimeout(
+        late.request("orchestration.dispatchCommand", { type: "runtime-request.respond", commandId: randomUUID(), threadId, requestId: found.id, decision }).exit,
+        15_000,
+      );
+    result.bogusWhilePending = await respond("bogusDecision");
+    result.accept = await respond("accept");
+    result.acceptAgainWhenResolved = await respond("accept");
+    await sleep(500);
+    late.close();
+    result.wait = (await mcp.call("t3_thread_wait", { threadId, timeoutMs: 120_000 })).result;
+  } finally {
+    watch.close();
+    result.cleanup = await settleAndArchive(mcp, threadId);
+    writeOut("pending-snapshot.json", result);
+  }
+
+  const environment = await (await fetch(`${BASE}/.well-known/t3/environment`)).json();
+  const projects = (await mcp.call("t3_project_list", {})).result?.projects ?? [];
+  const created = readFileSync(CREATED, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const redact = makeRedactor({
+    threadIds: created.map((c: Json) => c.threadId),
+    projectIds: projects.map((p: Json) => p.id ?? p.projectId),
+    environmentId: environment.environmentId,
+  });
+  const target = join(process.cwd(), "relay/src/approvals/__fixtures__/ws-pending-snapshot.jsonl");
+  const text = redact(readFileSync(snapshotFile, "utf8"));
+  const tokens = [s.internal, ...Object.values(s.mcp)].filter(Boolean) as string[];
+  if (tokens.some((t) => text.includes(t)) || text.match(UUID) || text.includes(homedir())) throw new Error("redaction leak in ws-pending-snapshot.jsonl");
+  writeFileSync(target, text);
+  console.log(
+    JSON.stringify(
+      {
+        threadId: redact(threadId),
+        snapshot: result.snapshot,
+        exits: [result.bogusWhilePending, result.accept, result.acceptAgainWhenResolved].map((e) => (e === "timeout" ? e : e._tag ?? e)),
+        wait: result.wait?.status ?? result.wait,
+        cleanup: [result.cleanup.settle.isError, result.cleanup.archive.isError],
+        wrote: target,
+      },
+      null,
+      2,
+    ),
+  );
+};
+
 const revokeSessions = () => {
   const sessions = JSON.parse(execFileSync(T3_BIN, ["auth", "session", "list", "--json"], { encoding: "utf8" }));
   const mine = sessions.filter((x: Json) => (x.client?.label ?? "").startsWith(LABEL));
@@ -708,6 +791,7 @@ const phases: Record<string, (...args: string[]) => Promise<void> | void> = {
   models,
   fixtures,
   "verify-cleanup": verifyCleanup,
+  "pending-snapshot": pendingSnapshot,
   revoke: revokeSessions,
 };
 

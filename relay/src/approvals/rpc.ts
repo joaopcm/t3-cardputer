@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import { z } from "zod";
 import { T3AuthError, T3UnavailableError, isConnectionError } from "../t3/mcp.js";
-import { AdapterBrokenError, ApprovalRejectedError, decode } from "./types.js";
+import { AdapterBrokenError, decode } from "./types.js";
 
 // receipt: docs/receipts/2026-10-20-approvals-spike.md (c), any other version is refused with HTTP 426
 const ORCHESTRATION_PROTOCOL = 2;
@@ -24,6 +24,16 @@ function upgradeError(status: number): Error {
   }
   if (status >= 500) return new T3UnavailableError(`T3 /ws upgrade returned HTTP ${status}`);
   return new AdapterBrokenError(`T3 /ws upgrade returned HTTP ${status}`);
+}
+
+export class RpcFailure extends Error {
+  override name = "RpcFailure";
+  constructor(
+    readonly tag: string,
+    readonly exitCause: unknown,
+  ) {
+    super(`T3 answered ${tag} with Exit Failure: ${JSON.stringify(exitCause)}`);
+  }
 }
 
 export class RpcSocket {
@@ -83,7 +93,7 @@ export class RpcSocket {
         onChunk: () => reject(new AdapterBrokenError(`${tag} streamed a Chunk, expected a single Exit`)),
         onExit: (exit) => {
           if (exit._tag === "Success") resolve(exit.value);
-          else reject(new ApprovalRejectedError(`T3 refused ${tag}: ${JSON.stringify(exit.cause)}`));
+          else reject(new RpcFailure(tag, exit.cause));
         },
       });
     });

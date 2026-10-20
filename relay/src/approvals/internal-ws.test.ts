@@ -14,10 +14,19 @@ type Peer = { send(msg: Msg): void };
 type Handler = (msg: Msg, peer: Peer) => void;
 type Frame = { at: number; dir: "in" | "out"; msg: Msg };
 
-const frames: Frame[] = readFileSync(join(import.meta.dirname, "__fixtures__", "ws-approval-frames.jsonl"), "utf8")
-  .trim()
-  .split("\n")
-  .map((line) => JSON.parse(line));
+const readFrames = (name: string): Frame[] =>
+  readFileSync(join(import.meta.dirname, "__fixtures__", name), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+const frames = readFrames("ws-approval-frames.jsonl");
+const pendingFrames = readFrames("ws-pending-snapshot.jsonl");
+const PENDING_SNAPSHOT: Msg[] = pendingFrames.find((f) => f.msg._tag === "Chunk")!.msg.values;
+const PENDING_REQUEST_ID: string = PENDING_SNAPSHOT[0]!.projection.runtimeRequests[0].id;
+const exitWith = (causeTag: string): Msg => pendingFrames.find((f) => f.msg._tag === "Exit" && f.msg.exit.cause?.[0]?._tag === causeTag)!.msg.exit;
+const BAD_DECISION_EXIT = exitWith("Die");
+const ALREADY_RESOLVED_EXIT = exitWith("Fail");
 
 const THREAD = "mcp:<thread-id-1>";
 const respondFrame = frames.find((f) => f.dir === "out" && f.msg.tag === "orchestration.dispatchCommand")!.msg;
@@ -114,15 +123,17 @@ describe("approvals adapter, listPending", () => {
     ]);
   });
 
-  it("reads a pending approval held in the snapshot's projection rows", async () => {
-    const [snapshot, ...events] = valuesThrough(APPROVAL_LINE);
-    for (const { event } of events) {
-      if (event.type === "runtime-request.updated") snapshot!.projection.runtimeRequests.push(event.payload);
-      if (event.type === "turn-item.updated") snapshot!.projection.turnItems.push(event.payload);
-    }
-    const t3 = await fakeT3(serve([snapshot!]));
-    const pending = await adapterFor(t3.baseUrl).listPending([THREAD]);
-    expect(pending.map((p) => [p.requestId, p.summary])).toEqual([[REQUEST_ID, "touch t3-cardputer-canary.txt"]]);
+  it("reads an approval already pending in a live-captured snapshot", async () => {
+    const t3 = await fakeT3(serve(structuredClone(PENDING_SNAPSHOT)));
+    expect(await adapterFor(t3.baseUrl).listPending([THREAD])).toEqual([
+      {
+        threadId: THREAD,
+        requestId: PENDING_REQUEST_ID,
+        summary: "touch t3-cardputer-canary.txt",
+        detail: ["Create empty canary file in working directory", "cwd: <home>/.t3/scratch/2026-10-20-run-the-shell-command-touch-<thread-suffix>"],
+        decisions: ["allow_once", "allow_always", "deny", "deny_with_reason"],
+      },
+    ]);
   });
 
   it("returns nothing once the fixture's resolution is folded in", async () => {
@@ -213,11 +224,26 @@ describe("approvals adapter, respond", () => {
     expect(Object.keys(payload).sort()).toEqual(["commandId", "decision", "requestId", "threadId", "type"]);
   });
 
-  it("rejects with ApprovalRejectedError when T3 answers with a Failure exit", async () => {
-    const t3 = await fakeT3((msg, peer) => {
-      if (msg._tag === "Request") peer.send({ _tag: "Exit", requestId: msg.id, exit: { _tag: "Failure", cause: { _tag: "Fail", error: "request is not pending" } } });
-    });
-    await expect(adapterFor(t3.baseUrl).respond(THREAD, REQUEST_ID, { kind: "deny" })).rejects.toThrow(ApprovalRejectedError);
+  function failingDispatch(threadValues: Msg[], exit: Msg): Handler {
+    return (msg, peer) => {
+      if (msg._tag !== "Request") return;
+      if (msg.tag === "orchestration.subscribeThread") peer.send({ _tag: "Chunk", requestId: msg.id, values: structuredClone(threadValues) });
+      if (msg.tag === "orchestration.dispatchCommand") peer.send({ _tag: "Exit", requestId: msg.id, exit });
+    };
+  }
+
+  it("a Failure for a request that is no longer pending is ApprovalRejectedError", async () => {
+    const t3 = await fakeT3(failingDispatch(valuesThrough(RESOLUTION_LINE), ALREADY_RESOLVED_EXIT));
+    const error = await adapterFor(t3.baseUrl).respond(THREAD, REQUEST_ID, { kind: "deny" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApprovalRejectedError);
+    expect((error as Error).message).toContain("status resolved");
+  });
+
+  it("a Failure while the request is still pending is AdapterBrokenError", async () => {
+    const t3 = await fakeT3(failingDispatch(PENDING_SNAPSHOT, BAD_DECISION_EXIT));
+    const reason = await brokenReason(adapterFor(t3.baseUrl).respond(THREAD, PENDING_REQUEST_ID, { kind: "allow_once" }));
+    expect(reason).toContain("T3 refused a decision for a pending request");
+    expect(reason).toContain("at [\\\"decision\\\"]");
   });
 });
 

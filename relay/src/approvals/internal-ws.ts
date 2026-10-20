@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { DEFAULT_LIMITS, type Limits } from "../config.js";
-import { RpcSocket } from "./rpc.js";
-import { AdapterBrokenError, decode, type ApprovalDecision, type ApprovalsAdapter, type PendingApproval } from "./types.js";
+import { RpcFailure, RpcSocket } from "./rpc.js";
+import { AdapterBrokenError, ApprovalRejectedError, decode, type ApprovalDecision, type ApprovalsAdapter, type PendingApproval } from "./types.js";
 
 const SUBSCRIBE = "orchestration.subscribeThread";
 const DISPATCH = "orchestration.dispatchCommand";
@@ -60,6 +60,10 @@ class ThreadView {
       else this.#applyEvent(decode(eventSchema, value, where), where);
     });
     if (!this.#sawSnapshot) throw new AdapterBrokenError(`${SUBSCRIBE} for ${this.threadId}: first chunk carried no snapshot`);
+  }
+
+  statusOf(requestId: string): string | undefined {
+    return this.#requests.get(requestId)?.status;
   }
 
   pending(): PendingApproval[] {
@@ -129,6 +133,15 @@ class ThreadView {
   }
 }
 
+async function readThread(rpc: RpcSocket, threadId: string): Promise<ThreadView> {
+  const view = new ThreadView(threadId);
+  await rpc.stream(SUBSCRIBE, { threadId }, (values) => {
+    view.apply(values);
+    return true;
+  });
+  return view;
+}
+
 export function createApprovalsAdapter(
   baseUrl: string,
   token: () => string,
@@ -155,24 +168,23 @@ export function createApprovalsAdapter(
     async listPending(threadIds) {
       if (threadIds.length === 0) return [];
       return session(async (rpc) => {
-        const views = await Promise.all(
-          threadIds.map(async (threadId) => {
-            const view = new ThreadView(threadId);
-            await rpc.stream(SUBSCRIBE, { threadId }, (values) => {
-              view.apply(values);
-              return true;
-            });
-            return view;
-          }),
-        );
+        const views = await Promise.all(threadIds.map((threadId) => readThread(rpc, threadId)));
         return views.flatMap((view) => view.pending());
       });
     },
 
     async respond(threadId, requestId, decision) {
-      await session((rpc) =>
-        rpc.call(DISPATCH, { type: "runtime-request.respond", commandId: randomUUID(), threadId, requestId, decision: WIRE_DECISION[decision.kind] }),
-      );
+      await session(async (rpc) => {
+        try {
+          await rpc.call(DISPATCH, { type: "runtime-request.respond", commandId: randomUUID(), threadId, requestId, decision: WIRE_DECISION[decision.kind] });
+        } catch (error) {
+          if (!(error instanceof RpcFailure)) throw error;
+          const status = (await readThread(rpc, threadId)).statusOf(requestId);
+          const cause = JSON.stringify(error.exitCause);
+          if (status === "pending") throw new AdapterBrokenError(`T3 refused a decision for a pending request: ${cause}`, { cause: error });
+          throw new ApprovalRejectedError(`request is no longer pending (status ${status ?? "absent"}): ${cause}`, { cause: error });
+        }
+      });
     },
 
     async close() {
