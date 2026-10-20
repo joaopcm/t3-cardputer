@@ -13,6 +13,9 @@ export const limitsSchema = z.strictObject({
   pollIntervalMs: positiveInt,
   authFailuresPerWindow: positiveInt,
   authWindowMs: positiveInt,
+  mcpRequestTimeoutMs: positiveInt,
+  mcpWaitGraceMs: positiveInt,
+  mcpMaxPages: positiveInt,
 });
 
 export const configSchema = z.strictObject({
@@ -50,6 +53,12 @@ export const DEFAULT_LIMITS: Limits = {
   authFailuresPerWindow: 20,
   // receipt: pending Task 8
   authWindowMs: 10 * 60 * 1000,
+  // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), slowest MCP call measured was 114 ms, so 30 s only trips on a hung server
+  mcpRequestTimeoutMs: 30_000,
+  // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), loopback round trip p95 was under 120 ms, so 10 s past the wait is a tripwire
+  mcpWaitGraceMs: 10_000,
+  // receipt: docs/receipts/2026-10-20-approvals-spike.md (e), busiest project was 57 threads in 2 pages of 50, so 50 pages covers 2500 threads per project
+  mcpMaxPages: 50,
 };
 
 export const DEFAULT_CONFIG: RelayConfig = {

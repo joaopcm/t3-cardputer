@@ -17,6 +17,9 @@
     "audioIdleTimeoutMs": 5000,
     "pollIntervalMs": 2000,
     "authFailuresPerWindow": 20,
-    "authWindowMs": 600000
+    "authWindowMs": 600000,
+    "mcpRequestTimeoutMs": 30000,
+    "mcpWaitGraceMs": 10000,
+    "mcpMaxPages": 50
   }
 }
