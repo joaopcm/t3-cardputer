@@ -76,6 +76,32 @@ describe("toDeviceAscii", () => {
     expect(toDeviceAscii("\u2122 \u00a0x")).toBe("TM  x");
   });
 
+  it("maps common agent glyphs to ASCII", () => {
+    expect(toDeviceAscii("\u2022 item \u2192 next \u2714 ok \u2713")).toBe("* item -> next v ok v");
+    expect(toDeviceAscii("\u00b7\u25aa\u25e6\u2023")).toBe("****");
+    expect(toDeviceAscii("\u2190 \u21d2 \u21d0 \u2194 \u2191 \u2193")).toBe("<- => <= <-> ^ v");
+    expect(toDeviceAscii("\u2717 \u2718 2\u00d73")).toBe("x x 2x3");
+    expect(toDeviceAscii("\u00a9 \u00ae")).toBe("(c) (R)");
+    expect(toDeviceAscii("a\u2265b \u2264 \u2260")).toBe("a>=b <= !=");
+  });
+
+  it("maps glyphs that carry a VS16 selector", () => {
+    expect(toDeviceAscii("\u2714\ufe0f \u2194\ufe0f")).toBe("v <->");
+  });
+
+  it("keeps tree output readable", () => {
+    const tree = [
+      ".",
+      "\u251c\u2500\u2500 src",
+      "\u2502   \u251c\u2500\u2500 a.ts",
+      "\u2502   \u2514\u2500\u2500 b.ts",
+      "\u2514\u2500\u2500 README.md",
+    ].join("\n");
+    expect(toDeviceAscii(tree)).toBe([".", "+-- src", "|   +-- a.ts", "|   +-- b.ts", "+-- README.md"].join("\n"));
+    expect(toDeviceAscii("\u250c\u2500\u2510\n\u2502x\u2502\n\u2514\u2500\u2518")).toBe("+-+\n|x|\n+-+");
+    expect(toDeviceAscii("\u2554\u2550\u2557 \u2551 \u256d\u256e \u2571\u2572\u2573")).toBe("+-+ | ++ /\\x");
+  });
+
   it("strips ANSI escapes", () => {
     expect(toDeviceAscii("\u001b[31mred\u001b[0m")).toBe("red");
     expect(toDeviceAscii("\u001b]0;title\u0007body")).toBe("body");
