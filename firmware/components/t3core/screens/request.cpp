@@ -96,15 +96,21 @@ void App::onRequest(const Request &request, uint32_t nowMs)
         request_ = request;
         return;
     }
-    const bool typingReply = screen_ == Screen::Thread && !reply_.empty();
-    const bool typingAnswer = screen_ == Screen::Request && typingFor_ && !answer_.empty();
-    if (typingReply || typingAnswer) {
-        waiting_ = request;
+    if (!enterRequest(request, nowMs)) {
         inform("request waiting: Tab opens it", Color::Warn);
-        return;
+    }
+}
+
+bool App::enterRequest(const Request &request, uint32_t nowMs)
+{
+    const bool typing = (screen_ == Screen::Thread && !reply_.empty()) || (screen_ == Screen::Request && typingFor_);
+    if (typing) {
+        waiting_ = request;
+        return false;
     }
     showRequest(request);
-    pushedAtMs_ = nowMs;
+    guardSinceMs_ = nowMs;
+    return true;
 }
 
 void App::showRequest(const Request &request)
@@ -116,7 +122,6 @@ void App::showRequest(const Request &request)
     requestTop_ = 0;
     answer_.clear();
     typingFor_.reset();
-    pushedAtMs_.reset();
     if (request.options.empty()) {
         typingFor_ = Option{'T', "Type answer", "text"};
     }
@@ -128,6 +133,7 @@ App::Out App::showWaiting()
     if (waiting_) {
         const Request request = *waiting_;
         showRequest(request);
+        guardSinceMs_.reset();
     }
     return {};
 }
@@ -146,6 +152,9 @@ App::Out App::respond(Option option, std::optional<std::string> text)
     }
     respondId_ = id;
     responded_ = request_;
+    if (waiting_ && waiting_->requestId == request.requestId) {
+        waiting_.reset();
+    }
     typingFor_.reset();
     answer_.clear();
     screen_ = Screen::Thread;
@@ -156,13 +165,14 @@ App::Out App::respond(Option option, std::optional<std::string> text)
 App::Out App::requestKey(Key key, uint32_t nowMs)
 {
     const bool typed = key.name == KeyName::Char || key.name == KeyName::Enter || key.name == KeyName::FnEnter;
-    if (pushedAtMs_ && nowMs - *pushedAtMs_ < kRequestGuardMs) {
+    if (guardSinceMs_ && nowMs - *guardSinceMs_ < kRequestGuardMs) {
         if (typed) {
+            guardSinceMs_ = nowMs;
             inform("request just arrived, press again", Color::Warn);
             return {};
         }
     } else {
-        pushedAtMs_.reset();
+        guardSinceMs_.reset();
     }
     if (key.name == KeyName::Tab && waiting_) {
         return showWaiting();

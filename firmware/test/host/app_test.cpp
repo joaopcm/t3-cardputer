@@ -744,11 +744,12 @@ TEST_CASE("option keys wait kRequestGuardMs after a pushed request replaces the 
     app.onRelay(relay(kBouncePage), 20);
     app.onRelay(relay(kBounceRequest), 1000);
     CHECK(app.screenName() == "approval");
-    CHECK(app.onKey(ch('Y'), 1000 + t3::kRequestGuardMs - 1).send.empty());
-    CHECK(contains(row(app, 0), "just arrived"));
     CHECK(app.onKey(named(KeyName::Enter), 1100).send.empty());
     CHECK(app.screenName() == "approval");
-    const Frame respond(only(app.onKey(ch('Y'), 1000 + t3::kRequestGuardMs)));
+    const uint32_t lastSwallowed = 1100 + t3::kRequestGuardMs - 1;
+    CHECK(app.onKey(ch('Y'), lastSwallowed).send.empty());
+    CHECK(contains(row(app, 0), "just arrived"));
+    const Frame respond(only(app.onKey(ch('Y'), lastSwallowed + t3::kRequestGuardMs)));
     CHECK(respond.str("value") == "allow_once");
 }
 
@@ -827,4 +828,139 @@ TEST_CASE("new task shows every workspace and mode value in full")
         CHECK(row(app, 4).rfind(std::string("mode      [") + mode + "]", 0) == 0);
         press(app, named(KeyName::Right));
     }
+}
+
+namespace {
+
+App weaverThreadAt(uint32_t &t)
+{
+    App app = live();
+    app.onRelay(relay(kWeaverHome), t);
+    app.onKey(named(KeyName::Enter), t += 1000);
+    app.onRelay(relay(kWeaverPage), t += 1000);
+    t += 1000;
+    return app;
+}
+
+t3::RelayMsg weaverRequest(const std::string &requestId, const std::string &firstLine = "Wants to run a command:")
+{
+    std::string json = kBounceRequest;
+    json.replace(json.find("thr_bounce"), 10, "thr_weaver");
+    json.replace(json.find("req_1"), 5, requestId);
+    json.replace(json.find("Wants to run a command:"), 23, firstLine);
+    return relay(json);
+}
+
+size_t typeAt(App &app, const std::string &text, uint32_t &t, uint32_t step)
+{
+    size_t sent = 0;
+    for (char c : text) {
+        sent += app.onKey(ch(c), t).send.size();
+        t += step;
+    }
+    return sent;
+}
+
+std::string idOf(const App::Out &out)
+{
+    return Frame(only(out)).str("id");
+}
+
+}
+
+TEST_CASE("probe B: a typing burst after a pushed request never reaches an option")
+{
+    uint32_t t = 0;
+    App app = weaverThreadAt(t);
+    app.onRelay(weaverRequest("r1"), t);
+    t += 50;
+    CHECK(typeAt(app, "now add a test", t, 100) == 0);
+    CHECK(app.screenName() == "approval");
+    t += t3::kRequestGuardMs;
+    CHECK(Frame(only(app.onKey(ch('Y'), t))).str("value") == "allow_once");
+}
+
+TEST_CASE("probe C: an open reason line, even empty, holds a pushed request")
+{
+    uint32_t t = 0;
+    App app = weaverThreadAt(t);
+    app.onRelay(weaverRequest("r1"), t);
+    app.onKey(ch('T'), t += 1000);
+    app.onRelay(weaverRequest("r2"), t += 50);
+    t += 50;
+    CHECK(typeAt(app, "because x", t, 100) == 0);
+    CHECK(row(app, 9).rfind("> because x_", 0) == 0);
+    const Frame respond(only(app.onKey(named(KeyName::Enter), t)));
+    CHECK(respond.str("requestId") == "r1");
+    CHECK(respond.str("text") == "because x");
+}
+
+TEST_CASE("probe D: a failed respond while a reply is typed holds the request")
+{
+    uint32_t t = 0;
+    App app = weaverThreadAt(t);
+    app.onRelay(weaverRequest("r1"), t);
+    const std::string id = idOf(app.onKey(ch('N'), t += 1000));
+    CHECK(app.screenName() == "thread");
+    t += 500;
+    CHECK(typeAt(app, "ok n", t, 100) == 0);
+    app.onRelay(t3::Ack{id, false, std::string("t3 blip")}, t);
+    CHECK(app.screenName() == "thread");
+    CHECK(row(app, 0).rfind("refused: t3 blip, Tab reopens it", 0) == 0);
+    CHECK(typeAt(app, "ow add", t, 100) == 0);
+    CHECK(row(app, 8).rfind("> ok now add_", 0) == 0);
+    CHECK(contains(row(app, 10), "Tab request"));
+    app.onKey(named(KeyName::Tab), t);
+    CHECK(app.screenName() == "approval");
+}
+
+TEST_CASE("probe E: a failed respond never replaces a different request on screen")
+{
+    uint32_t t = 0;
+    App app = weaverThreadAt(t);
+    app.onRelay(weaverRequest("r1"), t);
+    const std::string id = idOf(app.onKey(ch('N'), t += 1000));
+    app.onRelay(weaverRequest("r2"), t += 100);
+    app.onRelay(t3::Ack{id, false, std::string("t3 blip")}, t += 1000);
+    CHECK(app.screenName() == "approval");
+    CHECK(row(app, 0).rfind("answer to layout engine failed: t3 blip", 0) == 0);
+    CHECK(Frame(only(app.onKey(ch('Y'), t += 100))).str("requestId") == "r2");
+}
+
+TEST_CASE("probe F: a launch whose ack is lost does not lock new task")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, ch('N'));
+    push(app, relay(kProjects));
+    press(app, named(KeyName::Enter));
+    type(app, "go");
+    const std::string first = idOf(press(app, named(KeyName::Enter)));
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(row(app, 0).rfind("launch result unknown, check Home", 0) == 0);
+    app.onLinkStatus("");
+    CHECK(idOf(press(app, named(KeyName::Enter))) != first);
+
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "home");
+    press(app, ch('N'));
+    push(app, relay(kProjects));
+    press(app, named(KeyName::Enter));
+    type(app, "again");
+    CHECK(Frame(only(press(app, named(KeyName::Enter)))).str("text") == "again");
+}
+
+TEST_CASE("probe I: answering a request drops its waiting copy, so Tab cannot answer it twice")
+{
+    uint32_t t = 0;
+    App app = weaverThreadAt(t);
+    app.onRelay(weaverRequest("r1"), t);
+    app.onKey(ch('T'), t += 1000);
+    t += 100;
+    typeAt(app, "no", t, 100);
+    app.onRelay(weaverRequest("r1", "Run r1 now?"), t += 500);
+    CHECK(Frame(only(app.onKey(named(KeyName::Enter), t += 500))).str("requestId") == "r1");
+    CHECK(app.onKey(named(KeyName::Tab), t += 500).send.empty());
+    CHECK(app.screenName() == "thread");
 }

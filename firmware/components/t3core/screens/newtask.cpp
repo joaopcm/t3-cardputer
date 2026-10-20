@@ -48,6 +48,7 @@ App::Out App::listProjects()
         return out;
     }
     projects_.reset();
+    launchId_.clear();
     projectSelected_ = 0;
     projectTop_ = 0;
     screen_ = Screen::Projects;

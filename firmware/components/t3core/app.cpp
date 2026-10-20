@@ -173,7 +173,7 @@ App::Out App::onFrame(std::string_view json, uint32_t nowMs)
 App::Out App::onRelay(const RelayMsg &msg, uint32_t nowMs)
 {
     if (const Ack *ack = std::get_if<Ack>(&msg)) {
-        onAck(*ack);
+        onAck(*ack, nowMs);
     } else if (const Home *home = std::get_if<Home>(&msg)) {
         onHome(*home);
     } else if (const ThreadPage *page = std::get_if<ThreadPage>(&msg)) {
@@ -196,6 +196,10 @@ App::Out App::onLinkStatus(std::string_view status)
 {
     const bool wasLive = linkStatus_.empty();
     linkStatus_ = std::string(status);
+    if (!status.empty() && !launchId_.empty()) {
+        launchId_.clear();
+        inform("launch result unknown, check Home", Color::Warn);
+    }
     const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request) && !threadId_.empty();
     if (!status.empty() || wasLive || !threadOpen) {
         return {};
@@ -219,7 +223,7 @@ std::string App::threadTitle(std::string_view threadId) const
     return std::string(threadId);
 }
 
-void App::onAck(const Ack &ack)
+void App::onAck(const Ack &ack, uint32_t nowMs)
 {
     const bool launch = !launchId_.empty() && ack.id == launchId_;
     if (launch) {
@@ -237,12 +241,14 @@ void App::onAck(const Ack &ack)
     }
     const std::string why = ack.error.value_or("no reason given");
     if (ack.id == respondId_ && responded_) {
-        const bool onThatThread = (screen_ == Screen::Thread || screen_ == Screen::Request) && threadId_ == responded_->threadId;
-        if (!onThatThread) {
+        if (screen_ != Screen::Thread || threadId_ != responded_->threadId) {
             inform("answer to " + threadTitle(responded_->threadId) + " failed: " + why);
             return;
         }
-        showRequest(*responded_);
+        if (!enterRequest(*responded_, nowMs)) {
+            inform("refused: " + why + ", Tab reopens it");
+            return;
+        }
     } else if (ack.id == replyId_) {
         if (screen_ != Screen::Thread || threadId_ != replyThreadId_ || !reply_.empty()) {
             inform("reply to " + threadTitle(replyThreadId_) + " failed: " + why);

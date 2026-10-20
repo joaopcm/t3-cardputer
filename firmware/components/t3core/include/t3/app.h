@@ -12,7 +12,7 @@
 
 namespace t3 {
 
-// why: simple visual reaction time is about 200-250 ms, so a key already on its way when a pushed request replaces the screen lands inside 400 ms; option keys wait that long
+// why: simple visual reaction time is about 200-250 ms, so a key already on its way when an unasked-for request replaces the screen lands inside 400 ms; option keys act only after 400 ms with no typed key
 inline constexpr uint32_t kRequestGuardMs = 400;
 
 std::vector<std::string> wrapWords(std::string_view text, int width);
@@ -58,8 +58,9 @@ private:
     const HomeRow *homeRow(std::string_view threadId) const;
     void drawBar(Grid &grid, std::string_view left, std::string_view right, Color rightColor = Color::Text) const;
     static void drawHint(Grid &grid, std::string_view hint);
-    void onAck(const Ack &ack);
+    void onAck(const Ack &ack, uint32_t nowMs);
     void onRequest(const Request &request, uint32_t nowMs);
+    bool enterRequest(const Request &request, uint32_t nowMs);
     void showRequest(const Request &request);
     std::string threadTitle(std::string_view threadId) const;
 
@@ -107,7 +108,7 @@ private:
 
     std::optional<Request> request_;
     std::optional<Request> waiting_;
-    std::optional<uint32_t> pushedAtMs_;
+    std::optional<uint32_t> guardSinceMs_;
     int requestTop_ = 0;
     std::optional<Option> typingFor_;
     std::string answer_;
