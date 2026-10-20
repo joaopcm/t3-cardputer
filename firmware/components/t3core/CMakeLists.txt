@@ -1,4 +1,5 @@
 idf_component_register(
-    SRCS "grid.cpp"
+    SRCS "grid.cpp" "protocol.cpp"
     INCLUDE_DIRS "include"
+    PRIV_REQUIRES json
 )
