@@ -55,6 +55,27 @@ std::string_view App::screenName() const
     return "";
 }
 
+bool App::editing() const
+{
+    switch (screen_) {
+    case Screen::SetupWifiList:
+    case Screen::SetupWifiPassword:
+    case Screen::SetupPair:
+        return true;
+    case Screen::Thread:
+        return !reply_.empty();
+    case Screen::Request:
+        return typingFor_.has_value();
+    case Screen::Prompt:
+        return !prompt_.empty();
+    case Screen::Connecting:
+    case Screen::Home:
+    case Screen::Projects:
+        return false;
+    }
+    return false;
+}
+
 bool App::send(Out &out, std::optional<std::string> frame, std::string_view what)
 {
     if (!frame) {

@@ -103,3 +103,48 @@ TEST_CASE("new timeouts restart the idle clock and wake the screen")
     CHECK(p.onTick(kOff + 1 + 400));
     CHECK(p.level() == Power::Level::Off);
 }
+
+TEST_CASE("while editing the screen dims at the dim timeout and stays dim past the off timeout")
+{
+    Power p = power();
+    p.setEditing(true);
+    CHECK(p.onTick(kDim));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK_FALSE(p.onTick(kOff));
+    CHECK_FALSE(p.onTick(kOff * 100));
+    CHECK(p.level() == Power::Level::Dim);
+}
+
+TEST_CASE("a late tick while editing stops at dim, and the next key acts")
+{
+    Power p = power();
+    p.setEditing(true);
+    CHECK(p.onTick(kOff + 500));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK(p.onKey(kOff + 501) == Power::KeyEffect::Deliver);
+    CHECK(p.level() == Power::Level::Full);
+}
+
+TEST_CASE("when editing ends a dim screen goes off at the normal timeout")
+{
+    Power p = power();
+    p.setEditing(true);
+    p.onTick(kOff + 10);
+    REQUIRE(p.level() == Power::Level::Dim);
+    p.setEditing(false);
+    CHECK(p.onTick(kOff + 11));
+    CHECK(p.level() == Power::Level::Off);
+}
+
+TEST_CASE("editing set again after the clock restarts keeps the normal timeout from the last key")
+{
+    Power p = power();
+    p.onKey(500);
+    p.setEditing(true);
+    CHECK_FALSE(p.onTick(500 + kDim - 1));
+    CHECK(p.onTick(500 + kDim));
+    p.setEditing(false);
+    CHECK_FALSE(p.onTick(500 + kOff - 1));
+    CHECK(p.onTick(500 + kOff));
+    CHECK(p.level() == Power::Level::Off);
+}

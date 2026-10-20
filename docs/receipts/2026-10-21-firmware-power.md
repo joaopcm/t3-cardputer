@@ -8,7 +8,7 @@ Everything below is an ESTIMATE from published figures. No battery drain was mea
 | --- | --- | --- |
 | ADV battery capacity | 1500 mAh. The page's version log reads "Battery capacity changed from 1750mAh to 1500mAh" (2026.7.13), so older units and retailer pages say 1750 mAh. Sized on 1500, the lower | https://docs.m5stack.com/en/core/Cardputer-Adv (older figure: https://evelta.com/m5stack-cardputer-adv-esp32-s3-programmable-platform-for-embedded-prototyping-iot-development/) |
 | ADV operating current | 120.2 mA, WiFi operating 132.3 mA, both "DC4.2V@" (taken at the battery side, screen on, radio and CPU working) | same M5 page |
-| usable fraction | 80% of rated: the firmware's own battery map (3300 mV empty, 4150 mV full) ends at 3.3 V and the boost and regulators lose a few percent. Assumption, no source | M5Unified 0.2.27 `Power_Class.inl` for the voltage map |
+| usable fraction | 80% of rated: the firmware's battery map starts at 3300 mV (0%) and the boost and regulators lose a few percent. Assumption, no source | M5Unified 0.2.27 `Power_Class.inl` for the voltage map |
 | usable capacity | 1500 x 0.8 = 1200 mAh | arithmetic |
 | ESP32-S3 modem-sleep, 160 MHz, DFS off | 40.1 mA average at DTIM1 (38.7 DTIM3, 38.2 DTIM10), SoC only, shielded box | https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-guides/low-power-mode/low-power-mode-wifi.html |
 | ESP32-S3 CPU idle, 160 MHz, WiFi clock gated | 27.6 mA (peripheral clocks off) to 42.3 mA (peripheral clocks on); light sleep 240 uA; flash access in modem-sleep adds 10 mA | ESP32-S3 datasheet v2.2 tables 5-9 and 5-10, https://documentation.espressif.com/esp32-s3_datasheet_en.pdf |
@@ -49,7 +49,7 @@ Why these and not shorter:
 
 ## battery level
 
-`power.cpp` logs the battery at boot and on every screen level change: `power: boot battery 98% 4140 mV`. The reading is GPIO10 through a divider of 2.0 and the M5Unified percent map (3300 mV to 0%, 4150 mV to 100%). On the bench the ADV is on USB, so the voltage is the charger's, not a discharge reading: 4136 to 4140 mV, 98%. It becomes a drain figure once the device runs unplugged.
+`power.cpp` logs the battery at boot and on every screen level change: `power: boot battery 100% 4140 mV`. The reading is GPIO10 through a divider of 2.0 and the M5Unified percent formula `(mv - 3300) * 100 / (4150 - 3350)`: a span of 800 mV, so 0% at 3300 mV and 100% at 4100 mV, clamped. On the bench the ADV is on USB, so the voltage is the charger's, not a discharge reading: 4136 to 4140 mV, which the formula clamps to 100%. It becomes a drain figure once the device runs unplugged.
 
 ## not measured, to retune
 

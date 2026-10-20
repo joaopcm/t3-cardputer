@@ -19,7 +19,7 @@ bool Power::onTick(uint32_t nowMs)
 {
     const uint32_t idleMs = nowMs - lastKeyMs_;
     const Level before = level_;
-    if (level_ != Level::Off && idleMs >= offAfterMs_) {
+    if (!editing_ && level_ != Level::Off && idleMs >= offAfterMs_) {
         level_ = Level::Off;
     } else if (level_ == Level::Full && idleMs >= dimAfterMs_) {
         level_ = Level::Dim;

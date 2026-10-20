@@ -64,6 +64,7 @@ public:
     void onWifiForgotten(std::string_view ssid, bool ok, std::string_view why);
     void draw(Grid &grid) const;
     std::string_view screenName() const;
+    bool editing() const;
 
 private:
     enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiPassword, SetupPair };

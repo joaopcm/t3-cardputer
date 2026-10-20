@@ -121,7 +121,7 @@ public:
         if (debug_serial_poll_power(&dimAfterMs, &offAfterMs)) {
             power_set_timeouts(dimAfterMs, offAfterMs, now_ms());
         }
-        power_tick(now_ms());
+        power_tick(now_ms(), app_.editing());
         if (debug_serial_poll_drop()) {
             ESP_LOGI(TAG, "debug: dropping the relay socket");
             transport_close();

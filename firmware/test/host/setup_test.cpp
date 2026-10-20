@@ -585,3 +585,15 @@ TEST_CASE("re-pair screen matches the setup look")
     app.onAuthRejected();
     checkGolden(app, "setup_repair");
 }
+
+TEST_CASE("setup screens count as editing from the first frame")
+{
+    App app(kCaps, 7);
+    app.onBoot(true, false);
+    CHECK(app.screenName() == "setup_pair");
+    CHECK(app.editing());
+    App noWifi(kCaps, 7);
+    noWifi.onBoot(false, false);
+    CHECK(noWifi.screenName() == "setup_wifi");
+    CHECK(noWifi.editing());
+}

@@ -20,9 +20,9 @@ constexpr uint32_t kOffAfterMs = 60000;
 // receipt: M5Unified 0.2.27 Power_Class.inl, board_M5CardputerADV reads the battery on GPIO10 through a divider of 2.0
 constexpr int kBatteryGpio = 10;
 constexpr int kBatteryDivider = 2;
-// receipt: M5Unified 0.2.27 Power_Class.inl getBatteryLevel maps 3300 mV to 0% and 4150 mV to 100%
+// receipt: M5Unified 0.2.27 Power_Class.inl getBatteryLevel computes (mv - 3300) * 100 / (4150 - 3350), so the span is 800 mV and 100% is 4100 mV
 constexpr int kEmptyMv = 3300;
-constexpr int kFullMv = 4150;
+constexpr int kSpanMv = 4150 - 3350;
 
 t3::Power power(kDimAfterMs, kOffAfterMs, 0);
 adc_oneshot_unit_handle_t adc;
@@ -88,7 +88,7 @@ void logBattery(const char *when)
         ESP_LOGW(TAG, "%s battery unreadable", when);
         return;
     }
-    const int percent = (*mv - kEmptyMv) * 100 / (kFullMv - kEmptyMv);
+    const int percent = (*mv - kEmptyMv) * 100 / kSpanMv;
     ESP_LOGI(TAG, "%s battery %d%% %d mV", when, percent < 0 ? 0 : (percent > 100 ? 100 : percent), *mv);
 }
 
@@ -120,8 +120,9 @@ t3::Power::KeyEffect power_on_key(uint32_t nowMs)
     return effect;
 }
 
-void power_tick(uint32_t nowMs)
+void power_tick(uint32_t nowMs, bool editing)
 {
+    power.setEditing(editing);
     if (power.onTick(nowMs)) {
         applyLevel(power.level());
     }

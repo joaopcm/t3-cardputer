@@ -1068,3 +1068,36 @@ TEST_CASE("probe I: answering a request drops its waiting copy, so Tab cannot an
     CHECK(app.onKey(named(KeyName::Tab), t += 500).send.empty());
     CHECK(app.screenName() == "thread");
 }
+
+TEST_CASE("editing is true only while a text line holds or awaits typing")
+{
+    App home = live();
+    push(home, relay(kHome));
+    CHECK_FALSE(home.editing());
+
+    App thread = onWeaverThread();
+    CHECK_FALSE(thread.editing());
+    type(thread, "g");
+    CHECK(thread.editing());
+    press(thread, named(KeyName::Backspace));
+    CHECK_FALSE(thread.editing());
+
+    App approval = onApproval();
+    CHECK_FALSE(approval.editing());
+    press(approval, ch('T'));
+    CHECK(approval.editing());
+    press(approval, named(KeyName::Esc));
+    CHECK_FALSE(approval.editing());
+
+    App prompt = live();
+    push(prompt, relay(kHome));
+    press(prompt, ch('N'));
+    push(prompt, relay(kProjects));
+    CHECK(prompt.screenName() == "projects");
+    CHECK_FALSE(prompt.editing());
+    press(prompt, named(KeyName::Enter));
+    CHECK(prompt.screenName() == "new_task");
+    CHECK_FALSE(prompt.editing());
+    type(prompt, "x");
+    CHECK(prompt.editing());
+}
