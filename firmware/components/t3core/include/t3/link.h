@@ -14,6 +14,10 @@ namespace t3 {
 inline constexpr uint32_t kBackoffMinMs = 500;
 // receipt: pending Task 8 (hotspot reconnect measurements)
 inline constexpr uint32_t kBackoffMaxMs = 30000;
+// receipt: relay/src/config.ts helloTimeoutMs=10000 (relay answers 4408 at 10 s) + 2000 ms margin, so a live relay speaks first
+inline constexpr uint32_t kHelloWaitMs = 12000;
+// why: tripwire past any good TLS connect on home WiFi or a hotspot, so only a wedged connect touches it; receipt: pending Task 8 (measured connect times)
+inline constexpr uint32_t kConnectWaitMs = 30000;
 
 class Link {
 public:
@@ -23,7 +27,7 @@ public:
         std::vector<std::string> send;
         bool wipeToken = false;
         std::optional<uint32_t> reconnectInMs;
-        std::string statusText;
+        std::optional<std::string> statusText;
         bool connect = false;
         bool closeSocket = false;
         bool passToApp = false;
@@ -33,19 +37,19 @@ public:
 
     void setToken(std::string token);
 
-    Out onWifi(bool up);
-    Out onOpen();
-    Out onText(std::string_view frame);
-    Out onClose(int code, std::string_view lastError);
+    Out onWifi(bool up, uint32_t nowMs);
+    Out onOpen(uint32_t nowMs);
+    Out onText(std::string_view frame, uint32_t nowMs);
+    Out onClose(int code, std::string_view lastError, uint32_t nowMs);
     Out onTick(uint32_t nowMs);
-    Out onUserReconnect();
+    Out onUserReconnect(uint32_t nowMs);
 
     State state() const { return state_; }
 
 private:
-    Out connectNow();
-    Out retryAfter(std::string statusText);
-    Out onPreWelcome(std::string_view frame);
+    Out connectNow(uint32_t nowMs);
+    Out retryAfter(std::string statusText, uint32_t nowMs);
+    Out onPreWelcome(std::string_view frame, uint32_t nowMs);
 
     HelloCaps caps_;
     std::string token_;
@@ -53,8 +57,7 @@ private:
     State state_ = State::NoWifi;
     bool wifiUp_ = false;
     uint32_t backoffMs_ = kBackoffMinMs;
-    uint32_t nowMs_ = 0;
-    uint32_t retryAtMs_ = 0;
+    uint32_t deadlineMs_ = 0;
     std::string lastError_;
 };
 

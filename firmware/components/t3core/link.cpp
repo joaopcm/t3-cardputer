@@ -5,6 +5,15 @@
 
 namespace t3 {
 
+namespace {
+
+bool reached(uint32_t nowMs, uint32_t deadlineMs)
+{
+    return static_cast<int32_t>(nowMs - deadlineMs) >= 0;
+}
+
+}
+
 Link::Link(const HelloCaps &caps, std::string token, std::string fw) : caps_(caps), token_(std::move(token)), fw_(std::move(fw)) {}
 
 void Link::setToken(std::string token)
@@ -12,28 +21,34 @@ void Link::setToken(std::string token)
     token_ = std::move(token);
 }
 
-Link::Out Link::connectNow()
+Link::Out Link::connectNow(uint32_t nowMs)
 {
-    state_ = State::Connecting;
     Out out;
+    if (token_.empty()) {
+        state_ = State::NeedsPair;
+        out.statusText = "re-pair needed";
+        return out;
+    }
+    state_ = State::Connecting;
+    deadlineMs_ = nowMs + kConnectWaitMs;
     out.statusText = "connecting";
     out.connect = true;
     return out;
 }
 
-Link::Out Link::retryAfter(std::string statusText)
+Link::Out Link::retryAfter(std::string statusText, uint32_t nowMs)
 {
     state_ = State::Backoff;
     const uint32_t delay = backoffMs_;
     backoffMs_ = std::min(backoffMs_ * 2, kBackoffMaxMs);
-    retryAtMs_ = nowMs_ + delay;
+    deadlineMs_ = nowMs + delay;
     Out out;
     out.statusText = std::move(statusText);
     out.reconnectInMs = delay;
     return out;
 }
 
-Link::Out Link::onWifi(bool up)
+Link::Out Link::onWifi(bool up, uint32_t nowMs)
 {
     wifiUp_ = up;
     Out out;
@@ -50,10 +65,10 @@ Link::Out Link::onWifi(bool up)
         return out;
     }
     backoffMs_ = kBackoffMinMs;
-    return connectNow();
+    return connectNow(nowMs);
 }
 
-Link::Out Link::onOpen()
+Link::Out Link::onOpen(uint32_t nowMs)
 {
     Out out;
     if (state_ != State::Connecting) {
@@ -63,21 +78,22 @@ Link::Out Link::onOpen()
     lastError_.clear();
     const std::optional<std::string> hello = encodeHello(caps_, token_, fw_);
     if (!hello) {
-        Out failed = retryAfter("heap: hello needed more than available");
+        Out failed = retryAfter("heap: hello needed more than available", nowMs);
         failed.closeSocket = true;
         return failed;
     }
     state_ = State::Hello;
+    deadlineMs_ = nowMs + kHelloWaitMs;
     out.send.push_back(*hello);
     return out;
 }
 
-Link::Out Link::onPreWelcome(std::string_view frame)
+Link::Out Link::onPreWelcome(std::string_view frame, uint32_t nowMs)
 {
     std::string err;
     const std::optional<RelayMsg> msg = parseRelay(frame, caps_, err);
     if (!msg) {
-        Out failed = retryAfter(err);
+        Out failed = retryAfter(err, nowMs);
         failed.closeSocket = true;
         return failed;
     }
@@ -90,24 +106,26 @@ Link::Out Link::onPreWelcome(std::string_view frame)
     if (std::holds_alternative<Welcome>(*msg)) {
         state_ = State::Live;
         backoffMs_ = kBackoffMinMs;
-        return Out{};
+        Out out;
+        out.statusText = "";
+        return out;
     }
-    Out failed = retryAfter("relay sent a frame before welcome");
+    Out failed = retryAfter("relay sent a frame before welcome", nowMs);
     failed.closeSocket = true;
     return failed;
 }
 
-Link::Out Link::onText(std::string_view frame)
+Link::Out Link::onText(std::string_view frame, uint32_t nowMs)
 {
     if (state_ == State::Hello) {
-        return onPreWelcome(frame);
+        return onPreWelcome(frame, nowMs);
     }
     Out out;
     out.passToApp = state_ == State::Live;
     return out;
 }
 
-Link::Out Link::onClose(int code, std::string_view lastError)
+Link::Out Link::onClose(int code, std::string_view lastError, uint32_t nowMs)
 {
     if (state_ == State::NoWifi || state_ == State::Stopped || state_ == State::NeedsPair || state_ == State::Backoff) {
         return Out{};
@@ -144,22 +162,41 @@ Link::Out Link::onClose(int code, std::string_view lastError)
         break;
     }
     const std::string reason = message.empty() ? "closed " + std::to_string(code) : message;
-    return retryAfter("relay unreachable: " + reason);
+    return retryAfter("relay unreachable: " + reason, nowMs);
 }
 
 Link::Out Link::onTick(uint32_t nowMs)
 {
-    nowMs_ = nowMs;
-    if (state_ == State::Backoff && static_cast<int32_t>(nowMs - retryAtMs_) >= 0) {
-        return connectNow();
+    if (!reached(nowMs, deadlineMs_)) {
+        return Out{};
     }
-    return Out{};
+    switch (state_) {
+    case State::Backoff:
+        return connectNow(nowMs);
+    case State::Connecting: {
+        Out out = retryAfter("relay unreachable: no connection within kConnectWaitMs=" + std::to_string(kConnectWaitMs), nowMs);
+        out.closeSocket = true;
+        return out;
+    }
+    case State::Hello: {
+        Out out = retryAfter("relay unreachable: no welcome within kHelloWaitMs=" + std::to_string(kHelloWaitMs), nowMs);
+        out.closeSocket = true;
+        return out;
+    }
+    default:
+        return Out{};
+    }
 }
 
-Link::Out Link::onUserReconnect()
+Link::Out Link::onUserReconnect(uint32_t nowMs)
 {
     if (state_ != State::Stopped && state_ != State::NeedsPair) {
         return Out{};
+    }
+    if (token_.empty()) {
+        Out out;
+        out.statusText = "re-pair needed";
+        return out;
     }
     backoffMs_ = kBackoffMinMs;
     if (!wifiUp_) {
@@ -168,7 +205,7 @@ Link::Out Link::onUserReconnect()
         out.statusText = "wifi down";
         return out;
     }
-    return connectNow();
+    return connectNow(nowMs);
 }
 
 }
