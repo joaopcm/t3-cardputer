@@ -224,4 +224,11 @@ describe("simulator wire behavior", () => {
     expect(result.problems).toEqual([]);
     expect(frames.some((f) => !f.binary && f.msg.type === "refresh")).toBe(true);
   });
+
+  it("waits past a step for the first home while the relay's first T3 poll runs, and names its own budget when none comes", async () => {
+    const { url } = await stub(() => {}, (ws) => void setTimeout(() => ws.send(JSON.stringify(HOME)), 80));
+    expect((await runSim({ ...base, url, script: [], stepTimeoutMs: 20, greetTimeoutMs: 1000 })).problems).toEqual([]);
+    const silent = await stub(() => {}, () => {});
+    expect((await runSim({ ...base, url: silent.url, script: [], stepTimeoutMs: 20, greetTimeoutMs: 50 })).problems).toEqual(["no home within greet_timeout_ms=50 of hello"]);
+  });
 });

@@ -27,7 +27,7 @@ import { buildHome } from "./views/home.js";
 import { buildProjects } from "./views/projects.js";
 import { buildRequest } from "./views/request.js";
 import { buildThreadPage, type ThreadPageMessage } from "./views/thread.js";
-import { T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, type WatcherT3 } from "./watcher.js";
+import { EMPTY_SNAPSHOT, T3_AUTH_WARNING, type AdapterHealth, type WatchSnapshot, type Watcher, type WatcherT3 } from "./watcher.js";
 
 export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssistantMessage" | "send" | "launch">;
 export type ApprovalsState = { available: boolean; reason?: string };
@@ -356,10 +356,23 @@ export class Session {
     this.hub.claim(device.id, this);
     this.startHeartbeat();
     this.send({ type: "welcome", v: PROTOCOL_VERSION, relay: this.hub.deps.relayVersion });
-    const snapshot = await this.hub.watcher.current();
+    const snapshot = await this.firstSnapshot();
     if (this.closed) return false;
     this.pushHome(snapshot);
     return true;
+  }
+
+  private firstSnapshot(): Promise<WatchSnapshot> {
+    const { mcpRequestTimeoutMs } = this.hub.deps.limits;
+    const slow: WatchSnapshot = { ...EMPTY_SNAPSHOT, t3: "unreachable", warnings: [`T3 slow: no answer within mcpRequestTimeoutMs=${mcpRequestTimeoutMs}, home follows when it answers`] };
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(slow), mcpRequestTimeoutMs);
+      timer.unref();
+      void this.hub.watcher.current().then((snapshot) => {
+        clearTimeout(timer);
+        resolve(snapshot);
+      });
+    });
   }
 
   private refuse(code: ErrorCode, message: string, closeCode: number): false {

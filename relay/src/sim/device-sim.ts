@@ -30,6 +30,7 @@ export type SimOptions = {
   write?: (text: string) => void;
   stepTimeoutMs?: number;
   transcribeTimeoutMs?: number;
+  greetTimeoutMs?: number;
 };
 
 export type SimResult = { screens: string[]; problems: string[]; closeCode: number | undefined };
@@ -38,6 +39,8 @@ export type SimResult = { screens: string[]; problems: string[]; closeCode: numb
 export const DEFAULT_STEP_TIMEOUT_MS = 5000;
 // receipt: the relay answers transcript_final or an error within whisperRequestTimeoutMs, so the sim waits that long
 export const DEFAULT_TRANSCRIBE_TIMEOUT_MS = DEFAULT_LIMITS.whisperRequestTimeoutMs;
+// receipt: docs/protocol.md Ordering rule 2, the first home may wait up to mcpRequestTimeoutMs for a hung T3, so the sim waits that plus a step
+export const DEFAULT_GREET_TIMEOUT_MS = DEFAULT_LIMITS.mcpRequestTimeoutMs + DEFAULT_STEP_TIMEOUT_MS;
 const FIRMWARE_VERSION = "sim-0.1.0";
 const MARKERS = { approval: "!", question: "?", failed: "x", running: "*", done: "-" } as const;
 
@@ -63,6 +66,7 @@ class DeviceSim {
   private readonly write: (text: string) => void;
   private readonly stepTimeoutMs: number;
   private readonly transcribeTimeoutMs: number;
+  private readonly greetTimeoutMs: number;
   private readonly clear: boolean;
   private readonly pcm: Buffer | undefined;
   private readonly screens: string[] = [];
@@ -95,14 +99,15 @@ class DeviceSim {
     this.write = opts.write ?? ((text) => void process.stdout.write(text));
     this.stepTimeoutMs = opts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
     this.transcribeTimeoutMs = opts.transcribeTimeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+    this.greetTimeoutMs = opts.greetTimeoutMs ?? DEFAULT_GREET_TIMEOUT_MS;
     this.clear = opts.write === undefined && process.stdout.isTTY === true;
     this.pcm = opts.wav === undefined ? undefined : parseWav(readFileSync(opts.wav));
   }
 
   async run(): Promise<SimResult> {
     await this.connect();
-    const greeted = await this.until(() => this.home !== undefined || this.closeCode !== undefined);
-    if (!greeted) this.problem(`no home within step_timeout_ms=${this.stepTimeoutMs} of hello`);
+    const greeted = await this.until(() => this.home !== undefined || this.closeCode !== undefined, this.greetTimeoutMs);
+    if (!greeted) this.problem(`no home within greet_timeout_ms=${this.greetTimeoutMs} of hello`);
     if (greeted) {
       for await (const line of this.lines()) {
         if (this.closeCode !== undefined || this.quit) break;

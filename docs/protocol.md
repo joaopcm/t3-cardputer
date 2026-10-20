@@ -16,7 +16,7 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 ## Ordering
 
 1. Device opens the socket and sends `hello` as its first frame, within `helloTimeoutMs` (10 s by default) or it gets `error {code:"hello_timeout"}` and close 4408 (a stalled link, not a bad token: keep the token and reconnect with backoff). A first frame that is not a `hello` (including garbage or a binary frame) gets `error {code:"bad_message", message:"first frame must be a valid hello"}` and close 4402. A `hello` that fails validation gets `error {code:"bad_message"}` naming the field, then close 4402. A `hello` with the wrong `v` gets `error {code:"protocol_version"}`, then close 4400. A `hello` whose token is missing from the relay, wrong, or revoked gets `error {code:"auth"}` and close 4401; 4401 means only that.
-2. Relay answers `welcome`, then immediately `home`. Nothing else is sent before `welcome`.
+2. Relay answers `welcome`, then `home`. Nothing else is sent before `welcome`. `home` is immediate when the relay already watches T3 for another connection; otherwise it waits for the relay's first T3 poll, which a hung T3 can stretch. The wait is capped at `mcpRequestTimeoutMs` (30 s by default): past it the relay sends a `home` with no rows, `t3:"unreachable"`, and the warning `T3 slow: no answer within mcpRequestTimeoutMs=30000, home follows when it answers`, then the real `home` once T3 answers. Show a "connecting" screen between `welcome` and the first `home`.
 3. After that either side may send at any time. The relay pushes `home`, `thread_page`, and `request` updates unprompted. `thread_page` is pushed for the thread last opened with `open_thread` or `page`, at the page the device is on (clamped if the reply got shorter), whenever that thread's status or latest activity changes.
 4. Every device message with an `id` gets exactly one `ack` with the same `id`. If the message fails validation but still has a usable `id` (a string of 1 to 16 characters), the ack is `ack {ok:false, error}` and `error` names the field. Only a malformed frame with no usable `id` gets a bare `error {code:"bad_message"}`. The view the request produces (`thread_page`, `projects`, `transcript_final`, ...) follows as its own message. Do not depend on the order between an `ack` and its view message.
 5. On reconnect the device sends `hello` again and gets `welcome` then `home`. Nothing is replayed, the relay sends full state.
@@ -24,6 +24,8 @@ Contract between the Cardputer firmware and the relay. Source of truth for the r
 ## Message ids
 
 Every device message except `hello` carries `id`: a string of 1 to 16 characters. Ids are unique per device, across reconnects and reboots. For `reply`, `respond`, and `launch` the relay uses `id` as an idempotency key: a repeated `id` gets the original `ack` again and the action is not run twice, even when the repeat arrives on a new connection while the first is still running. The relay remembers an id for `idempotencyTtlMs` (24 h by default) and forgets everything when it restarts. `open_thread`, `page`, `list_projects`, and `refresh` only read, so a repeat runs again and sends a fresh view. Do not reuse an id for a different request. A counter that restarts at boot will collide; use random characters (8+ hex digits is plenty).
+
+The relay remembers the result, not just the request: a `reply`, `respond`, or `launch` that got `ack {ok:false}` (T3 unreachable, request no longer pending, ...) gets that same failed ack again for 24 h if its `id` is repeated. To try again after a failure, send the request with a new `id`. Repeat an `id` only to recover an `ack` you never received (for example after a reconnect).
 
 ## Versioning
 
@@ -264,7 +266,7 @@ Close the audio window and throw the audio away. No transcript follows.
 
 Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty, an even number of bytes, and at most 65536 bytes (`DEVICE_FRAME_BYTES_MAX`, 2.05 s of audio; a larger frame closes the socket with 1009). Chunk size within that is the device's choice; the simulator sends 100 ms (3200 byte) chunks in real time.
 
-Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`. Any other binary frame gets `error {code:"audio_not_started"}` and is dropped. An empty or odd-length frame gets `error {code:"bad_audio"}` and is dropped; the window stays open.
+Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`. The relay handles frames in the order they arrive and opens the window as soon as it reads `audio_start`, so the device may stream audio right after `audio_start` without waiting for its `ack`. If that `ack` comes back `ok:false` (a window was already open), send `audio_cancel` and drop the recording; audio sent in the meantime went to the window that was already open. Any other binary frame gets `error {code:"audio_not_started"}` and is dropped. An empty or odd-length frame gets `error {code:"bad_audio"}` and is dropped; the window stays open.
 
 `audio_start` while a window is already open gets `ack {ok:false}`. `audio_end` with no frames gets `ack {ok:false, error:"no audio received"}`. `audio_cancel` always gets `ack {ok:true}`.
 

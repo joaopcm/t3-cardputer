@@ -44,6 +44,29 @@ describe("device session", () => {
     expect(home.approvals).toEqual({ available: true });
   });
 
+  it("home follows welcome within mcpRequestTimeoutMs even while T3 hangs, naming the budget, then the real home", async () => {
+    const { t3, connect, token } = await setup({ mcpRequestTimeoutMs: 80 });
+    t3.threads = [summary("t1")];
+    const gate = deferred();
+    const listProjects = t3.listProjects.bind(t3);
+    t3.listProjects = async () => {
+      await gate.promise;
+      return listProjects();
+    };
+    const device = await connect();
+    const started = Date.now();
+    device.hello(token);
+    await device.next("welcome");
+    const slow = await device.next("home");
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(slow).toMatchObject({ rows: [], t3: "unreachable" });
+    expect(slow.warnings).toEqual(["T3 slow: no answer within mcpRequestTimeoutMs=80, home follows when it answers"]);
+    gate.resolve();
+    const real = await device.next("home");
+    expect(real.rows.map((r) => r.threadId)).toEqual(["t1"]);
+    expect(real.t3).toBe("ok");
+  });
+
   it("no hello within timeout closes 4408 hello_timeout, which keeps the token and reconnects, not 4401", async () => {
     const { connect } = await setup({ helloTimeoutMs: 50 });
     const device = await connect();
@@ -237,6 +260,22 @@ describe("device session", () => {
     expect(projects.items.slice(0, 2).map((p) => p.projectId)).toEqual(["p12", "p30"]);
     expect(projects.truncated).toEqual({ budget: "maxHomeRows", limit: 8, actual: 40, hidden: 32 });
     expect(device.received.some((m) => m.type === "error")).toBe(false);
+  });
+
+  it("a failed reply repeated with the same id gets the same failure, and a new id runs it", async () => {
+    const { t3, connected } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    t3.down = true;
+    device.send({ type: "reply", id: "r1", threadId: "t1", text: "go", mode: "queue" });
+    expect(await device.next("ack", (a) => a.id === "r1")).toEqual({ type: "ack", id: "r1", ok: false, error: "T3 unreachable" });
+    t3.down = false;
+    device.send({ type: "reply", id: "r1", threadId: "t1", text: "go", mode: "queue" });
+    expect(await device.next("ack", (a) => a.id === "r1")).toEqual({ type: "ack", id: "r1", ok: false, error: "T3 unreachable" });
+    expect(t3.sends).toHaveLength(0);
+    device.send({ type: "reply", id: "r2", threadId: "t1", text: "go", mode: "queue" });
+    expect(await device.next("ack", (a) => a.id === "r2")).toMatchObject({ ok: true });
+    expect(t3.sends).toHaveLength(1);
   });
 
   it("refresh re-sends home even when nothing changed, plus the open thread page and its pending request", async () => {

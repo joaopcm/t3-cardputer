@@ -108,6 +108,17 @@ describe("voice session", () => {
     expect(calls[0]!.length).toBe(44 + 6400);
   });
 
+  it("audio sent right after audio_start, before its ack, is kept in order", async () => {
+    const { device, stt } = await voiceSetup();
+    device.send(START);
+    device.ws.send(pcm(1).subarray(0, 3200), { binary: true });
+    device.ws.send(pcm(1).subarray(3200, 6400), { binary: true });
+    device.send({ type: "audio_end", id: "e1" });
+    expect((await device.next("transcript_final")).text).toBe("fix the flaky test");
+    expect(device.received.some((m) => m.type === "error")).toBe(false);
+    expect((stt as RecordingStt).calls[0]!.subarray(44)).toEqual(pcm(1).subarray(0, 6400));
+  });
+
   it("audio_cancel drops the buffer, no transcript, and the window is closed", async () => {
     const { device, stt } = await voiceSetup();
     device.send(START);

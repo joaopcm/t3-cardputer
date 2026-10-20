@@ -18,7 +18,7 @@ export type WatchSnapshot = {
   adapter: AdapterHealth;
 };
 
-const EMPTY: WatchSnapshot = { t3: "ok", projects: [], threads: [], approvals: [], questions: new Map(), warnings: [], adapter: { state: "idle" } };
+export const EMPTY_SNAPSHOT: WatchSnapshot = { t3: "ok", projects: [], threads: [], approvals: [], questions: new Map(), warnings: [], adapter: { state: "idle" } };
 
 export class Watcher {
   private readonly listeners = new Set<(snapshot: WatchSnapshot) => void>();
@@ -75,7 +75,7 @@ export class Watcher {
     this.latest = undefined;
     this.backfilled = false;
     this.recentlyDone.clear();
-    this.flushWaiters({ ...EMPTY, t3: "unreachable" });
+    this.flushWaiters({ ...EMPTY_SNAPSHOT, t3: "unreachable" });
   }
 
   current(): Promise<WatchSnapshot> {
@@ -90,7 +90,7 @@ export class Watcher {
   }
 
   private async poll(): Promise<WatchSnapshot> {
-    const last = this.latest ?? EMPTY;
+    const last = this.latest ?? EMPTY_SNAPSHOT;
     try {
       const snapshot = await this.read();
       if (this.unreachable !== undefined) console.log(`watcher: T3 reachable again after: ${this.unreachable}`);
