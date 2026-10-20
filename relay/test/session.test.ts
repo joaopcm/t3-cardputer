@@ -246,6 +246,20 @@ describe("device session", () => {
     await device.next("home", (h) => h.approvals.available);
   });
 
+  it("an approvals socket timeout says approvals are unreachable, keeps the thread list, and claims no fix", async () => {
+    const { t3, approvals, connected, brokenReasons } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.unreachable = "orchestration.subscribeThread: no reply within approvalsRpcTimeoutMs=10000";
+    const home = await device.next("home", (h) => !h.approvals.available);
+    expect(home.t3).toBe("ok");
+    expect(home.rows.map((r) => r.threadId)).toEqual(["t1"]);
+    expect(home.approvals.reason).toBe("approvals unreachable: orchestration.subscribeThread: no reply within approvalsRpcTimeoutMs=10000");
+    expect(brokenReasons).toEqual([]);
+    approvals.unreachable = undefined;
+    await device.next("home", (h) => h.approvals.available);
+  });
+
   it("a canary failure marks approvals down on connected devices until a canary passes, whatever the live adapter says", async () => {
     const { t3, server, connected } = await setup();
     t3.threads = [summary("t1")];

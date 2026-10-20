@@ -6,7 +6,7 @@ export const T3_AUTH_WARNING = "T3 token rejected: run `t3-cardputer-relay pair-
 
 export type WatcherT3 = Pick<T3Mcp, "listProjects" | "listThreads" | "listRecentlyCompleted" | "listQuestions">;
 
-export type AdapterHealth = { state: "ok" | "idle" | "unauthorized" } | { state: "broken"; reason: string };
+export type AdapterHealth = { state: "ok" | "idle" | "unauthorized" } | { state: "broken" | "unreachable"; reason: string };
 
 export type WatchSnapshot = {
   t3: "ok" | "unreachable";
@@ -146,6 +146,7 @@ export class Watcher {
       return { approvals: await this.approvals.listPending(threadIds), adapter: { state: "ok" }, warnings: [] };
     } catch (error) {
       if (error instanceof AdapterBrokenError) return { approvals: [], adapter: { state: "broken", reason: error.reason }, warnings: [] };
+      if (error instanceof T3UnavailableError) return { approvals: [], adapter: { state: "unreachable", reason: error.message }, warnings: [] };
       if (error instanceof T3AuthError) return { approvals: [], adapter: { state: "unauthorized" }, warnings: [T3_AUTH_WARNING] };
       throw error;
     }

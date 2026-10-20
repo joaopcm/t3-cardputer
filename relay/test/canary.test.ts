@@ -2,7 +2,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AdapterBrokenError, ApprovalRejectedError, type PendingApproval } from "../src/approvals/index.js";
+import type { AddressInfo } from "node:net";
+import { WebSocketServer } from "ws";
+import { AdapterBrokenError, ApprovalRejectedError, createApprovalsAdapter, type PendingApproval } from "../src/approvals/index.js";
 import { runCanary, type CanaryDeps, type CanaryFailure, type CanaryResult } from "../src/canary.js";
 import { T3AuthError, T3UnavailableError } from "../src/t3/mcp.js";
 import { VersionWatch, startVersionLoop, verdictOf, type Verdict } from "../src/version-watch.js";
@@ -141,6 +143,24 @@ describe("runCanary", () => {
     for (const status of ["failed", "interrupted", "cancelled", "running"]) {
       const { deps } = fakes({ waitForRun: async () => ({ status, timedOut: false }) });
       expect(await runCanary(deps, OPTS)).toMatchObject({ ok: false, stage: "completed", kind: "broken" });
+    }
+  });
+
+  it("an approvals socket that never answers makes the canary transient, never broken", async () => {
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise((resolve) => wss.once("listening", resolve));
+    const approvals = createApprovalsAdapter(`http://127.0.0.1:${(wss.address() as AddressInfo).port}`, () => "internal-token", { approvalsRpcTimeoutMs: 20 });
+    try {
+      const { t3 } = fakes();
+      const result = await runCanary({ t3, approvals }, { ...OPTS, timeoutMs: 150 });
+      expect(result).toMatchObject({ ok: false, stage: "approval_seen", kind: "transient" });
+      expect((result as CanaryFailure).reason).toContain("approvalsRpcTimeoutMs=20");
+      const responding = fakes({ respond: (threadId, requestId, decision) => approvals.respond(threadId, requestId, decision) });
+      expect(await runCanary(responding.deps, OPTS)).toMatchObject({ ok: false, stage: "respond", kind: "transient" });
+    } finally {
+      await approvals.close();
+      for (const client of wss.clients) client.terminate();
+      await new Promise((resolve) => wss.close(resolve));
     }
   });
 

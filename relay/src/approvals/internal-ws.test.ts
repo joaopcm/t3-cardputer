@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { DEFAULT_LIMITS } from "../config.js";
-import { T3AuthError } from "../t3/mcp.js";
+import { T3AuthError, T3UnavailableError } from "../t3/mcp.js";
 import { AdapterBrokenError, ApprovalRejectedError, createApprovalsAdapter, pairT3Internal, type ApprovalDecision } from "./index.js";
 import { RpcSocket } from "./rpc.js";
 
@@ -288,9 +288,45 @@ describe("approvals adapter, wire protocol", () => {
     expect(await brokenReason(adapterFor(t3.baseUrl).listPending([THREAD]))).toMatch(/Exit/);
   });
 
-  it("no reply within approvalsRpcTimeoutMs throws AdapterBrokenError naming the budget", async () => {
+  it("no reply within approvalsRpcTimeoutMs is transient (T3UnavailableError) naming the budget, not broken", async () => {
     const t3 = await fakeT3(() => {});
-    expect(await brokenReason(adapterFor(t3.baseUrl, 50).listPending([THREAD]))).toContain("approvalsRpcTimeoutMs=50");
+    const error = await adapterFor(t3.baseUrl, 50).listPending([THREAD]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(T3UnavailableError);
+    expect((error as Error).message).toContain("approvalsRpcTimeoutMs=50");
+  });
+
+  it("a respond with no reply in time is transient, not broken", async () => {
+    const t3 = await fakeT3((msg, peer) => {
+      if (msg._tag === "Request" && msg.tag === "orchestration.subscribeThread") peer.send({ _tag: "Chunk", requestId: msg.id, values: valuesThrough(APPROVAL_LINE) });
+    });
+    const error = await adapterFor(t3.baseUrl, 50).respond(THREAD, REQUEST_ID, { kind: "deny" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(T3UnavailableError);
+  });
+
+  it("a WebSocket upgrade T3 never answers is transient", async () => {
+    const http = createServer();
+    const held: { destroy(): void }[] = [];
+    http.on("upgrade", (_req, socket) => held.push(socket));
+    await listen(http);
+    cleanups.push(async () => {
+      for (const socket of held) socket.destroy();
+      await new Promise((resolve) => http.close(resolve));
+    });
+    const error = await adapterFor(`http://127.0.0.1:${(http.address() as AddressInfo).port}`, 50).listPending([THREAD]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(T3UnavailableError);
+    expect((error as Error).message).toContain("WebSocket upgrade");
+  });
+
+  it("a corrupt frame on the socket is a connection failure, transient", async () => {
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    wss.on("connection", (ws) => ws.on("message", () => (ws as unknown as { _socket: { write(b: Buffer): void } })._socket.write(Buffer.from([0xf1, 0x00]))));
+    await new Promise((resolve) => wss.once("listening", resolve));
+    cleanups.push(async () => {
+      for (const client of wss.clients) client.terminate();
+      await new Promise((resolve) => wss.close(resolve));
+    });
+    const error = await adapterFor(`http://127.0.0.1:${(wss.address() as AddressInfo).port}`, 1000).listPending([THREAD]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(T3UnavailableError);
   });
 
   it("close() leaves no open sockets or timers", async () => {

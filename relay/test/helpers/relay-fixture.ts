@@ -95,9 +95,11 @@ export class FakeApprovals implements ApprovalsAdapter {
   pending: PendingApproval[] = [];
   responses: { threadId: string; requestId: string; decision: ApprovalDecision }[] = [];
   broken: string | undefined;
+  unreachable: string | undefined;
 
   async listPending(threadIds: string[]) {
     if (this.broken !== undefined && threadIds.length > 0) throw new AdapterBrokenError(this.broken);
+    if (this.unreachable !== undefined && threadIds.length > 0) throw new T3UnavailableError(this.unreachable);
     return this.pending.filter((p) => threadIds.includes(p.threadId));
   }
   async respond(threadId: string, requestId: string, decision: ApprovalDecision) {

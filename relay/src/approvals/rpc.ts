@@ -58,7 +58,7 @@ export class RpcSocket {
       this.#fail(
         isConnectionError(error)
           ? new T3UnavailableError(`T3 unreachable at ${baseUrl}`, { cause: error })
-          : new AdapterBrokenError(`internal WebSocket error: ${error.message}`, { cause: error }),
+          : new T3UnavailableError(`internal WebSocket connection failed: ${error.message}`, { cause: error }),
       );
     });
     this.#ws.on("close", (code) => this.#fail(new T3UnavailableError(`T3 closed the internal WebSocket (code ${code})`)));
@@ -115,7 +115,7 @@ export class RpcSocket {
         finish();
         reject(error);
       };
-      const timer = setTimeout(() => fail(new AdapterBrokenError(`${what}: no reply within approvalsRpcTimeoutMs=${this.#timeoutMs}`)), this.#timeoutMs);
+      const timer = setTimeout(() => fail(new T3UnavailableError(`${what}: no reply within approvalsRpcTimeoutMs=${this.#timeoutMs}`)), this.#timeoutMs);
       this.#rejecters.add(fail);
       start({
         resolve: (value) => {

@@ -144,6 +144,7 @@ export class Hub {
     if (this.brokenReason !== undefined) return { available: false, reason: clipText(`approvals down: ${this.brokenReason}, fix in progress`) };
     if (this.canaryDown !== undefined) return { available: false, reason: clipText(`approvals down: ${this.canaryDown.reason}${DOWN_PHASE_SUFFIX[this.canaryDown.phase]}`) };
     if (this.adapter.state === "unauthorized") return { available: false, reason: T3_AUTH_WARNING };
+    if (this.adapter.state === "unreachable") return { available: false, reason: clipText(`approvals unreachable: ${this.adapter.reason}`) };
     return this.deps.approvalsState();
   }
 
