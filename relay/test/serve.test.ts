@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminRequest } from "../src/admin.js";
 import { SecretsStore } from "../src/secrets.js";
 import { startRelay } from "../src/serve.js";
-import { Device } from "./helpers/relay-fixture.js";
+import { Device, FakeApprovals, FakeT3, summary } from "./helpers/relay-fixture.js";
+import type { CanaryFailure, CanaryResult } from "../src/canary.js";
 import { relayEnvironment } from "./helpers/relay-env.js";
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -174,5 +175,62 @@ describe("startRelay", () => {
     device.hello(token);
     const home = await device.next("home", (h) => !h.approvals.available);
     expect(home.approvals.reason).toContain("canary respond: decision not accepted");
+  });
+
+  it("an adapter break during a poll runs a confirming canary, and the device says checking, then fix in progress once a repair starts", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const environment = createHttpServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/.well-known/t3/environment") return void res.writeHead(200).end(JSON.stringify({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, capabilities: {} }));
+      res.writeHead(404).end("{}");
+    });
+    await new Promise<void>((resolve) => environment.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { environment.closeAllConnections(); environment.close(() => resolve()); }));
+    const env = await relayEnvironment();
+    const config = JSON.parse(readFileSync(env.configPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(env.configPath, JSON.stringify({ ...config, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` }));
+    const expiresAt = new Date(Date.now() + 20 * 86_400_000).toISOString();
+    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt }, t3InternalToken: { token: "i", expiresAt } });
+    mkdirSync(env.stateDir, { recursive: true });
+    writeFileSync(join(env.stateDir, "t3-version.json"), JSON.stringify({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, verdict: "pass" }));
+
+    const t3 = Object.assign(new FakeT3(), { waitForRun: async () => ({ status: "completed", timedOut: false }), settleThread: async () => {} });
+    t3.threads = [summary("t1")];
+    const approvals = new FakeApprovals();
+    const gates: ((result: CanaryResult) => void)[] = [];
+    const canary = () => new Promise<CanaryResult>((resolve) => gates.push(resolve));
+    const failures: CanaryFailure[] = [];
+    const relay = await startRelay(env, {
+      connect: () => ({ t3, approvals, close: async () => {} }),
+      canary,
+      onCanaryFailed: (failure) => void failures.push(failure),
+    });
+    cleanups.push(() => relay.close());
+    const paired = await adminRequest(env.socketPath, { op: "pair" }, 2000);
+    if (!("code" in paired)) throw new Error(JSON.stringify(paired));
+    const response = await fetch(`http://127.0.0.1:${env.port}/v1/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: paired.code, name: "adv" }),
+    });
+    const { token } = (await response.json()) as { token: string };
+    const device = await Device.open(env.port);
+    cleanups.push(() => device.close());
+    device.hello(token);
+    await device.next("home", (h) => h.approvals.available);
+    expect(gates).toHaveLength(0);
+
+    approvals.broken = "subscribeThread: expected snapshot";
+    await device.next("home", (h) => h.approvals.reason === "approvals down: subscribeThread: expected snapshot, checking again");
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    const broken: CanaryResult = { ok: false, stage: "approval_seen", kind: "broken", reason: "subscribeThread: expected snapshot" };
+    gates[0]!(broken);
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    expect(failures).toHaveLength(0);
+    gates[1]!(broken);
+    await device.next("home", (h) => h.approvals.reason === "approvals down: subscribeThread: expected snapshot, fix in progress");
+    expect(failures).toEqual([broken]);
+    expect(gates).toHaveLength(2);
   });
 });

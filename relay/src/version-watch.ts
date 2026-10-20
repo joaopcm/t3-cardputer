@@ -84,10 +84,16 @@ export type VersionLoopDeps = {
   onCanaryFailed?(failure: CanaryFailure, versions: Versions): void;
 };
 
-export function startVersionLoop(deps: VersionLoopDeps): { stop(): Promise<void> } {
+export type VersionLoop = { recheck(): DownPhase; stop(): Promise<void> };
+
+export function startVersionLoop(deps: VersionLoopDeps): VersionLoop {
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
   let inFlight: Promise<void> = Promise.resolve();
+  let ticking = false;
+  let runSoon = false;
+  let recheckAsked = 0;
+  let recheckDone = 0;
   let lastBlocked: string | undefined;
   let trackedLabel: string | undefined;
   let appliedKey: string | undefined;
@@ -187,7 +193,10 @@ export function startVersionLoop(deps: VersionLoopDeps): { stop(): Promise<void>
         backoffMs = undefined;
         retryAt = 0;
       }
-      if (check.saved !== undefined) apply(check.saved, phaseOf(check.saved));
+      if (check.saved !== undefined) {
+        lastVerdict = { label: check.to, verdict: check.saved };
+        apply(check.saved, phaseOf(check.saved));
+      }
     }
     const reason = deps.blocked();
     if (reason !== undefined) {
@@ -201,11 +210,15 @@ export function startVersionLoop(deps: VersionLoopDeps): { stop(): Promise<void>
       return;
     }
     const versions: Versions = check.from === undefined ? { to: check.to } : { from: check.from, to: check.to };
-    const needsCanary = check.saved === undefined || (check.saved.verdict === "broken" && key(check.saved) !== confirmed?.key);
+    const asked = recheckAsked;
+    const rechecking = asked > recheckDone;
+    const needsCanary = rechecking || check.saved === undefined || (check.saved.verdict === "broken" && key(check.saved) !== confirmed?.key);
     if (!needsCanary || Date.now() < retryAt) return;
+    if (rechecking) appliedKey = undefined;
     try {
       const retry = await evaluate(check, versions);
       if (retry === undefined) {
+        recheckDone = Math.max(recheckDone, asked);
         backoffMs = undefined;
         retryAt = 0;
       } else {
@@ -218,15 +231,33 @@ export function startVersionLoop(deps: VersionLoopDeps): { stop(): Promise<void>
   };
 
   const run = () => {
+    ticking = true;
     inFlight = tick().finally(() => {
+      ticking = false;
       if (stopped) return;
-      timer = setTimeout(run, deps.intervalMs);
+      timer = setTimeout(run, runSoon ? 0 : deps.intervalMs);
+      runSoon = false;
       timer.unref();
     });
   };
   run();
 
   return {
+    recheck() {
+      if (stopped || deps.blocked() !== undefined) return "none";
+      const current = lastVerdict?.verdict;
+      if (current?.verdict === "broken" && confirmed?.key === key(current)) return confirmed.phase;
+      recheckAsked++;
+      backoffMs = undefined;
+      retryAt = 0;
+      if (ticking) {
+        runSoon = true;
+      } else {
+        clearTimeout(timer);
+        run();
+      }
+      return "checking";
+    },
     async stop() {
       stopped = true;
       clearTimeout(timer);

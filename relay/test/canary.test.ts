@@ -275,6 +275,66 @@ const ok = (): Promise<CanaryResult> => Promise.resolve({ ok: true, ms: 5000 });
 const fails = (...args: Parameters<typeof failure>) => () => Promise.resolve(failure(...args));
 
 describe("startVersionLoop", () => {
+  it("recheck after a pass runs a confirming canary at once, and a pass marks approvals up again", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const rig = loopRig({ results: [ok, ok] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(1);
+    expect(rig.up).toHaveBeenCalledTimes(1);
+    expect(rig.loop.recheck()).toBe("checking");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(2);
+    expect(rig.up).toHaveBeenCalledTimes(2);
+    expect(rig.failed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(rig.canary).toHaveBeenCalledTimes(2);
+    await rig.loop.stop();
+  });
+
+  it("recheck that fails twice at one stage confirms and starts a repair, then says fixing without rerunning", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const rig = loopRig({ results: [ok, fails("approval_seen"), fails("approval_seen")] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.loop.recheck()).toBe("checking");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(3);
+    expect(rig.down).toHaveBeenNthCalledWith(1, "canary approval_seen: adapter said no", "checking");
+    expect(rig.down).toHaveBeenLastCalledWith("canary approval_seen: adapter said no", "fixing");
+    expect(rig.failed).toHaveBeenCalledOnce();
+    expect(rig.loop.recheck()).toBe("fixing");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(rig.canary).toHaveBeenCalledTimes(3);
+    await rig.loop.stop();
+  });
+
+  it("recheck while the canary is blocked runs nothing and says no check is coming", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const rig = loopRig({ results: [], blocked: () => "no T3 MCP token" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.loop.recheck()).toBe("none");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(rig.canary).not.toHaveBeenCalled();
+    await rig.loop.stop();
+  });
+
+  it("a recheck asked while a tick is running runs right after it, not an interval later", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    let release!: () => void;
+    const slow = () => new Promise<CanaryResult>((resolve) => (release = () => resolve({ ok: true, ms: 1 })));
+    const rig = loopRig({ results: [slow, ok] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(1);
+    expect(rig.loop.recheck()).toBe("checking");
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.canary).toHaveBeenCalledTimes(2);
+    await rig.loop.stop();
+  });
   it("runs the canary at startup for an unseen version, records the pass, marks approvals up and does not rerun", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "log").mockImplementation(() => {});

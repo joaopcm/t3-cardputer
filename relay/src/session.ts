@@ -40,7 +40,7 @@ export type HubDeps = {
   defaults: Pick<DefaultsStore, "get" | "remember">;
   stt: Stt;
   approvalsState: () => ApprovalsState;
-  onAdapterBroken?: (reason: string) => void;
+  onAdapterBroken?: (reason: string) => ApprovalsDownPhase;
 };
 
 type Hello = Extract<DeviceMessage, { type: "hello" }>;
@@ -83,7 +83,8 @@ export class Hub {
   readonly acks: AckCache;
   private readonly sessions = new Map<string, Session>();
   private readonly answers = new Map<string, Record<string, string>>();
-  private brokenReason: string | undefined;
+  private broken: { reason: string; phase: ApprovalsDownPhase } | undefined;
+  private canaryCleared: string | undefined;
   private canaryDown: { reason: string; phase: ApprovalsDownPhase } | undefined;
   private repairWarning: string | undefined;
   private adapter: AdapterHealth = { state: "idle" };
@@ -141,7 +142,7 @@ export class Hub {
   }
 
   approvalsState(): ApprovalsState {
-    if (this.brokenReason !== undefined) return { available: false, reason: clipText(`approvals down: ${this.brokenReason}, fix in progress`) };
+    if (this.broken !== undefined) return { available: false, reason: clipText(`approvals down: ${this.broken.reason}${DOWN_PHASE_SUFFIX[this.broken.phase]}`) };
     if (this.canaryDown !== undefined) return { available: false, reason: clipText(`approvals down: ${this.canaryDown.reason}${DOWN_PHASE_SUFFIX[this.canaryDown.phase]}`) };
     if (this.adapter.state === "unauthorized") return { available: false, reason: T3_AUTH_WARNING };
     if (this.adapter.state === "unreachable") return { available: false, reason: clipText(`approvals unreachable: ${this.adapter.reason}`) };
@@ -150,30 +151,42 @@ export class Hub {
 
   markApprovalsDown(reason: string, phase: ApprovalsDownPhase): void {
     this.canaryDown = { reason, phase };
+    if (this.broken !== undefined) this.broken.phase = phase;
     console.error(`approvals marked down by canary (${phase}): ${reason}`);
-    for (const session of this.sessions.values()) session.refreshHome();
+    this.refreshHomes();
   }
 
   markApprovalsUp(): void {
-    if (this.canaryDown === undefined && this.repairWarning === undefined) return;
+    if (this.canaryDown === undefined && this.repairWarning === undefined && this.broken === undefined) return;
+    this.canaryCleared = this.broken?.reason;
     this.canaryDown = undefined;
     this.repairWarning = undefined;
-    for (const session of this.sessions.values()) session.refreshHome();
+    this.broken = undefined;
+    this.refreshHomes();
   }
 
   adapterWorked(): void {
-    this.brokenReason = undefined;
+    this.broken = undefined;
+    this.canaryCleared = undefined;
   }
 
-  adapterBroke(reason: string): void {
-    if (this.brokenReason === reason) return;
-    this.brokenReason = reason;
-    console.error(`approvals adapter broken: ${reason}`);
-    try {
-      this.deps.onAdapterBroken?.(reason);
-    } catch (error) {
-      console.error("onAdapterBroken threw, approvals stay marked down", error);
+  adapterBroke(reason: string, refresh = true): void {
+    if (this.broken?.reason === reason) return;
+    let phase: ApprovalsDownPhase = "none";
+    if (reason !== this.canaryCleared) {
+      try {
+        phase = this.deps.onAdapterBroken?.(reason) ?? "none";
+      } catch (error) {
+        console.error("onAdapterBroken threw, approvals stay marked down with no check coming", error);
+      }
     }
+    this.broken = { reason, phase };
+    console.error(`approvals adapter broken (${phase === "none" && reason === this.canaryCleared ? "the canary passed, so no repair" : phase}): ${reason}`);
+    if (refresh) this.refreshHomes();
+  }
+
+  private refreshHomes(): void {
+    for (const session of this.sessions.values()) session.refreshHome();
   }
 
   answersFor(threadId: string, requestId: string): Record<string, string> {
@@ -189,8 +202,9 @@ export class Hub {
 
   private onSnapshot(snapshot: WatchSnapshot): void {
     this.adapter = snapshot.adapter;
-    if (snapshot.adapter.state === "broken") this.adapterBroke(snapshot.adapter.reason);
+    if (snapshot.adapter.state === "broken") this.adapterBroke(snapshot.adapter.reason, false);
     if (snapshot.adapter.state === "ok") this.adapterWorked();
+    if (snapshot.adapter.state === "idle") this.broken = undefined;
     if (snapshot.t3 === "ok") {
       const live = new Set([...snapshot.questions].flatMap(([threadId, qs]) => qs.map((q) => `${threadId}\n${q.requestId}`)));
       for (const key of this.answers.keys()) if (!live.has(key)) this.answers.delete(key);

@@ -240,10 +240,57 @@ describe("device session", () => {
     const device = await connected();
     approvals.broken = "snapshot moved";
     const home = await device.next("home", (h) => !h.approvals.available);
-    expect(home.approvals.reason).toContain("snapshot moved");
+    expect(home.approvals.reason).toBe("approvals down: snapshot moved, checking again");
     await pause(POLL_MS * 5);
     expect(brokenReasons).toEqual(["snapshot moved"]);
     approvals.broken = undefined;
+    await device.next("home", (h) => h.approvals.available);
+  });
+
+  it("an adapter break claims no check or fix when the hook says none is coming", async () => {
+    const { t3, approvals, connected, brokenHook } = await setup();
+    brokenHook.phase = "none";
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.broken = "snapshot moved";
+    const home = await device.next("home", (h) => !h.approvals.available);
+    expect(home.approvals.reason).toBe("approvals down: snapshot moved");
+  });
+
+  it("an adapter break says fix in progress only once the confirming canary starts a repair, and clears when a canary passes", async () => {
+    const { t3, approvals, server, connected, brokenReasons } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.broken = "snapshot moved";
+    await device.next("home", (h) => h.approvals.reason === "approvals down: snapshot moved, checking again");
+    server.markApprovalsDown("canary approval_seen: snapshot moved", "fixing");
+    await device.next("home", (h) => h.approvals.reason === "approvals down: snapshot moved, fix in progress");
+    approvals.broken = undefined;
+    server.markApprovalsUp();
+    await device.next("home", (h) => h.approvals.available);
+    expect(brokenReasons).toEqual(["snapshot moved"]);
+  });
+
+  it("a break the canary could not reproduce stays visible without claiming a fix and without asking for another check", async () => {
+    const { t3, approvals, server, connected, brokenReasons } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.broken = "thread t1: pending runtime request has unknown kind";
+    await device.next("home", (h) => h.approvals.reason?.endsWith("checking again") === true);
+    server.markApprovalsUp();
+    const after = await device.next("home", (h) => h.approvals.reason === "approvals down: thread t1: pending runtime request has unknown kind");
+    expect(after.approvals.available).toBe(false);
+    await pause(POLL_MS * 5);
+    expect(brokenReasons).toHaveLength(1);
+  });
+
+  it("an adapter break clears once no thread is running, so the adapter goes idle", async () => {
+    const { t3, approvals, connected } = await setup();
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.broken = "snapshot moved";
+    await device.next("home", (h) => !h.approvals.available);
+    t3.threads = [summary("t1", "completed", HOURS_AGO(1))];
     await device.next("home", (h) => h.approvals.available);
   });
 

@@ -23,7 +23,7 @@ export type ServerDeps = {
   defaults: Pick<DefaultsStore, "get" | "remember">;
   stt: Stt;
   approvalsState: () => ApprovalsState;
-  onAdapterBroken?: (reason: string) => void;
+  onAdapterBroken?: (reason: string) => ApprovalsDownPhase;
 };
 
 export const PAIR_PATH = "/v1/pair";

@@ -10,6 +10,7 @@ import { DefaultsStore } from "../../src/defaults-store.js";
 import { relayMessageSchema, type RelayMessage } from "../../src/protocol/messages.js";
 import { SecretsStore } from "../../src/secrets.js";
 import { startServer, type T3Client } from "../../src/server.js";
+import type { ApprovalsDownPhase } from "../../src/session.js";
 import type { Stt } from "../../src/stt/types.js";
 import { T3AuthError, T3UnavailableError, type T3LaunchInput, type T3Project, type T3Question, type T3ThreadSummary } from "../../src/t3/mcp.js";
 
@@ -193,6 +194,7 @@ export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeSt
   const approvals = new FakeApprovals();
   const defaults = new DefaultsStore(join(dir, "defaults.json"));
   const brokenReasons: string[] = [];
+  const brokenHook: { phase: ApprovalsDownPhase } = { phase: "checking" };
   const server = await startServer({
     config: { ...DEFAULT_CONFIG, port: 0, stateDir: dir, limits: allLimits },
     t3,
@@ -201,8 +203,11 @@ export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeSt
     defaults,
     stt,
     approvalsState: () => ({ available: true }),
-    onAdapterBroken: (reason) => brokenReasons.push(reason),
+    onAdapterBroken: (reason) => {
+      brokenReasons.push(reason);
+      return brokenHook.phase;
+    },
   });
   onCleanup(() => server.close());
-  return { dir, server, auth, t3, approvals, defaults, brokenReasons };
+  return { dir, server, auth, t3, approvals, defaults, brokenReasons, brokenHook };
 }

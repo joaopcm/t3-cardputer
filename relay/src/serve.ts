@@ -2,19 +2,19 @@ import { join } from "node:path";
 import { startAdminServer } from "./admin.js";
 import { createApprovalsAdapter, type ApprovalsAdapter } from "./approvals/index.js";
 import { DeviceAuth } from "./auth/devices.js";
-import { runCanary, type CanaryFailure } from "./canary.js";
+import { runCanary, type CanaryFailure, type CanaryResult } from "./canary.js";
 import { loadConfig, type RelayConfig } from "./config.js";
 import { DefaultsStore } from "./defaults-store.js";
 import { deploy } from "./deploy.js";
 import { execRunner } from "./exec.js";
 import { RepairOrchestrator } from "./repair/orchestrator.js";
 import { SecretsStore } from "./secrets.js";
-import { startServer, type ApprovalsState } from "./server.js";
+import { startServer, type ApprovalsState, type T3Client } from "./server.js";
 import { createWhisperStt } from "./stt/whisper.js";
 import { clearWhisperPid, reapOrphanWhisper, recordWhisperPid } from "./stt/whisper-pid.js";
 import { getEnvironment } from "./t3/environment.js";
 import { T3AuthError, T3Mcp } from "./t3/mcp.js";
-import { VersionWatch, startVersionLoop } from "./version-watch.js";
+import { VersionWatch, startVersionLoop, type VersionLoop } from "./version-watch.js";
 
 export type RelayPaths = { configPath: string; secretsPath: string };
 
@@ -24,8 +24,12 @@ const PAIR_T3_HINT = "run `t3-cardputer-relay pair-t3`";
 // receipt: docs/receipts/2026-10-20-canary.md, one version check is a single GET of the environment document that took 2.3-21.4 ms over 10 calls, so every pollIntervalMs x 10 (20 s) is negligible
 const VERSION_CHECK_EVERY_POLLS = 10;
 
+export type T3Connection = { t3: T3Client & Pick<T3Mcp, "waitForRun" | "settleThread">; approvals: ApprovalsAdapter; close(): Promise<void> };
+
 export type RelayHooks = {
   onCanaryFailed?: (failure: CanaryFailure, versions: { from?: string; to: string }) => void;
+  connect?: (config: RelayConfig, secrets: SecretsStore) => T3Connection;
+  canary?: () => Promise<CanaryResult>;
 };
 
 export function connectT3(config: RelayConfig, secrets: SecretsStore): { t3: T3Mcp; approvals: ApprovalsAdapter; close(): Promise<void> } {
@@ -63,6 +67,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
 
   try {
     let disconnect: (deviceId: string, reason: string) => boolean = () => false;
+    let versionLoop: VersionLoop | undefined;
     const admin = await startAdminServer({ socketPath: join(stateDir, ADMIN_SOCKET_NAME), auth, disconnect: (id, reason) => disconnect(id, reason) });
     closers.push(admin.close);
 
@@ -73,7 +78,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       clearWhisperPid(pidFile);
     });
 
-    const { t3, approvals, close: closeT3 } = connectT3(config, secrets);
+    const { t3, approvals, close: closeT3 } = (hooks.connect ?? connectT3)(config, secrets);
     closers.push(closeT3);
 
     const approvalsState = (): ApprovalsState => {
@@ -91,6 +96,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       defaults: new DefaultsStore(join(stateDir, "defaults.json")),
       stt,
       approvalsState,
+      onAdapterBroken: () => versionLoop?.recheck() ?? "none",
     });
     closers.push(server.close);
     disconnect = server.disconnect;
@@ -112,12 +118,12 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       deploy: () => deploy(config),
     });
     closers.push(() => repair.close());
-    const versionLoop = startVersionLoop({
+    versionLoop = startVersionLoop({
       watch: new VersionWatch(() => getEnvironment(config.t3BaseUrl), join(stateDir, VERSION_STATE_NAME)),
       intervalMs: limits.pollIntervalMs * VERSION_CHECK_EVERY_POLLS,
       blocked: canaryBlocked,
       retryMaxMs: limits.canaryRetryMaxMs,
-      canary: () => runCanary({ t3, approvals }, { model: config.canary.model, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs }),
+      canary: hooks.canary ?? (() => runCanary({ t3, approvals }, { model: config.canary.model, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs })),
       markApprovalsUp: server.markApprovalsUp,
       markApprovalsDown: server.markApprovalsDown,
       onCanaryFailed: hooks.onCanaryFailed ?? ((failure, versions) => repair.onBroken(failure, versions)),
