@@ -1,0 +1,15 @@
+{
+  "type": "home",
+  "rows": [
+    {"threadId": "thr_migration", "kind": "approval", "project": "demo-api", "title": "run db migration", "age": "42s"},
+    {"threadId": "thr_font", "kind": "question", "project": "landing-page", "title": "pick a hero font", "age": "6m"},
+    {"threadId": "thr_backfill", "kind": "running", "project": "migrate-db", "title": "backfill user ids", "age": "3m"},
+    {"threadId": "thr_limits", "kind": "running", "project": "demo-api", "title": "add rate limits", "age": "1m"},
+    {"threadId": "thr_footer", "kind": "done", "project": "landing-page", "title": "fix footer links", "age": "1h"},
+    {"threadId": "thr_index", "kind": "done", "project": "migrate-db", "title": "drop legacy index", "age": "4h"}
+  ],
+  "counts": {"needs": 2, "running": 2, "done": 2},
+  "approvals": {"available": true},
+  "warnings": [],
+  "t3": "ok"
+}

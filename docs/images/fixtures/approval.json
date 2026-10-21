@@ -1,0 +1,13 @@
+{
+  "type": "request",
+  "threadId": "thr_migration",
+  "requestId": "req_1",
+  "kind": "approval",
+  "lines": ["Wants to run a command:", "  pnpm db:migrate --env staging", "  cwd: worktrees/run-db-migration"],
+  "options": [
+    {"key": "Y", "label": "Allow once", "value": "allow_once"},
+    {"key": "A", "label": "Always allow", "value": "allow_always"},
+    {"key": "N", "label": "Deny", "value": "deny"},
+    {"key": "T", "label": "Deny, say why", "value": "deny_with_reason"}
+  ]
+}

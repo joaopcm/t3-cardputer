@@ -1,0 +1,8 @@
+{
+  "type": "thread_page",
+  "threadId": "thr_migration",
+  "header": {"project": "demo-api", "title": "run db migration", "model": "Claude Sonnet 5.5", "status": "running"},
+  "page": 1,
+  "pages": 1,
+  "lines": ["The migration adds an orders.user_id", "index. Running it on staging first."]
+}

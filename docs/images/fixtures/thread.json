@@ -1,0 +1,13 @@
+{
+  "type": "thread_page",
+  "threadId": "thr_backfill",
+  "header": {"project": "migrate-db", "title": "backfill user ids", "model": "GPT-5", "status": "running"},
+  "page": 2,
+  "pages": 2,
+  "lines": [
+    "Backfilling user_id on 1.2M orders in",
+    "batches of 5000. 640k done so far, no",
+    "lock waits. The old column stays until",
+    "the check query reads zero nulls."
+  ]
+}

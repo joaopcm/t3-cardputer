@@ -17,7 +17,7 @@ target_include_directories(t3core PUBLIC ${T3CORE_DIR}/include PRIVATE ${T3CORE_
 target_link_libraries(t3core PRIVATE cjson)
 target_compile_options(t3core PRIVATE -Wall -Wextra)
 
-add_executable(host_tests main.cpp grid_test.cpp keys_test.cpp protocol_test.cpp link_test.cpp doc_examples_test.cpp app_test.cpp setup_test.cpp keymap_test.cpp power_test.cpp voice_test.cpp wifi_pick_test.cpp wifi_station_test.cpp relay_url_test.cpp provision_test.cpp)
+add_executable(host_tests main.cpp grid_test.cpp keys_test.cpp protocol_test.cpp link_test.cpp doc_examples_test.cpp app_test.cpp setup_test.cpp keymap_test.cpp power_test.cpp voice_test.cpp wifi_pick_test.cpp wifi_station_test.cpp relay_url_test.cpp provision_test.cpp fixtures_test.cpp)
 target_compile_definitions(host_tests PRIVATE T3_REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../../..")
 target_include_directories(host_tests PRIVATE third_party)
 target_link_libraries(host_tests PRIVATE cjson t3core)
