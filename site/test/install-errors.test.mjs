@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { flashErrorMessage, portOpenMessage } from "../public/lib/install-errors.js";
+import { flashErrorMessage, partDownloadMessage, portOpenMessage } from "../public/lib/install-errors.js";
 
 const notFound = "ADV not found. Wait for it to restart, then try again.";
 const busy = /port is busy\. Close other apps and tabs that use it/;
@@ -50,4 +50,14 @@ test("the vendored md5 hashes like the reference vectors", () => {
   assert.equal(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
   assert.equal(md5("abc"), "900150983cd24fb0d6963f7d28e17f72");
   assert.equal(md5("The quick brown fox jumps over the lazy dog"), "9e107d9d372bb6826bd81d3542a419d6");
+});
+
+test("a part gone after a new release says to open the install link again, not to click Connect", () => {
+  const message = partDownloadMessage("t3-cardputer.bin", 404);
+  assert.equal(message, "Couldn't download t3-cardputer.bin (HTTP 404). The site has a newer firmware than this page loaded. Nothing was written. Open the install link again.");
+  assert.doesNotMatch(message, /Connect ADV/);
+});
+
+test("any other failed part download says to try again", () => {
+  assert.equal(partDownloadMessage("t3-cardputer.bin", 503), "Couldn't download t3-cardputer.bin (HTTP 503). Nothing was written. Click Connect ADV and install to try again.");
 });

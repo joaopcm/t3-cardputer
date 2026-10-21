@@ -2,7 +2,7 @@ import { ESPLoader, ESPRESSIF_VID, Transport } from "/vendor/esptool-js/bundle.j
 import { browserSupport } from "/lib/browser-support.js";
 import { checkPartFits, chipMatches, flashPlan, partUrl } from "/lib/flash-plan.js";
 import { parseFragment } from "/lib/fragment.js";
-import { flashErrorMessage, portOpenMessage, replug } from "/lib/install-errors.js";
+import { flashErrorMessage, partDownloadMessage, portOpenMessage, replug } from "/lib/install-errors.js";
 import { encodeInfoRequest, encodeProvision, lineSplitter, parseDeviceLine } from "/lib/serial-frames.js";
 
 // receipt: the device replied in 15-30 ms over 10 runs (docs/receipts/2026-10-21-firmware-network.md "provisioning reply time"); the post-reset boot until the serial port is up is not measured yet (Checkpoint D), so 5 s stays the tripwire until then
@@ -115,7 +115,7 @@ async function downloadParts(plan, log) {
     const part = state.manifest.parts.find((p) => p.path === write.path);
     log.say(`Downloading ${write.path}`);
     const response = await fetch(partUrl(state.manifest, write.path));
-    if (!response.ok) throw new Named(`Couldn't download ${write.path} (HTTP ${response.status}). Nothing was written. Click Connect ADV and install to try again.`);
+    if (!response.ok) throw new Named(partDownloadMessage(write.path, response.status));
     const data = new Uint8Array(await response.arrayBuffer());
     const sha256 = toHex(await crypto.subtle.digest("SHA-256", data));
     if (sha256 !== part.sha256) {

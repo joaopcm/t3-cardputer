@@ -157,6 +157,7 @@ The ADV checks every frame from the relay against its budgets. These mean the re
 | `This link is missing the` | Part of the link got lost, often when a terminal wrapped it. | Copy the whole line, or run `t3-cardputer-relay install-link` for a new one. |
 | `The ADV's port is busy.` | Another app has the port open. On Linux it's also what you see when you don't have permission to open the port. | Close serial monitors and other tabs using it. On Linux, see [the port is busy on Linux](#the-port-is-busy-on-linux). |
 | `The ADV didn't enter download mode.` | The ADV didn't switch to flashing on its own. | Unplug it, hold G0 while you plug it back in, then try again. |
+| `The site has a newer firmware than this page loaded.` | A new release went up while the page was open, and the parts it listed are gone. | Open the install link again. If the code ran out by then, `t3-cardputer-relay install-link` prints a fresh one. |
 | `didn't verify after writing.` | A part read back different from what was written. | Unplug, plug back in and install again. If it repeats, tick clean install. |
 
 ### The port is busy on Linux
