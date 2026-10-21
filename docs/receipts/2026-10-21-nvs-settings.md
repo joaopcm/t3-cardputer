@@ -14,10 +14,11 @@ Layout: namespace `t3`, keys `wifi` (blob, array of `WifiRecord {char ssid[33]; 
 | everything removed | back to 147 | `cleaned used=147 free=609` |
 | relay URL of 320 chars | 12, computed: 1 header + ceil(321 / 32) data entries | the NVS string layout, which gives the measured 10 for the 257 bytes of the 256-char token |
 | `relay_changed` flag | 2, computed the same way | same |
+| `pair_code` of 8 chars | 2, computed the same way: 1 header + ceil(9 / 32) data entries | same, not yet measured on the ADV |
 
 `kMaxWifi = 8` is a tripwire: the full set plus a maximum token costs 37 of 756 entries (4.9%), 572 stay free, and nobody carries eight known networks. Raising it costs about 3.4 entries per network.
 
-With a maximum relay URL and the flag on top, ours is 37 + 12 + 2 = 51 entries: 198 of 756 used (26%), 558 free. Under Launcher's 20K NVS (`2026-10-21-launcher-slot.md`, 504 usable) it is 198 of 504 (39%, up from 36%). The two relay rows are computed, not yet measured on the ADV; the next device session re-runs the boot loop with them.
+With a maximum relay URL, the flag and a pending pairing code on top, ours is 37 + 12 + 2 + 2 = 53 entries: 200 of 756 used (26%), 556 free. Under Launcher's 20K NVS (`2026-10-21-launcher-slot.md`, 504 usable) it is 200 of 504 (40%, up from 36%). The relay and pairing code rows are computed, not yet measured on the ADV; the next device session re-runs the boot loop with them.
 
 ## keyboard
 
