@@ -9,14 +9,18 @@ on:
       - site/**
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: auto-release
   cancel-in-progress: false
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   tag:
+    needs: ci
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.next.outputs.tag }}
@@ -38,15 +42,13 @@ jobs:
             IFS=. read -r major minor patch <<< "${latest#v}"
             next="v$major.$minor.$((patch + 1))"
           fi
-          git tag "$next" "$GITHUB_SHA"
-          git push origin "refs/tags/$next"
-          echo "tagged $GITHUB_SHA as $next (previous ${latest:-none})"
+          echo "releasing $GITHUB_SHA as $next (previous ${latest:-none}); release.yml creates the tag when it publishes"
           echo "tag=$next" >> "$GITHUB_OUTPUT"
 
   release:
     needs: tag
     if: needs.tag.outputs.tag != ''
-    # why: a tag pushed with GITHUB_TOKEN does not trigger release.yml's push trigger, so it is called directly
+    # why: the tag is created by gh release create with GITHUB_TOKEN, which never triggers release.yml's tag push trigger, so it is called directly
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
