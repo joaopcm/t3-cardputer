@@ -138,6 +138,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
       - uses: actions/download-artifact@v4
         with:
           name: relay
@@ -157,6 +160,8 @@ jobs:
           fi
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
+      - name: leak grep
+        run: .github/scripts/leak-grep.sh assets
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets
@@ -215,4 +220,8 @@ jobs:
         run: |
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
           vercel build --prod --token="$VERCEL_TOKEN"
+          if [ ! -f .vercel/output/static/install.html ]; then
+            echo "::error::vercel build made no .vercel/output/static/install.html, so the project's Root Directory is not site; set it to site in the Vercel project settings (Build and Deployment), then re-run (nothing was deployed)"
+            exit 1
+          fi
           vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"

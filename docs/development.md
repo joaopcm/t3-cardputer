@@ -137,8 +137,8 @@ A push to `main` that touches `relay/`, `firmware/` or `site/` runs `.github/wor
 
 1. builds the relay bundle with that version,
 2. builds the firmware in the `espressif/idf:v5.4.2` container with `T3_VERSION` set to it,
-3. publishes the GitHub release with the bundle, `install-whisper.sh`, the service files, the firmware parts and `SHA256SUMS`, creating the `v<x.y.z>` tag as it publishes,
-4. deploys the site to Vercel with the firmware under `fw/<x.y.z>/` and `fw/latest/`, and `setup.sh` pinned to that version.
+3. runs the leak grep over the release assets, then publishes the GitHub release with the bundle, `install-whisper.sh`, the service files, the firmware parts and `SHA256SUMS`, creating the `v<x.y.z>` tag as it publishes,
+4. deploys the site to Vercel with the firmware under `fw/<x.y.z>/` and `fw/latest/`, and `setup.sh` pinned to that version. The Vercel project's Root Directory must be `site`. If it isn't, `vercel build` makes no `install.html` and the run stops before it deploys.
 
 A failed run leaves no tag, so the next run takes the same number. Pushing a `v<x.y.z>` tag by hand does the same as the auto release. To build everything without publishing, run the release workflow from the Actions tab with `dry_run` on.
 
