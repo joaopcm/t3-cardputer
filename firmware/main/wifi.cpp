@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <deque>
 
 #include "esp_event.h"
 #include "esp_log.h"
@@ -14,15 +13,13 @@
 #include "lwip/netif.h"
 #include "lwip/tcpip.h"
 #include "settings.h"
-#include "t3/wifi_pick.h"
+#include "t3/wifi_station.h"
 
 namespace {
 
 constexpr char TAG[] = "wifi";
 
 // receipt: docs/receipts/2026-10-21-firmware-network.md "wifi"
-constexpr uint32_t kWifiJoinWaitMs = 20000;
-constexpr uint32_t kWifiRetryMs = 10000;
 constexpr UBaseType_t kRawQueueDepth = 16;
 
 struct Raw {
@@ -31,34 +28,7 @@ struct Raw {
     int32_t reason;
 };
 
-enum class State { Idle, Scanning, Connecting, Leaving, Up, Waiting };
-
-struct Scan {
-    std::vector<t3::WifiNet> nets;
-    bool hidden = false;
-};
-
 QueueHandle_t rawQueue;
-std::deque<WifiEvent> pending;
-State state = State::Idle;
-bool autoWanted = false;
-bool listWanted = false;
-bool scanAfterConnect = false;
-uint32_t deadlineMs = 0;
-settings::WifiCred target;
-std::optional<settings::WifiCred> join;
-bool joining = false;
-t3::WifiPicker picker;
-
-bool reached(uint32_t nowMs, uint32_t atMs)
-{
-    return static_cast<int32_t>(nowMs - atMs) >= 0;
-}
-
-void emit(WifiEvent::Kind kind, std::string text = {}, std::vector<t3::WifiNet> nets = {})
-{
-    pending.push_back(WifiEvent{kind, std::move(text), std::move(nets)});
-}
 
 void onSystemEvent(void *, esp_event_base_t base, int32_t id, void *data)
 {
@@ -86,55 +56,54 @@ std::string reasonText(int reason)
     }
 }
 
-void startScan()
-{
-    if (state == State::Connecting || state == State::Leaving) {
-        scanAfterConnect = true;
-        return;
-    }
-    if (state == State::Scanning) {
-        return;
-    }
-    wifi_scan_config_t config = {};
-    const esp_err_t err = esp_wifi_scan_start(&config, false);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "scan start failed: %s", esp_err_to_name(err));
-        emit(WifiEvent::Kind::Status, std::string("wifi: scan failed: ") + esp_err_to_name(err));
-        if (listWanted) {
-            listWanted = false;
-            emit(WifiEvent::Kind::Scanned);
+class EspWifi : public t3::WifiDriver {
+public:
+    std::optional<std::string> startScan() override
+    {
+        wifi_scan_config_t config = {};
+        if (const esp_err_t err = esp_wifi_scan_start(&config, false); err != ESP_OK) {
+            return esp_err_to_name(err);
         }
-        return;
+        return std::nullopt;
     }
-    if (state != State::Up) {
-        state = State::Scanning;
-    }
-}
 
-void connect(const settings::WifiCred &cred, uint32_t nowMs, std::string_view lastFailure = {})
-{
-    wifi_config_t config = {};
-    std::memcpy(config.sta.ssid, cred.ssid.data(), std::min(cred.ssid.size(), sizeof(config.sta.ssid)));
-    std::memcpy(config.sta.password, cred.password.data(), std::min(cred.password.size(), sizeof(config.sta.password) - 1));
-    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    target = cred;
-    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &config);
-    if (err == ESP_OK) {
-        err = esp_wifi_connect();
+    std::optional<std::string> connect(const t3::WifiJoin &cred) override
+    {
+        wifi_config_t config = {};
+        std::memcpy(config.sta.ssid, cred.ssid.data(), std::min(cred.ssid.size(), sizeof(config.sta.ssid)));
+        std::memcpy(config.sta.password, cred.password.data(), std::min(cred.password.size(), sizeof(config.sta.password) - 1));
+        config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &config);
+        if (err == ESP_OK) {
+            err = esp_wifi_connect();
+        }
+        std::memset(&config, 0, sizeof(config));
+        if (err != ESP_OK) {
+            return esp_err_to_name(err);
+        }
+        return std::nullopt;
     }
-    std::memset(&config, 0, sizeof(config));
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "connect to %s failed to start: %s", cred.ssid.c_str(), esp_err_to_name(err));
-        state = State::Waiting;
-        deadlineMs = nowMs + kWifiRetryMs;
-        return;
+
+    void disconnect() override { esp_wifi_disconnect(); }
+
+    t3::SavedWifi saved() override
+    {
+        t3::SavedWifi saved;
+        for (settings::WifiCred &cred : settings::wifi()) {
+            saved.creds.push_back(t3::WifiJoin{std::move(cred.ssid), std::move(cred.password)});
+        }
+        return saved;
     }
-    ESP_LOGI(TAG, "joining %s", cred.ssid.c_str());
-    state = State::Connecting;
-    deadlineMs = nowMs + kWifiJoinWaitMs;
-    emit(WifiEvent::Kind::Status, (lastFailure.empty() ? std::string("wifi: ") : std::string(lastFailure) + ", ") + "joining " + cred.ssid);
-}
+};
+
+EspWifi driver;
+t3::WifiStation station(driver);
+
+struct Scan {
+    std::vector<t3::WifiNet> nets;
+    bool hidden = false;
+};
 
 Scan scanResults()
 {
@@ -145,7 +114,6 @@ Scan scanResults()
         count = 0;
     }
     records.resize(count);
-    const std::vector<settings::WifiCred> saved = settings::wifi();
     Scan scan;
     std::vector<t3::WifiNet> &nets = scan.nets;
     for (const wifi_ap_record_t &record : records) {
@@ -159,125 +127,52 @@ Scan scanResults()
             known->rssi = std::max(known->rssi, static_cast<int>(record.rssi));
             continue;
         }
-        const bool isSaved = std::any_of(saved.begin(), saved.end(), [&](const settings::WifiCred &cred) { return cred.ssid == ssid; });
-        nets.push_back(t3::WifiNet{ssid, record.rssi, record.authmode != WIFI_AUTH_OPEN, isSaved});
+        nets.push_back(t3::WifiNet{ssid, record.rssi, record.authmode != WIFI_AUTH_OPEN, false});
     }
     std::sort(nets.begin(), nets.end(), [](const t3::WifiNet &a, const t3::WifiNet &b) { return a.rssi > b.rssi; });
     ESP_LOGI(TAG, "scan: %u access points, %u networks%s", static_cast<unsigned>(count), static_cast<unsigned>(nets.size()), scan.hidden ? ", a hidden one" : "");
     return scan;
 }
 
-std::vector<std::string> savedSsids()
-{
-    std::vector<std::string> ssids;
-    for (const settings::WifiCred &cred : settings::wifi()) {
-        ssids.push_back(cred.ssid);
-    }
-    return ssids;
-}
-
-void connectNextSaved(uint32_t nowMs, std::string_view lastFailure = {})
-{
-    const std::vector<settings::WifiCred> saved = settings::wifi();
-    if (const std::optional<std::string> ssid = picker.next()) {
-        for (const settings::WifiCred &cred : saved) {
-            if (cred.ssid == *ssid) {
-                connect(cred, nowMs, lastFailure);
-                return;
-            }
-        }
-    }
-    state = State::Waiting;
-    deadlineMs = nowMs + kWifiRetryMs;
-    if (!lastFailure.empty()) {
-        emit(WifiEvent::Kind::Status, std::string(lastFailure));
-    } else {
-        emit(WifiEvent::Kind::Status, saved.empty() ? "wifi: no saved network, Fn+S adds one" : "wifi: no saved network in range");
-    }
-}
-
-void startJoin(uint32_t nowMs)
-{
-    const settings::WifiCred cred = *join;
-    join.reset();
-    joining = true;
-    connect(cred, nowMs);
-}
-
-void failed(std::string why, uint32_t nowMs)
-{
-    ESP_LOGW(TAG, "%s: %s", target.ssid.c_str(), why.c_str());
-    state = State::Waiting;
-    if (joining) {
-        joining = false;
-        deadlineMs = nowMs;
-        emit(WifiEvent::Kind::JoinFailed, "wifi: " + target.ssid + " failed, " + why);
-        return;
-    }
-    picker.failed(target.ssid);
-    connectNextSaved(nowMs, "wifi: " + target.ssid + " failed, " + why);
-}
-
-void afterConnectAttempt()
-{
-    if (scanAfterConnect) {
-        scanAfterConnect = false;
-        startScan();
-    }
-}
-
 void handle(const Raw &raw, uint32_t nowMs)
 {
     if (raw.ip) {
-        if (raw.id == IP_EVENT_STA_GOT_IP && state == State::Connecting) {
-            ESP_LOGI(TAG, "up on %s", target.ssid.c_str());
-            state = State::Up;
-            picker.joined();
-            if (joining) {
-                joining = false;
-                emit(WifiEvent::Kind::Joined, target.ssid);
-            }
-            emit(WifiEvent::Kind::Up, target.ssid);
-            afterConnectAttempt();
+        if (raw.id == IP_EVENT_STA_GOT_IP) {
+            station.onGotIp();
         }
         return;
     }
     switch (raw.id) {
     case WIFI_EVENT_SCAN_DONE: {
         Scan scan = scanResults();
-        const bool searching = state == State::Scanning;
-        if (state == State::Scanning) {
-            state = State::Idle;
-        }
-        if (listWanted) {
-            listWanted = false;
-            emit(WifiEvent::Kind::Scanned, {}, scan.nets);
-        }
-        if (state == State::Idle && join) {
-            startJoin(nowMs);
-        } else if (searching && autoWanted) {
-            picker.scanned(scan.nets, savedSsids(), scan.hidden);
-            connectNextSaved(nowMs);
-        }
+        station.onScanDone(std::move(scan.nets), scan.hidden, nowMs);
         return;
     }
     case WIFI_EVENT_STA_DISCONNECTED:
-        if (state == State::Leaving) {
-            state = State::Idle;
-            startJoin(nowMs);
-        } else if (state == State::Connecting) {
-            failed(reasonText(raw.reason), nowMs);
-            afterConnectAttempt();
-        } else if (state == State::Up) {
-            ESP_LOGW(TAG, "down: %s", reasonText(raw.reason).c_str());
-            emit(WifiEvent::Kind::Down, reasonText(raw.reason));
-            state = State::Idle;
-            if (autoWanted) {
-                startScan();
-            }
-        }
+        station.onDisconnected(reasonText(raw.reason), nowMs);
         return;
     default:
+        return;
+    }
+}
+
+void logEvent(const WifiEvent &event)
+{
+    switch (event.kind) {
+    case WifiEvent::Kind::Up:
+        ESP_LOGI(TAG, "up on %s", event.text.c_str());
+        return;
+    case WifiEvent::Kind::Down:
+        ESP_LOGW(TAG, "down: %s", event.text.c_str());
+        return;
+    case WifiEvent::Kind::Scanned:
+        return;
+    case WifiEvent::Kind::Joined:
+        ESP_LOGI(TAG, "joined %s", event.text.c_str());
+        return;
+    case WifiEvent::Kind::JoinFailed:
+    case WifiEvent::Kind::Status:
+        ESP_LOGI(TAG, "%s", event.text.c_str());
         return;
     }
 }
@@ -326,66 +221,29 @@ bool wifi_init()
 
 void wifi_start(uint32_t nowMs)
 {
-    autoWanted = true;
-    if (state == State::Idle || state == State::Waiting) {
-        deadlineMs = nowMs;
-        state = State::Waiting;
-    }
+    station.start(nowMs);
 }
 
 void wifi_scan()
 {
-    listWanted = true;
-    startScan();
+    station.scan();
 }
 
 void wifi_join(const std::string &ssid, const std::string &password, uint32_t nowMs)
 {
-    autoWanted = true;
-    join = settings::WifiCred{ssid, password};
-    switch (state) {
-    case State::Up:
-        emit(WifiEvent::Kind::Down, "joining " + ssid);
-        [[fallthrough]];
-    case State::Connecting:
-        state = State::Leaving;
-        deadlineMs = nowMs + kWifiJoinWaitMs;
-        esp_wifi_disconnect();
-        return;
-    case State::Scanning:
-    case State::Leaving:
-        return;
-    case State::Idle:
-    case State::Waiting:
-        startJoin(nowMs);
-        return;
-    }
+    station.join(t3::WifiJoin{ssid, password}, nowMs);
 }
 
 std::optional<WifiEvent> wifi_poll(uint32_t nowMs)
 {
     Raw raw;
-    while (pending.empty() && xQueueReceive(rawQueue, &raw, 0) == pdTRUE) {
+    while (!station.hasEvent() && xQueueReceive(rawQueue, &raw, 0) == pdTRUE) {
         handle(raw, nowMs);
     }
-    if (pending.empty()) {
-        if (state == State::Connecting && reached(nowMs, deadlineMs)) {
-            esp_wifi_disconnect();
-            failed("no ip within kWifiJoinWaitMs=" + std::to_string(kWifiJoinWaitMs), nowMs);
-            afterConnectAttempt();
-        } else if (state == State::Leaving && reached(nowMs, deadlineMs)) {
-            state = State::Idle;
-            startJoin(nowMs);
-        } else if (state == State::Waiting && autoWanted && reached(nowMs, deadlineMs)) {
-            state = State::Idle;
-            startScan();
-        }
+    std::optional<WifiEvent> event = station.poll(nowMs);
+    if (event) {
+        logEvent(*event);
     }
-    if (pending.empty()) {
-        return std::nullopt;
-    }
-    WifiEvent event = std::move(pending.front());
-    pending.pop_front();
     return event;
 }
 

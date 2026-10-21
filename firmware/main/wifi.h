@@ -3,16 +3,10 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <vector>
 
-#include "t3/app.h"
+#include "t3/wifi_station.h"
 
-struct WifiEvent {
-    enum class Kind { Up, Down, Scanned, Joined, JoinFailed, Status };
-    Kind kind;
-    std::string text;
-    std::vector<t3::WifiNet> nets;
-};
+using WifiEvent = t3::WifiEvent;
 
 bool wifi_init();
 void wifi_start(uint32_t nowMs);
