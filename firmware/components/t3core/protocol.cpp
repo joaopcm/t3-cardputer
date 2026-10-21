@@ -9,9 +9,37 @@
 
 #include "cJSON.h"
 
+static_assert(CJSON_NESTING_LIMIT == t3::kJsonNestingMax, "set CJSON_NESTING_LIMIT to kJsonNestingMax where cJSON.c is compiled");
+
 namespace t3 {
 
 namespace {
+
+int nestingDepth(std::string_view json)
+{
+    int depth = 0;
+    int deepest = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (const char c : json) {
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                inString = false;
+            }
+        } else if (c == '"') {
+            inString = true;
+        } else if (c == '{' || c == '[') {
+            deepest = std::max(deepest, ++depth);
+        } else if (c == '}' || c == ']') {
+            --depth;
+        }
+    }
+    return deepest;
+}
 
 struct JsonDeleter {
     void operator()(cJSON *json) const { cJSON_Delete(json); }
@@ -619,6 +647,10 @@ std::optional<RelayMsg> parseRelay(std::string_view json, const HelloCaps &caps,
         p.fail("heap: parse needed more than available, frame was " + std::to_string(json.size()) + " bytes");
         return std::nullopt;
     }
+    if (const int depth = root ? 0 : nestingDepth(json); depth > kJsonNestingMax) {
+        p.fail("json_nesting_max=" + std::to_string(kJsonNestingMax) + ", frame needed " + std::to_string(depth));
+        return std::nullopt;
+    }
     if (!root) {
         p.fail("frame: not valid json at byte " + std::to_string(parseEnd == nullptr ? 0 : parseEnd - json.data()));
         return std::nullopt;
@@ -657,7 +689,7 @@ std::optional<std::string> encodeHello(const HelloCaps &caps, std::string_view t
     return Builder("hello")
         .num("v", ProtocolVersion)
         .str("token", token)
-        .str("fw", fw)
+        .str("fw", fw.substr(0, kFwMax))
         .num("cols", caps.cols)
         .num("bodyRows", caps.bodyRows)
         .num("maxFrameBytes", caps.maxFrameBytes)

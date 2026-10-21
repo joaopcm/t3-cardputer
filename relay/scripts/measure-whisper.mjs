@@ -3,9 +3,9 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-const [model, threadsArg = "8", runsArg = "5", wavArg] = process.argv.slice(2);
-if (!model) {
-  console.error("usage: node measure-whisper.mjs <model> [threads=8] [runs=5] [wav]");
+const [model, threadsArg = "8", runsArg = "5", wavArg, referenceArg] = process.argv.slice(2);
+if (!model || (wavArg && !referenceArg)) {
+  console.error("usage: node measure-whisper.mjs <model> [threads=8] [runs=5] [<wav> <reference>]  (wav needs its reference text)");
   process.exit(2);
 }
 const threads = Number(threadsArg);
@@ -13,7 +13,7 @@ const runs = Number(runsArg);
 const binDir = process.env.T3_CARDPUTER_WHISPER_DIR ?? join(homedir(), ".local", "share", "t3-cardputer", "whisper");
 const wav = readFileSync(wavArg ?? join(binDir, "samples", "jfk.wav"));
 const port = 19_000 + Math.floor(Math.random() * 1000);
-const reference = "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.";
+const reference = referenceArg ?? "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.";
 
 const words = (text) => text.toLowerCase().replace(/[^a-z0-9' ]/g, " ").split(/\s+/).filter(Boolean);
 
@@ -78,6 +78,7 @@ console.log(
       medianMs: Math.round(median),
       p95Ms: Math.round(p95),
       peakRssMb: Math.round(peakRssMb),
+      reference,
       wordErrors: results.map((r) => wordErrors(reference, r.text)),
       transcript: results[0].text,
     },

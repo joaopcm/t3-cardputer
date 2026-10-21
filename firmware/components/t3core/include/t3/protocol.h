@@ -42,6 +42,8 @@ inline constexpr int kFrameBytesMin = 256;
 inline constexpr int kErrorMessageMax = 120;
 // receipt: HOME_AGE_COLS in relay/src/protocol/messages.ts
 inline constexpr int kHomeAgeCols = 4;
+// receipt: docs/receipts/2026-10-21-firmware-network.md "json nesting", 8x the deepest relay frame (projects, 4 levels) at 64 bytes of ADV stack per level; CJSON_NESTING_LIMIT in firmware/CMakeLists.txt and test/host/CMakeLists.txt must match
+inline constexpr int kJsonNestingMax = 32;
 // receipt: DEVICE_FRAME_BYTES_MAX in relay/src/protocol/messages.ts, also the audio chunk cap
 inline constexpr int kDeviceFrameBytesMax = 65536;
 // why: the relay has no cap on warnings (relay/src/session.ts clips each to kErrorMessageMax); about 7 conditions can warn at once, so 16 is a tripwire and Home.warningsDropped says how many were cut

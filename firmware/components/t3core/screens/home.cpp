@@ -164,6 +164,7 @@ void App::onHome(const Home &home)
         selected = home_->rows[homeSelected_].threadId;
     }
     home_ = home;
+    dropAnswersNoLongerPending();
     if (screen_ == Screen::Connecting) {
         screen_ = Screen::Home;
     }

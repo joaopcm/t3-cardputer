@@ -15,6 +15,7 @@ constexpr int kListRows = kBodyBottom - kListTop + 1;
 constexpr int kSsidCols = 29;
 constexpr int kTagCols = 5;
 constexpr int kRssiCols = 4;
+constexpr int kOpenHintRow = 5;
 constexpr int kStatusRow = 6;
 constexpr int kInputLabelRow = 6;
 constexpr int kInputRow = 7;
@@ -24,6 +25,9 @@ constexpr int kPairBodyTop = 2;
 // receipt: WPA/WPA2 passphrase is 8 to 63 characters (IEEE 802.11i), esp_wifi wifi_sta_config_t.password is char[64] with the NUL
 constexpr size_t kWifiPasswordMin = 8;
 constexpr size_t kWifiPasswordMax = 63;
+// receipt: IEEE 802.11 SSID is at most 32 octets, esp_wifi wifi_sta_config_t.ssid is uint8_t[32]
+constexpr size_t kWifiSsidMax = 32;
+constexpr std::string_view kTypeSsidRow = "+ type a network name";
 // receipt: docs/protocol.md "Pairing": code is the 8 characters as shown
 constexpr size_t kPairCodeLen = 8;
 constexpr std::string_view kPairName = "cardputer";
@@ -68,13 +72,43 @@ App::Out App::onBoot(bool hasWifi, bool hasToken)
 
 App::Out App::onAuthRejected()
 {
-    Out out = onVoiceLinkLost();
+    std::vector<std::string> notes;
+    Color color = Color::Warn;
+    Out out = dropLink(notes, color);
+    if (!unacked_.empty()) {
+        notes.push_back(dropUnacked());
+    }
+    inform(notes, color);
     hasToken_ = false;
     pairing_ = false;
     pairCode_.clear();
     pairNote_ = "re-pair needed: relay rejected token";
     screen_ = Screen::SetupPair;
     return out;
+}
+
+std::string App::dropUnacked()
+{
+    size_t replies = 0;
+    size_t answers = 0;
+    size_t kept = 0;
+    for (const Unacked &item : unacked_) {
+        (item.request ? answers : replies) += 1;
+        kept += keep(item) ? 1 : 0;
+    }
+    unacked_.clear();
+    std::vector<std::string> counts;
+    if (replies > 0) {
+        counts.push_back(std::to_string(replies) + (replies == 1 ? " reply" : " replies"));
+    }
+    if (answers > 0) {
+        counts.push_back(std::to_string(answers) + (answers == 1 ? " answer" : " answers"));
+    }
+    std::string text = counts.front() + (counts.size() > 1 ? ", " + counts.back() : "") + " unconfirmed, may have gone through: re-pair";
+    if (kept > 0) {
+        text += kept == 1 ? ", text back when its thread opens" : ", text back when their threads open";
+    }
+    return text;
 }
 
 App::Out App::openSetup()
@@ -182,19 +216,24 @@ App::Out App::showWifiList()
 App::Out App::wifiListKey(Key key)
 {
     const int count = static_cast<int>(nets_.size());
+    const bool onNet = netSelected_ < count;
     Out out;
     switch (key.name) {
     case KeyName::Up:
         netSelected_ = std::max(0, netSelected_ - 1);
         break;
     case KeyName::Down:
-        netSelected_ = std::min(std::max(0, count - 1), netSelected_ + 1);
+        netSelected_ = std::min(count, netSelected_ + 1);
         break;
     case KeyName::Enter:
-        if (count > 0) {
+        if (onNet) {
             joinTarget_ = nets_[netSelected_];
+            joinTyped_ = false;
             wifiPassword_.clear();
             screen_ = Screen::SetupWifiPassword;
+        } else {
+            typedSsid_.clear();
+            screen_ = Screen::SetupWifiSsid;
         }
         return out;
     case KeyName::Tab:
@@ -211,15 +250,46 @@ App::Out App::wifiListKey(Key key)
             netSelected_ = 0;
             netTop_ = 0;
             out.scanWifi = true;
-        } else if (upper(key.ch) == 'D' && count > 0 && nets_[netSelected_].saved) {
+        } else if (upper(key.ch) == 'D' && onNet && nets_[netSelected_].saved) {
             out.forgetWifi = nets_[netSelected_].ssid;
         }
         return out;
     default:
         return out;
     }
-    netTop_ = keepVisible(netTop_, netSelected_, kListRows);
+    netTop_ = keepVisible(netTop_, netSelected_, kListRows - (nets_.empty() ? 1 : 0));
     return out;
+}
+
+App::Out App::wifiSsidKey(Key key)
+{
+    key = typed(key);
+    switch (key.name) {
+    case KeyName::Char:
+        type(typedSsid_, key.ch, static_cast<int>(kWifiSsidMax), "wifi_ssid_max", "ssid");
+        break;
+    case KeyName::Backspace:
+        if (typedSsid_.empty()) {
+            return showWifiList();
+        }
+        typedSsid_.pop_back();
+        break;
+    case KeyName::Esc:
+        return showWifiList();
+    case KeyName::Enter:
+        if (typedSsid_.empty()) {
+            inform("type a network name first", Color::Warn);
+            break;
+        }
+        joinTarget_ = WifiNet{typedSsid_, 0, true, false};
+        joinTyped_ = true;
+        wifiPassword_.clear();
+        screen_ = Screen::SetupWifiPassword;
+        break;
+    default:
+        break;
+    }
+    return {};
 }
 
 App::Out App::wifiPasswordKey(Key key)
@@ -243,7 +313,7 @@ App::Out App::wifiPasswordKey(Key key)
     case KeyName::Enter:
         if (joining_) {
             inform("joining...", Color::Ok);
-        } else if (joinTarget_.secure && wifiPassword_.size() < kWifiPasswordMin) {
+        } else if (joinTarget_.secure && !(joinTyped_ && wifiPassword_.empty()) && wifiPassword_.size() < kWifiPasswordMin) {
             inform("wifi_password_min=" + std::to_string(kWifiPasswordMin) + ", password has " + std::to_string(wifiPassword_.size()), Color::Warn);
         } else {
             joining_ = true;
@@ -305,19 +375,34 @@ void App::drawSetupBar(Grid &grid, std::string_view step) const
 void App::drawWifiList(Grid &grid) const
 {
     grid.put(1, 0, "pick a network", Color::Dim);
+    int top = kListTop;
     if (!scanned_) {
-        grid.put(kListTop, 0, "scanning...", Color::Dim);
+        grid.put(top++, 0, "scanning...", Color::Dim);
     } else if (nets_.empty()) {
-        grid.put(kListTop, 0, "no networks found, R scans again", Color::Warn);
+        grid.put(top++, 0, "no networks found, R scans again", Color::Warn);
     }
-    for (int i = 0; i < kListRows && netTop_ + i < static_cast<int>(nets_.size()); ++i) {
-        const WifiNet &net = nets_[netTop_ + i];
-        grid.put(kListTop + i, 0, netLine(net), netColor(net));
-        if (netTop_ + i == netSelected_) {
-            grid.selectRow(kListTop + i);
+    const int count = static_cast<int>(nets_.size());
+    for (int i = 0; top + i <= kBodyBottom && netTop_ + i <= count; ++i) {
+        const int index = netTop_ + i;
+        if (index < count) {
+            grid.put(top + i, 0, netLine(nets_[index]), netColor(nets_[index]));
+        } else {
+            grid.put(top + i, 0, kTypeSsidRow, Color::Dim);
+        }
+        if (index == netSelected_) {
+            grid.selectRow(top + i);
         }
     }
     drawHint(grid, "Enter join  R scan  D forget  Tab pair");
+    drawSetupBar(grid, "wifi 1/3");
+}
+
+void App::drawWifiSsid(Grid &grid) const
+{
+    grid.put(1, 0, "type the network name", Color::Dim);
+    grid.put(3, 0, inputLine(typedSsid_));
+    grid.put(4, 0, std::to_string(typedSsid_.size()) + "/" + std::to_string(kWifiSsidMax), Color::Dim);
+    drawHint(grid, "Enter next  Esc back");
     drawSetupBar(grid, "wifi 1/3");
 }
 
@@ -328,6 +413,9 @@ void App::drawWifiPassword(Grid &grid) const
         grid.put(2, 0, "password", Color::Dim);
         grid.put(3, 0, inputLine(std::string(wifiPassword_.size(), '*')));
         grid.put(4, 0, charCount(wifiPassword_.size()), Color::Dim);
+        if (joinTyped_) {
+            grid.put(kOpenHintRow, 0, "empty joins an open network", Color::Dim);
+        }
     } else {
         grid.put(2, 0, "open network, no password needed", Color::Dim);
     }

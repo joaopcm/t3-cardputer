@@ -499,8 +499,9 @@ TEST_CASE("an unknown close code reconnects with backoff and keeps the token")
     CHECK(out.statusText == "relay unreachable: closed 1009");
 }
 
-TEST_CASE("the relay's own heartbeat needs no link timer, a quiet live link stays live")
+TEST_CASE("the websocket ping finds a dead link before the relay drops it, so the link needs no timer and a quiet live link stays live")
 {
+    CHECK((t3::kPingIntervalSec + t3::kPongTimeoutSec) * 1000 < t3::kRelaySilentDropMs);
     t3::Link link = live();
     for (uint32_t now = 0; now < 10 * 60 * 1000; now += 1000) {
         const auto out = link.onTick(now);
@@ -510,25 +511,70 @@ TEST_CASE("the relay's own heartbeat needs no link timer, a quiet live link stay
     CHECK(link.state() == t3::Link::State::Live);
 }
 
-TEST_CASE("pairing is allowed only while the link needs a token or has stopped")
+TEST_CASE("a pong timeout is a network close: keep the token, show it, reconnect")
 {
-    CHECK_FALSE(makeLink().canPair());
-    CHECK_FALSE(connecting().canPair());
-    CHECK_FALSE(live().canPair());
+    t3::Link link = live();
+    const auto out = link.onClose(1006, "pong_timeout_sec=25, no pong from relay", 0);
+    CHECK_FALSE(out.wipeToken);
+    CHECK(out.reconnectInMs == t3::kBackoffMinMs);
+    CHECK(out.statusText == "relay unreachable: pong_timeout_sec=25, no pong from relay");
+}
+
+TEST_CASE("a refused pairing names the link's real state")
+{
+    CHECK(makeLink().pairRefused() == "pairing refused: wifi down, join a network first");
+    CHECK(connecting().pairRefused() == "pairing refused: connecting with the saved token, pair if the relay asks to re-pair");
+    t3::Link hello = connecting();
+    hello.onOpen(0);
+    CHECK(hello.pairRefused() == "pairing refused: connecting with the saved token, pair if the relay asks to re-pair");
+    CHECK(live().pairRefused() == "pairing refused: already paired and connected, pair if the relay asks to re-pair");
     t3::Link backingOff = live();
     backingOff.onClose(1006, "", 0);
-    CHECK_FALSE(backingOff.canPair());
+    CHECK(backingOff.pairRefused() == "pairing refused: relay unreachable, retrying with the saved token; pair if the relay asks to re-pair");
+    t3::Link unpaired(kCaps, "", "0.1.0");
+    unpaired.onWifi(true, 0);
+    CHECK_FALSE(unpaired.pairRefused().has_value());
+}
+
+TEST_CASE("pairing is allowed only while the link needs a token or has stopped")
+{
+    CHECK(makeLink().pairRefused().has_value());
+    CHECK(connecting().pairRefused().has_value());
+    CHECK(live().pairRefused().has_value());
+    t3::Link backingOff = live();
+    backingOff.onClose(1006, "", 0);
+    CHECK(backingOff.pairRefused().has_value());
 
     t3::Link unpaired(kCaps, "", "0.1.0");
     unpaired.onWifi(true, 0);
-    CHECK(unpaired.canPair());
+    CHECK_FALSE(unpaired.pairRefused().has_value());
 
     t3::Link rejected = live();
     rejected.onClose(4401, "", 0);
-    CHECK(rejected.canPair());
+    CHECK_FALSE(rejected.pairRefused().has_value());
 
     t3::Link stopped = connecting();
     stopped.onOpen(0);
     stopped.onClose(4402, "hello.cols: must be at most 255", 0);
-    CHECK(stopped.canPair());
+    CHECK_FALSE(stopped.pairRefused().has_value());
+}
+
+TEST_CASE("a retry keeps the last link-down reason on screen until the link is live")
+{
+    t3::Link link = live();
+    link.onClose(1006, "pong_timeout_sec=25, no pong from relay", 0);
+    const auto retry = link.onTick(t3::kBackoffMinMs);
+    CHECK(retry.connect);
+    CHECK(retry.statusText == "connecting, last: pong_timeout_sec=25, no pong from relay");
+
+    const auto failed = link.onClose(1006, "ESP_ERR_ESP_TLS_TCP_CLOSED_FIN", t3::kBackoffMinMs);
+    CHECK(failed.statusText == "relay unreachable: ESP_ERR_ESP_TLS_TCP_CLOSED_FIN");
+    CHECK(link.onTick(4 * t3::kBackoffMinMs).statusText == "connecting, last: ESP_ERR_ESP_TLS_TCP_CLOSED_FIN");
+
+    link.onOpen(4 * t3::kBackoffMinMs);
+    CHECK(link.onText(kWelcome, 4 * t3::kBackoffMinMs).statusText == "");
+    link.onClose(1006, "", 5 * t3::kBackoffMinMs);
+    CHECK(link.onTick(6 * t3::kBackoffMinMs).statusText == "connecting, last: closed 1006");
+    link.onWifi(false, 7 * t3::kBackoffMinMs);
+    CHECK(link.onWifi(true, 7 * t3::kBackoffMinMs).statusText == "connecting");
 }

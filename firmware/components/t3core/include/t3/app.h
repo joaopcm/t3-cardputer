@@ -15,6 +15,10 @@ namespace t3 {
 // why: simple visual reaction time is about 200-250 ms, so a key already on its way when an unasked-for request replaces the screen lands inside 400 ms; option keys act only after 400 ms with no typed key
 inline constexpr uint32_t kRequestGuardMs = 400;
 
+// receipt: docs/receipts/2026-10-21-firmware-network.md "unacked replies and answers"
+inline constexpr int kUnackedMax = 8;
+inline constexpr size_t kUnackedBytesMax = 8192;
+
 std::vector<std::string> wrapWords(std::string_view text, int width);
 
 // why: 16-bit PCM spans 96 dB, so -96 dBFS is below any chunk that is not all zeros
@@ -59,10 +63,11 @@ public:
     Out onAudioFailed(std::string_view why);
     Out onRelay(const RelayMsg &msg, uint32_t nowMs);
     Out onFrame(std::string_view json, uint32_t nowMs);
-    Out onLinkStatus(std::string_view status);
+    Out onLinkStatus(std::string_view status, uint32_t nowMs);
     Out onBoot(bool hasWifi, bool hasToken);
     Out onAuthRejected();
-    void onTransportError(std::string_view why);
+    void onDeviceError(std::string_view why);
+    void onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs);
     void onWifiScan(std::vector<WifiNet> nets);
     Out onWifiResult(bool ok, std::string_view why);
     Out onPairResult(std::optional<std::string> token, std::string_view why);
@@ -74,14 +79,32 @@ public:
     bool recording() const;
 
 private:
-    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiPassword, SetupPair, Voice };
+    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiSsid, SetupWifiPassword, SetupPair, Voice };
     enum class Voice { Recording, Transcribing, Review };
     enum class Field { None, Model, Workspace, Mode };
+    enum class GiveBack { Refused, NotSent, Unconfirmed };
 
     struct Line {
         std::string text;
         Color color = Color::Text;
         int row = -1;
+    };
+
+    struct Unacked {
+        std::string id;
+        std::string threadId;
+        std::string text;
+        std::string confirmed;
+        Mode mode = Mode::Queue;
+        std::optional<Request> request;
+        std::optional<Option> option;
+    };
+
+    struct Unsent {
+        std::string threadId;
+        std::string text;
+        std::optional<std::string> requestId;
+        std::optional<Option> option;
     };
 
     struct RequestLayout {
@@ -92,7 +115,22 @@ private:
 
     std::string nextId() { return ids_.next(); }
     bool send(Out &out, std::optional<std::string> frame, std::string_view what);
+    bool readyToSend(std::string_view what);
+    bool sendTracked(Out &out, std::string_view what, Unacked item);
+    static size_t sizeOf(const Unacked &item);
+    static size_t sizeOf(const Unsent &item);
+    size_t unackedBytes() const;
+    size_t unsentBytes() const;
+    std::string dropOldestUnsent(size_t excess);
+    void dropAnswersNoLongerPending();
+    std::string giveBack(const Unacked &item, GiveBack outcome, std::string_view why, uint32_t nowMs);
+    bool keep(const Unacked &item);
+    bool takeReply();
     void inform(std::string text, Color color = Color::Red);
+    void inform(const std::vector<std::string> &notes, Color color);
+    void informAlso(const std::vector<std::string> &notes, Color color);
+    Out dropLink(std::vector<std::string> &notes, Color &color);
+    std::string dropUnacked();
     void type(std::string &text, char c, int max, std::string_view budget, std::string_view what);
     Out refresh();
     std::string health() const;
@@ -132,10 +170,12 @@ private:
     void leaveSetup();
     Out showWifiList();
     Out wifiListKey(Key key);
+    Out wifiSsidKey(Key key);
     Out wifiPasswordKey(Key key);
     Out pairKey(Key key);
     void drawSetupBar(Grid &grid, std::string_view step) const;
     void drawWifiList(Grid &grid) const;
+    void drawWifiSsid(Grid &grid) const;
     void drawWifiPassword(Grid &grid) const;
     void drawPair(Grid &grid) const;
 
@@ -147,7 +187,7 @@ private:
     Out voiceKey(Key key, uint32_t nowMs);
     Out onAudioAck(const Ack &ack);
     std::optional<Out> onAudioError(const Error &error);
-    Out onVoiceLinkLost();
+    Out onVoiceLinkLost(std::string &lost);
     void onTranscript(std::string_view text);
     void drawVoice(Grid &grid) const;
 
@@ -165,10 +205,9 @@ private:
     std::string threadId_;
     std::optional<ThreadPage> page_;
     std::string reply_;
-    std::string replyId_;
-    std::string replySent_;
-    std::string replyThreadId_;
     std::string openId_;
+    std::vector<Unacked> unacked_;
+    std::vector<Unsent> unsent_;
 
     std::optional<Request> request_;
     std::optional<Request> waiting_;
@@ -176,8 +215,6 @@ private:
     int requestTop_ = 0;
     std::optional<Option> typingFor_;
     std::string answer_;
-    std::string respondId_;
-    std::optional<Request> responded_;
 
     std::optional<Projects> projects_;
     int projectSelected_ = 0;
@@ -195,6 +232,8 @@ private:
     int netSelected_ = 0;
     int netTop_ = 0;
     WifiNet joinTarget_;
+    bool joinTyped_ = false;
+    std::string typedSsid_;
     std::string wifiPassword_;
     bool joining_ = false;
     std::string pairCode_;

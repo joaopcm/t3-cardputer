@@ -70,7 +70,8 @@ TaskHandle_t controlTask;
 uint32_t startGen = 0;
 
 uint32_t taskGen = 0;
-bool closePosted = false;
+// why: esp_websocket_client 1.8.0 dispatches DISCONNECTED from a failed send on the sending task and FINISH on its own task, see the receipt "transport"
+std::atomic<bool> closePosted{false};
 bool opened = false;
 std::atomic<uint32_t> startLargest{UINT32_MAX};
 std::string errorReason;
@@ -80,6 +81,7 @@ bool skipping = false;
 size_t filled = 0;
 uint64_t frameStart = 0;
 
+std::atomic<uint64_t> closeKeptAside{0};
 std::atomic<uint32_t> droppedFrames{0};
 std::atomic<uint32_t> droppedBytes{0};
 std::atomic<Drop> dropWhy{Drop::None};
@@ -105,6 +107,17 @@ bool post(Item &item, uint32_t gen)
     return true;
 }
 
+void postOrKeepClose(Item &item, uint32_t gen)
+{
+    if (post(item, gen)) {
+        return;
+    }
+    // why: a close lost to a full inbox would leave the link live on a dead socket forever, so it waits beside the queue until the queue drains
+    ESP_LOGE(TAG, "rx_inbox_depth=%u, close %d kept aside, queue full", static_cast<unsigned>(kInboxDepth), static_cast<int>(item.code));
+    closeKeptAside = (static_cast<uint64_t>(gen) << 32) | static_cast<uint32_t>(item.code);
+    xTaskNotifyGive(mainTask);
+}
+
 void abandonFill()
 {
     if (filling) {
@@ -118,7 +131,7 @@ std::string failureReason(const esp_websocket_event_data_t &event)
 {
     const esp_websocket_error_codes_t &error = event.error_handle;
     if (error.error_type == WEBSOCKET_ERROR_TYPE_PONG_TIMEOUT) {
-        return "no pong from relay";
+        return "pong_timeout_sec=" + std::to_string(t3::kPongTimeoutSec) + ", no pong from relay";
     }
     if (error.esp_ws_handshake_status_code > 0 && error.esp_ws_handshake_status_code != 101) {
         return "upgrade got http " + std::to_string(error.esp_ws_handshake_status_code);
@@ -134,11 +147,10 @@ std::string failureReason(const esp_websocket_event_data_t &event)
 
 void postClose(int code, std::string_view reason)
 {
-    abandonFill();
-    if (closePosted) {
+    if (closePosted.exchange(true)) {
         return;
     }
-    closePosted = true;
+    abandonFill();
     const uint32_t largest = startLargest.load();
     std::string lowHeap;
     if (!opened && largest < kTlsHeapBytes) {
@@ -149,9 +161,7 @@ void postClose(int code, std::string_view reason)
     const size_t bytes = std::min(reason.size(), kReasonMax);
     std::memcpy(item.reason, reason.data(), bytes);
     item.bytes = static_cast<uint32_t>(bytes);
-    if (!post(item, taskGen)) {
-        ESP_LOGE(TAG, "rx_inbox_depth=%u, close %d dropped, queue full", static_cast<unsigned>(kInboxDepth), code);
-    }
+    postOrKeepClose(item, taskGen);
 }
 
 void onText(const esp_websocket_event_data_t &event)
@@ -277,7 +287,7 @@ void controlLoop(void *)
                     constexpr std::string_view kWhy = "websocket start failed";
                     std::memcpy(item.reason, kWhy.data(), kWhy.size());
                     item.bytes = kWhy.size();
-                    post(item, wanted);
+                    postOrKeepClose(item, wanted);
                 }
             }
             const UBaseType_t stackFree = uxTaskGetStackHighWaterMark(nullptr);
@@ -387,6 +397,8 @@ bool transport_init(const std::string &relayUrl, size_t maxFrameBytes)
     config.buffer_size = kWsChunkBytes;
     config.task_stack = kWsTaskStackBytes;
     config.network_timeout_ms = kNetworkTimeoutMs;
+    config.ping_interval_sec = t3::kPingIntervalSec;
+    config.pingpong_timeout_sec = t3::kPongTimeoutSec;
     client = esp_websocket_client_init(&config);
     if (client == nullptr || esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, onWsEvent, nullptr) != ESP_OK) {
         ESP_LOGE(TAG, "websocket client init failed");
@@ -480,6 +492,12 @@ std::optional<TransportEvent> transport_poll()
             closeReason = std::string(item.reason, item.bytes);
             return TransportEvent{TransportEvent::Kind::Close, item.code, closeReason};
         }
+    }
+    const uint64_t kept = closeKeptAside.exchange(0);
+    if (kept != 0 && static_cast<uint32_t>(kept >> 32) == generation.load()) {
+        const int32_t code = static_cast<int32_t>(static_cast<uint32_t>(kept));
+        closeReason = "rx_inbox_depth=" + std::to_string(kInboxDepth) + ", close " + std::to_string(code) + " needed " + std::to_string(kInboxDepth + 1);
+        return TransportEvent{TransportEvent::Kind::Close, code, closeReason};
     }
     return std::nullopt;
 }

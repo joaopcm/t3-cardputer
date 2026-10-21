@@ -2,7 +2,7 @@
 
 Measured on the real ADV with the Task 7 firmware (`firmware/main/settings.cpp`), ESP-IDF v5.4.2, `nvs` partition 24K at 0x9000 (`firmware/partitions.csv`). Numbers are `nvs_get_stats()` entry counts logged by a temporary boot loop that added records of the largest legal size, read them back, removed them and logged again (the loop is not in the tree).
 
-Layout: namespace `t3`, keys `wifi` (blob, array of `WifiRecord {char ssid[33]; char password[64];}` = 97 bytes each), `token` (string), `relay_url` (string, optional override of `T3_RELAY_URL`).
+Layout: namespace `t3`, keys `wifi` (blob, array of `WifiRecord {char ssid[33]; char password[64];}` = 97 bytes each), `token` (string). The relay URL is not in NVS: it comes only from `T3_RELAY_URL` in `firmware/local.cmake` at build time.
 
 | what | entries | where it comes from |
 | --- | --- | --- |

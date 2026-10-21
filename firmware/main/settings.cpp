@@ -15,7 +15,6 @@ constexpr char TAG[] = "settings";
 constexpr char kNamespace[] = "t3";
 constexpr char kWifiKey[] = "wifi";
 constexpr char kTokenKey[] = "token";
-constexpr char kRelayUrlKey[] = "relay_url";
 
 struct WifiRecord {
     char ssid[kSsidMax + 1];
@@ -107,26 +106,41 @@ std::string budget(const char *name, size_t limit, const char *what, size_t need
     return std::string(name) + "=" + std::to_string(limit) + ", " + what + " needed " + std::to_string(needed);
 }
 
-std::vector<WifiRecord> readRecords()
+struct Records {
+    std::vector<WifiRecord> list;
+    std::optional<std::string> error;
+    bool replaceable = false;
+};
+
+Records unreadable(esp_err_t err)
+{
+    ESP_LOGE(TAG, "saved networks unreadable: %s", esp_err_to_name(err));
+    return {{}, std::string("nvs: saved networks unreadable: ") + esp_err_to_name(err)};
+}
+
+Records readRecords()
 {
     Handle nvs(NVS_READONLY);
     if (!nvs.open()) {
-        return {};
+        return {{}, nvs.openError().empty() ? std::nullopt : std::optional<std::string>(nvs.openError())};
     }
     size_t size = 0;
-    if (nvs_get_blob(nvs.get(), kWifiKey, nullptr, &size) != ESP_OK) {
-        return {};
+    if (const esp_err_t err = nvs_get_blob(nvs.get(), kWifiKey, nullptr, &size); err != ESP_OK) {
+        return err == ESP_ERR_NVS_NOT_FOUND ? Records{} : unreadable(err);
     }
     if (size % sizeof(WifiRecord) != 0 || size > kMaxWifi * sizeof(WifiRecord)) {
         ESP_LOGE(TAG, "wifi blob is %u bytes, records are %u bytes and at most %u fit: ignoring it", static_cast<unsigned>(size),
                  static_cast<unsigned>(sizeof(WifiRecord)), static_cast<unsigned>(kMaxWifi));
-        return {};
+        const std::string what = size % sizeof(WifiRecord) == 0
+                                     ? budget("wifi_max", kMaxWifi, "saved networks", size / sizeof(WifiRecord))
+                                     : "nvs: saved networks are " + std::to_string(size) + " bytes, not whole " + std::to_string(sizeof(WifiRecord)) + "-byte records";
+        return {{}, what + ", ignored; adding a network replaces them", true};
     }
     std::vector<WifiRecord> records(size / sizeof(WifiRecord));
-    if (nvs_get_blob(nvs.get(), kWifiKey, records.data(), &size) != ESP_OK) {
-        return {};
+    if (const esp_err_t err = nvs_get_blob(nvs.get(), kWifiKey, records.data(), &size); err != ESP_OK) {
+        return unreadable(err);
     }
-    return records;
+    return {std::move(records), std::nullopt};
 }
 
 std::optional<std::string> writeRecords(const std::vector<WifiRecord> &records)
@@ -149,28 +163,31 @@ bool sameSsid(const WifiRecord &record, std::string_view ssid)
 
 }
 
-std::optional<std::string> init()
+Init init()
 {
+    Init result;
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "nvs unusable (%s), erasing it: wifi and token are lost", esp_err_to_name(err));
+        result.erased = std::string("settings reset: nvs ") + esp_err_to_name(err) + ", wifi and token lost";
         nvs_flash_erase();
         err = nvs_flash_init();
     }
-    if (err == ESP_OK) {
-        return std::nullopt;
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
+        result.error = std::string("nvs: init failed: ") + esp_err_to_name(err);
     }
-    ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
-    return std::string("nvs: init failed: ") + esp_err_to_name(err);
+    return result;
 }
 
-std::vector<WifiCred> wifi()
+SavedWifi wifi()
 {
-    std::vector<WifiCred> creds;
-    for (const WifiRecord &record : readRecords()) {
-        creds.push_back({record.ssid, record.password});
+    Records read = readRecords();
+    SavedWifi saved{{}, std::move(read.error)};
+    for (const WifiRecord &record : read.list) {
+        saved.list.push_back({record.ssid, record.password});
     }
-    return creds;
+    return saved;
 }
 
 std::optional<std::string> addWifi(const WifiCred &cred)
@@ -181,7 +198,11 @@ std::optional<std::string> addWifi(const WifiCred &cred)
     if (cred.password.size() > kPasswordMax) {
         return budget("wifi_password_max", kPasswordMax, "password", cred.password.size());
     }
-    std::vector<WifiRecord> records = readRecords();
+    Records read = readRecords();
+    if (read.error && !read.replaceable) {
+        return *read.error + ", saved networks not overwritten";
+    }
+    std::vector<WifiRecord> &records = read.list;
     auto at = std::find_if(records.begin(), records.end(), [&](const WifiRecord &record) { return sameSsid(record, cred.ssid); });
     if (at == records.end()) {
         if (records.size() >= kMaxWifi) {
@@ -198,7 +219,11 @@ std::optional<std::string> addWifi(const WifiCred &cred)
 
 std::optional<std::string> removeWifi(std::string_view ssid)
 {
-    std::vector<WifiRecord> records = readRecords();
+    Records read = readRecords();
+    if (read.error) {
+        return *read.error + ", nothing forgotten";
+    }
+    std::vector<WifiRecord> &records = read.list;
     const auto end = std::remove_if(records.begin(), records.end(), [&](const WifiRecord &record) { return sameSsid(record, ssid); });
     if (end == records.end()) {
         return std::nullopt;
@@ -223,16 +248,6 @@ std::optional<std::string> setToken(std::string_view token)
 std::optional<std::string> wipeToken()
 {
     return eraseKey(kTokenKey);
-}
-
-std::string relayUrl()
-{
-    return readString(kRelayUrlKey).value_or(T3_RELAY_URL);
-}
-
-std::optional<std::string> setRelayUrl(std::string_view url)
-{
-    return writeString(kRelayUrlKey, url);
 }
 
 }

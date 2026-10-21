@@ -135,7 +135,7 @@ void checkGolden(const App &app, const char *name)
 App onThread()
 {
     App app(kCaps, 11);
-    app.onLinkStatus("");
+    app.onLinkStatus("", now);
     pushFrame(app, kHome);
     const App::Out open = press(app, KeyName::Enter);
     CHECK(type(only(open)) == "open_thread");
@@ -204,7 +204,7 @@ TEST_CASE("link loss while recording cancels, shows voice: connection lost, send
     press(app, KeyName::TalkDown);
     REQUIRE(app.recording());
 
-    const App::Out lost = app.onLinkStatus("reconnecting in 1s");
+    const App::Out lost = app.onLinkStatus("reconnecting in 1s", now);
     CHECK(lost.audio == Audio::Cancel);
     CHECK(lost.send.empty());
     CHECK_FALSE(app.recording());
@@ -215,7 +215,7 @@ TEST_CASE("link loss while recording cancels, shows voice: connection lost, send
     CHECK(up.audio == Audio::None);
     CHECK(rows(app)[0].rfind("voice: connection lost", 0) == 0);
 
-    const App::Out back = app.onLinkStatus("");
+    const App::Out back = app.onLinkStatus("", now);
     CHECK_FALSE(sendsAudioFrame(back));
     CHECK(back.audio == Audio::None);
     CHECK(app.screenName() == "thread");
@@ -323,7 +323,7 @@ TEST_CASE("a talk-up with no recording sends nothing")
 TEST_CASE("talk-down with the link down says so and sends nothing")
 {
     App app = onThread();
-    app.onLinkStatus("reconnecting in 1s");
+    app.onLinkStatus("reconnecting in 1s", now);
     const App::Out out = press(app, KeyName::TalkDown);
     CHECK(out.send.empty());
     CHECK(out.audio == Audio::None);
@@ -334,7 +334,7 @@ TEST_CASE("talk-down with the link down says so and sends nothing")
 TEST_CASE("talk-down on home does nothing")
 {
     App app(kCaps, 11);
-    app.onLinkStatus("");
+    app.onLinkStatus("", now);
     pushFrame(app, kHome);
     const App::Out out = press(app, KeyName::TalkDown);
     CHECK(out.send.empty());
@@ -412,11 +412,11 @@ TEST_CASE("link loss while transcribing says the transcript is lost")
 {
     App app = onThread();
     record(app);
-    const App::Out out = app.onLinkStatus("reconnecting in 1s");
+    const App::Out out = app.onLinkStatus("reconnecting in 1s", now);
     CHECK(out.audio == Audio::None);
     CHECK(app.screenName() == "thread");
     CHECK(rows(app)[0].rfind("voice: connection lost, transcript lost", 0) == 0);
-    app.onLinkStatus("");
+    app.onLinkStatus("", now);
     CHECK(type(only(press(app, KeyName::TalkDown))) == "audio_start");
 }
 
@@ -451,7 +451,7 @@ TEST_CASE("backspace while recording cancels it")
 TEST_CASE("voice from new task fills the prompt and enter launches it")
 {
     App app(kCaps, 11);
-    app.onLinkStatus("");
+    app.onLinkStatus("", now);
     pushFrame(app, kHome);
     pressChar(app, 'N');
     pushFrame(app, kProjects);

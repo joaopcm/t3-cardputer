@@ -144,7 +144,7 @@ public:
         }
         if (std::optional<std::string> dropped = transport_dropped()) {
             ESP_LOGE(TAG, "%s", dropped->c_str());
-            app_.onTransportError(*dropped);
+            app_.onDeviceError(*dropped);
             dirty_ = true;
         }
         if (std::optional<PairDone> done = pair_poll()) {
@@ -199,7 +199,7 @@ public:
         }
         if (std::optional<std::string> lost = mic_lost()) {
             ESP_LOGE(TAG, "%s", lost->c_str());
-            app_.onTransportError("voice: " + *lost);
+            app_.onDeviceError("voice: " + *lost);
             dirty_ = true;
         }
     }
@@ -241,7 +241,7 @@ private:
                 log_heap("live");
                 ESP_LOGI(TAG, "main_task_stack_free_min=%u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
             }
-            feed(app_.onLinkStatus(*out.statusText));
+            feed(app_.onLinkStatus(*out.statusText, now_ms()));
             dirty_ = true;
         }
     }
@@ -387,7 +387,7 @@ private:
             return;
         case WifiEvent::Kind::Status:
             if (link_.state() == t3::Link::State::NoWifi) {
-                feed(app_.onLinkStatus(event.text));
+                feed(app_.onLinkStatus(event.text, now_ms()));
             }
             return;
         }
@@ -428,8 +428,8 @@ private:
             joining_ = {out.joinWifi->ssid, out.joinWifi->password};
             wifi_join(out.joinWifi->ssid, out.joinWifi->password, now_ms());
         }
-        if (out.pair && !link_.canPair()) {
-            feed(app_.onPairResult(std::nullopt, "pairing refused: already paired and connected, pair after the relay asks to re-pair"));
+        if (const std::optional<std::string> refused = out.pair ? link_.pairRefused() : std::nullopt) {
+            feed(app_.onPairResult(std::nullopt, *refused));
         } else if (out.pair) {
             const std::optional<std::string> body = t3::encodePair(out.pair->code, out.pair->name);
             const std::optional<std::string> error = body ? pair_start(*body) : std::optional<std::string>("out of memory: pair body not built");
@@ -451,7 +451,7 @@ private:
         for (const std::string &frame : out.send) {
             if (std::optional<std::string> error = transport_send(frame)) {
                 ESP_LOGE(TAG, "%s", error->c_str());
-                app_.onTransportError(*error);
+                app_.onSendFailed(frame, *error, now_ms());
                 sendError = std::move(error);
             }
         }
@@ -512,13 +512,14 @@ extern "C" void app_main(void)
         return;
     }
     log_heap("sprite");
-    if (const std::optional<std::string> error = settings::init()) {
-        show_fatal(*error, "wifi and the token cannot be saved");
+    const settings::Init nvs = settings::init();
+    if (nvs.error) {
+        show_fatal(*nvs.error, "wifi and the token cannot be saved");
         halt();
     }
-    const bool keyboard_ok = keyboard_init();
-    ESP_LOGI(TAG, "keyboard %s", keyboard_ok ? "ready" : "missing");
-    if (!transport_init(settings::relayUrl(), static_cast<size_t>(kCaps.maxFrameBytes))) {
+    const std::optional<std::string> keyboardError = keyboard_init();
+    ESP_LOGI(TAG, "keyboard %s", keyboardError ? keyboardError->c_str() : "ready");
+    if (!transport_init(T3_RELAY_URL, static_cast<size_t>(kCaps.maxFrameBytes))) {
         show_fatal("heap: relay frame buffers do not fit", "the relay link cannot start");
         halt();
     }
@@ -531,7 +532,17 @@ extern "C" void app_main(void)
     t3::setJsonParseBudget(kJsonParseBudgetBytes);
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
-    device.boot(!settings::wifi().empty(), token.has_value());
+    const settings::SavedWifi saved = settings::wifi();
+    device.boot(!saved.list.empty(), token.has_value());
+    std::string faults;
+    for (const std::optional<std::string> &fault : {nvs.erased, saved.error, keyboardError}) {
+        if (fault) {
+            faults += (faults.empty() ? "" : "; ") + *fault;
+        }
+    }
+    if (!faults.empty()) {
+        device.app().onDeviceError(faults);
+    }
     power_init(now_ms());
     draw(device.app());
     const bool mic_ok = mic_init(system_i2c_bus());

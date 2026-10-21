@@ -44,6 +44,9 @@ App::Out App::openThread(std::string threadId)
     threadId_ = std::move(threadId);
     request_.reset();
     screen_ = Screen::Thread;
+    if (takeReply()) {
+        inform("unsent reply back, Enter sends it", Color::Warn);
+    }
     return out;
 }
 
@@ -55,18 +58,17 @@ App::Out App::threadKey(Key key)
         send(out, encodePage(nextId(), threadId_, page), "page");
     };
     auto sendReply = [&](Mode mode) {
-        if (reply_.empty()) {
+        if (reply_.empty() || !readyToSend("reply")) {
             return;
         }
         const std::string id = nextId();
-        if (!send(out, encodeReply(id, threadId_, reply_, mode), "reply")) {
-            return;
+        Unacked item{id, threadId_, reply_, "reply sent: " + std::string(modeName(mode)), mode, std::nullopt, std::nullopt};
+        if (sendTracked(out, "reply", std::move(item))) {
+            reply_.clear();
+            if (takeReply() && notice_.empty()) {
+                inform("next unsent reply back, Enter sends it", Color::Warn);
+            }
         }
-        replyId_ = id;
-        replyThreadId_ = threadId_;
-        replySent_ = std::move(reply_);
-        reply_.clear();
-        inform(std::string("reply sent: ") + std::string(modeName(mode)), Color::Ok);
     };
     switch (key.name) {
     case KeyName::Up:

@@ -47,6 +47,8 @@ std::string_view App::screenName() const
         return "new_task";
     case Screen::SetupWifiList:
         return "setup_wifi";
+    case Screen::SetupWifiSsid:
+        return "setup_ssid";
     case Screen::SetupWifiPassword:
         return "setup_password";
     case Screen::SetupPair:
@@ -61,6 +63,7 @@ bool App::editing() const
 {
     switch (screen_) {
     case Screen::SetupWifiList:
+    case Screen::SetupWifiSsid:
     case Screen::SetupWifiPassword:
     case Screen::SetupPair:
     case Screen::Voice:
@@ -79,6 +82,15 @@ bool App::editing() const
     return false;
 }
 
+namespace {
+
+std::string budgetText(std::string_view budget, size_t limit, std::string_view what, size_t needed)
+{
+    return std::string(budget) + "=" + std::to_string(limit) + ", " + std::string(what) + " needed " + std::to_string(needed);
+}
+
+}
+
 bool App::send(Out &out, std::optional<std::string> frame, std::string_view what)
 {
     if (!frame) {
@@ -89,10 +101,250 @@ bool App::send(Out &out, std::optional<std::string> frame, std::string_view what
     return true;
 }
 
+bool App::readyToSend(std::string_view what)
+{
+    if (!linkStatus_.empty()) {
+        inform(std::string(what) + " not sent: " + linkStatus_);
+        return false;
+    }
+    if (static_cast<int>(unacked_.size()) >= kUnackedMax) {
+        inform(budgetText("unacked_max", kUnackedMax, what, unacked_.size() + 1));
+        return false;
+    }
+    return true;
+}
+
+namespace {
+
+std::optional<std::string> encodeUnacked(const std::string &id, const std::string &threadId, const std::string &text, Mode mode,
+                                         const std::optional<Request> &request, const std::optional<Option> &option)
+{
+    if (!request) {
+        return encodeReply(id, threadId, text, mode);
+    }
+    std::optional<std::string_view> answer;
+    if (!text.empty()) {
+        answer = text;
+    }
+    return encodeRespond(id, threadId, request->requestId, option->value, answer);
+}
+
+// why: docs/protocol.md "request": a respond whose handle is no longer pending gets `request no longer pending, refresh`, and one that T3 turns down because it was answered elsewhere first gets `already answered`
+bool requestGone(std::string_view why)
+{
+    return why.rfind("request no longer pending", 0) == 0 || why == "already answered";
+}
+
+size_t bytesOf(const Option &option)
+{
+    return option.label.size() + option.value.size();
+}
+
+size_t bytesOf(const Request &request)
+{
+    size_t bytes = request.threadId.size() + request.requestId.size();
+    for (const std::string &line : request.lines) {
+        bytes += line.size();
+    }
+    for (const Option &option : request.options) {
+        bytes += bytesOf(option);
+    }
+    return bytes;
+}
+
+}
+
+size_t App::sizeOf(const Unacked &item)
+{
+    size_t bytes = item.id.size() + item.threadId.size() + item.text.size() + item.confirmed.size();
+    bytes += item.request ? bytesOf(*item.request) : 0;
+    return bytes + (item.option ? bytesOf(*item.option) : 0);
+}
+
+size_t App::sizeOf(const Unsent &item)
+{
+    const size_t bytes = item.threadId.size() + item.text.size() + item.requestId.value_or("").size();
+    return bytes + (item.option ? bytesOf(*item.option) : 0);
+}
+
+size_t App::unackedBytes() const
+{
+    size_t bytes = 0;
+    for (const Unacked &item : unacked_) {
+        bytes += sizeOf(item);
+    }
+    return bytes;
+}
+
+size_t App::unsentBytes() const
+{
+    size_t bytes = 0;
+    for (const Unsent &item : unsent_) {
+        bytes += sizeOf(item);
+    }
+    return bytes;
+}
+
+std::string App::dropOldestUnsent(size_t excess)
+{
+    size_t freed = 0;
+    size_t dropped = 0;
+    std::string oldest;
+    while (freed < excess && !unsent_.empty()) {
+        const Unsent &item = unsent_.front();
+        if (dropped == 0) {
+            oldest = std::string(item.requestId ? "answer" : "reply") + " to " + threadTitle(item.threadId);
+        }
+        freed += sizeOf(item);
+        dropped += 1;
+        unsent_.erase(unsent_.begin());
+    }
+    return dropped == 1 ? "oldest saved " + oldest + " dropped" : std::to_string(dropped) + " oldest saved replies and answers dropped";
+}
+
+void App::dropAnswersNoLongerPending()
+{
+    // why: the relay lists no approvals while its adapter is broken, unreachable or unauthorized (readApprovals in relay/src/watcher.ts), so a thread still waiting on an answer shows as running
+    if (!home_ || !home_->approvals.available || home_->t3 != T3Status::Ok) {
+        return;
+    }
+    std::vector<std::string> notes;
+    for (auto item = unsent_.begin(); item != unsent_.end();) {
+        const HomeRow *row = item->requestId ? homeRow(item->threadId) : nullptr;
+        const bool settled = row && (row->kind == HomeKind::Running || row->kind == HomeKind::Done || row->kind == HomeKind::Failed);
+        if (!settled) {
+            ++item;
+            continue;
+        }
+        notes.push_back("saved answer to " + row->title + " dropped: nothing pending there");
+        item = unsent_.erase(item);
+    }
+    informAlso(notes, Color::Warn);
+}
+
+bool App::sendTracked(Out &out, std::string_view what, Unacked item)
+{
+    unacked_.push_back(std::move(item));
+    const size_t sending = unackedBytes();
+    if (sending > kUnackedBytesMax) {
+        unacked_.pop_back();
+        inform(budgetText("unacked_bytes_max", kUnackedBytesMax, what, sending));
+        return false;
+    }
+    const Unacked &sent = unacked_.back();
+    if (!send(out, encodeUnacked(sent.id, sent.threadId, sent.text, sent.mode, sent.request, sent.option), what)) {
+        unacked_.pop_back();
+        return false;
+    }
+    const size_t held = sending + unsentBytes();
+    if (held > kUnackedBytesMax) {
+        inform(budgetText("unacked_bytes_max", kUnackedBytesMax, what, held) + ", " + dropOldestUnsent(held - kUnackedBytesMax));
+    }
+    return true;
+}
+
+std::string App::giveBack(const Unacked &item, GiveBack outcome, std::string_view why, uint32_t nowMs)
+{
+    const bool refused = outcome == GiveBack::Refused;
+    const std::string kind = item.request ? "answer" : "reply";
+    const std::string lost = outcome == GiveBack::Unconfirmed ? " unconfirmed: " : " not sent: ";
+    const std::string here = (refused ? std::string("refused: ") : kind + lost) + std::string(why);
+    const bool onThread = screen_ == Screen::Thread && threadId_ == item.threadId;
+    if (refused && item.request && requestGone(why)) {
+        return onThread ? here : "answer to " + threadTitle(item.threadId) + " failed: " + std::string(why);
+    }
+    if (onThread) {
+        if (item.request) {
+            if (enterRequest(*item.request, nowMs)) {
+                if (!item.text.empty()) {
+                    typingFor_ = item.option;
+                    answer_ = item.text;
+                }
+                return here;
+            }
+            keep(item);
+            return here + ", Tab reopens it";
+        }
+        if (reply_.empty()) {
+            reply_ = item.text;
+            return here;
+        }
+        keep(item);
+        return here + ", text back after this reply is sent";
+    }
+    const std::string elsewhere = kind + " to " + threadTitle(item.threadId) + (refused ? " failed: " : lost) + std::string(why);
+    return keep(item) ? elsewhere + ", text back when it opens" : elsewhere;
+}
+
+bool App::keep(const Unacked &item)
+{
+    if (item.text.empty()) {
+        return false;
+    }
+    std::optional<std::string> requestId;
+    if (item.request) {
+        requestId = item.request->requestId;
+    }
+    unsent_.push_back(Unsent{item.threadId, item.text, std::move(requestId), item.option});
+    return true;
+}
+
+bool App::takeReply()
+{
+    const auto kept = std::find_if(unsent_.begin(), unsent_.end(), [&](const Unsent &item) { return item.threadId == threadId_ && !item.requestId; });
+    if (!reply_.empty() || kept == unsent_.end()) {
+        return false;
+    }
+    reply_ = std::move(kept->text);
+    unsent_.erase(kept);
+    return true;
+}
+
 void App::inform(std::string text, Color color)
 {
     notice_ = std::move(text);
     noticeColor_ = color;
+}
+
+void App::inform(const std::vector<std::string> &notes, Color color)
+{
+    if (notes.empty()) {
+        return;
+    }
+    std::string text;
+    for (const std::string &note : notes) {
+        text += (text.empty() ? "" : "; ") + note;
+    }
+    inform(std::move(text), color);
+}
+
+void App::informAlso(const std::vector<std::string> &notes, Color color)
+{
+    if (notes.empty()) {
+        return;
+    }
+    if (notice_.empty()) {
+        inform(notes, color);
+        return;
+    }
+    std::vector<std::string> joined{notice_};
+    joined.insert(joined.end(), notes.begin(), notes.end());
+    inform(joined, noticeColor_ == Color::Red ? Color::Red : color);
+}
+
+App::Out App::dropLink(std::vector<std::string> &notes, Color &color)
+{
+    std::string voiceLost;
+    Out out = onVoiceLinkLost(voiceLost);
+    if (!voiceLost.empty()) {
+        notes.push_back(std::move(voiceLost));
+        color = Color::Red;
+    }
+    if (!launchId_.empty()) {
+        launchId_.clear();
+        notes.push_back("launch result unknown, check Home");
+    }
+    return out;
 }
 
 void App::type(std::string &text, char c, int max, std::string_view budget, std::string_view what)
@@ -198,6 +450,8 @@ App::Out App::onKey(Key key, uint32_t nowMs)
         return talk ? startVoice(nowMs) : promptKey(key);
     case Screen::SetupWifiList:
         return wifiListKey(key);
+    case Screen::SetupWifiSsid:
+        return wifiSsidKey(key);
     case Screen::SetupWifiPassword:
         return wifiPasswordKey(key);
     case Screen::SetupPair:
@@ -253,23 +507,47 @@ App::Out App::onRelay(const RelayMsg &msg, uint32_t nowMs)
     return {};
 }
 
-App::Out App::onLinkStatus(std::string_view status)
+App::Out App::onLinkStatus(std::string_view status, uint32_t nowMs)
 {
     const bool wasLive = linkStatus_.empty();
     linkStatus_ = std::string(status);
-    if (!status.empty() && !launchId_.empty()) {
-        launchId_.clear();
-        inform("launch result unknown, check Home", Color::Warn);
-    }
     if (!status.empty()) {
-        return onVoiceLinkLost();
+        std::vector<std::string> notes;
+        Color color = Color::Warn;
+        Out out = dropLink(notes, color);
+        if (wasLive && unacked_.size() == 1) {
+            const Unacked &item = unacked_.front();
+            notes.push_back(std::string(item.request ? "answer" : "reply") + " to " + threadTitle(item.threadId) + " not confirmed, resending on reconnect");
+        } else if (wasLive && unacked_.size() > 1) {
+            notes.push_back(std::to_string(unacked_.size()) + " replies and answers not confirmed, resending on reconnect");
+        }
+        inform(notes, color);
+        return out;
     }
-    const bool voiceOnThread = screen_ == Screen::Voice && voiceFrom_ == Screen::Thread;
-    const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request || voiceOnThread) && !threadId_.empty();
-    if (wasLive || !threadOpen) {
+    if (wasLive) {
         return {};
     }
     Out out;
+    std::vector<Unacked> unencoded;
+    for (auto item = unacked_.begin(); item != unacked_.end();) {
+        if (std::optional<std::string> frame = encodeUnacked(item->id, item->threadId, item->text, item->mode, item->request, item->option)) {
+            out.send.push_back(std::move(*frame));
+            ++item;
+            continue;
+        }
+        unencoded.push_back(std::move(*item));
+        item = unacked_.erase(item);
+    }
+    std::vector<std::string> givenBack;
+    for (const Unacked &item : unencoded) {
+        givenBack.push_back(giveBack(item, GiveBack::Unconfirmed, "out of memory on resend, may have gone through", nowMs));
+    }
+    inform(givenBack, Color::Red);
+    const bool voiceOnThread = screen_ == Screen::Voice && voiceFrom_ == Screen::Thread;
+    const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request || voiceOnThread) && !threadId_.empty();
+    if (!threadOpen) {
+        return out;
+    }
     const std::string id = nextId();
     if (send(out, encodeOpenThread(id, threadId_), "open_thread")) {
         openId_ = id;
@@ -277,9 +555,23 @@ App::Out App::onLinkStatus(std::string_view status)
     return out;
 }
 
-void App::onTransportError(std::string_view why)
+void App::onDeviceError(std::string_view why)
 {
     inform(std::string(why));
+}
+
+void App::onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs)
+{
+    const auto tracked = std::find_if(unacked_.begin(), unacked_.end(), [&](const Unacked &item) {
+        return frame.find("\"id\":\"" + item.id + "\"") != std::string_view::npos;
+    });
+    if (tracked == unacked_.end()) {
+        inform(std::string(why));
+        return;
+    }
+    const Unacked item = std::move(*tracked);
+    unacked_.erase(tracked);
+    inform(giveBack(item, GiveBack::NotSent, why, nowMs));
 }
 
 std::string App::threadTitle(std::string_view threadId) const
@@ -299,6 +591,18 @@ void App::onAck(const Ack &ack, uint32_t nowMs)
     if (launch) {
         launchId_.clear();
     }
+    const std::string why = ack.error.value_or("no reason given");
+    const auto tracked = std::find_if(unacked_.begin(), unacked_.end(), [&](const Unacked &item) { return item.id == ack.id; });
+    if (tracked != unacked_.end()) {
+        const Unacked item = std::move(*tracked);
+        unacked_.erase(tracked);
+        if (ack.ok) {
+            inform(item.confirmed, Color::Ok);
+        } else {
+            inform(giveBack(item, GiveBack::Refused, why, nowMs));
+        }
+        return;
+    }
     if (ack.ok) {
         if (launch) {
             prompt_.clear();
@@ -309,23 +613,7 @@ void App::onAck(const Ack &ack, uint32_t nowMs)
         }
         return;
     }
-    const std::string why = ack.error.value_or("no reason given");
-    if (ack.id == respondId_ && responded_) {
-        if (screen_ != Screen::Thread || threadId_ != responded_->threadId) {
-            inform("answer to " + threadTitle(responded_->threadId) + " failed: " + why);
-            return;
-        }
-        if (!enterRequest(*responded_, nowMs)) {
-            inform("refused: " + why + ", Tab reopens it");
-            return;
-        }
-    } else if (ack.id == replyId_) {
-        if (screen_ != Screen::Thread || threadId_ != replyThreadId_ || !reply_.empty()) {
-            inform("reply to " + threadTitle(replyThreadId_) + " failed: " + why);
-            return;
-        }
-        reply_ = replySent_;
-    } else if (ack.id == openId_ && screen_ == Screen::Thread) {
+    if (ack.id == openId_ && screen_ == Screen::Thread) {
         screen_ = Screen::Home;
     }
     inform("refused: " + why);
@@ -358,6 +646,9 @@ void App::draw(Grid &grid) const
         return;
     case Screen::SetupWifiList:
         drawWifiList(grid);
+        return;
+    case Screen::SetupWifiSsid:
+        drawWifiSsid(grid);
         return;
     case Screen::SetupWifiPassword:
         drawWifiPassword(grid);

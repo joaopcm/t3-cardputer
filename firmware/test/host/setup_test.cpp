@@ -110,7 +110,7 @@ App live()
 {
     App app(kCaps, 7);
     app.onBoot(true, true);
-    app.onLinkStatus("");
+    app.onLinkStatus("", tick());
     app.onFrame(kHome, tick());
     return app;
 }
@@ -212,10 +212,88 @@ TEST_CASE("the list shows scan results with the saved and open ones tagged and p
     press(app, named(KeyName::Down));
     CHECK(selectedRow(app) == 3);
     press(app, named(KeyName::Down));
-    press(app, named(KeyName::Down));
     CHECK(selectedRow(app) == 4);
+    press(app, named(KeyName::Down));
+    press(app, named(KeyName::Down));
+    CHECK(selectedRow(app) == 5);
     press(app, named(KeyName::Up));
+    CHECK(selectedRow(app) == 4);
+}
+
+TEST_CASE("the list ends with a row to type a hidden network's name, then its password")
+{
+    App app = onList();
+    for (int i = 0; i < 3; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    CHECK(rows(app)[5].rfind("+ type a network name", 0) == 0);
+    CHECK(press(app, ch('d')).forgetWifi == std::nullopt);
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "setup_ssid");
+    CHECK(app.editing());
+    type(app, "attic`ap");
+    CHECK(contains(allText(app), "> attic`ap_"));
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "setup_password");
+    CHECK(rows(app)[1].rfind("attic`ap", 0) == 0);
+    type(app, "hunter22");
+    const App::Out out = press(app, named(KeyName::Enter));
+    REQUIRE(out.joinWifi.has_value());
+    CHECK(out.joinWifi->ssid == "attic`ap");
+    CHECK(out.joinWifi->password == "hunter22");
+}
+
+TEST_CASE("a typed network joins open with no password, a short one is still refused")
+{
+    App app = onList();
+    for (int i = 0; i < 3; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    press(app, named(KeyName::Enter));
+    type(app, "cafe");
+    press(app, named(KeyName::Enter));
+    CHECK(contains(allText(app), "empty joins an open network"));
+    type(app, "abc");
+    CHECK_FALSE(press(app, named(KeyName::Enter)).joinWifi.has_value());
+    CHECK(rows(app)[0].rfind("wifi_password_min=8, password has 3", 0) == 0);
+    for (int i = 0; i < 3; ++i) {
+        press(app, named(KeyName::Backspace));
+    }
+    const App::Out out = press(app, named(KeyName::Enter));
+    REQUIRE(out.joinWifi.has_value());
+    CHECK(out.joinWifi->ssid == "cafe");
+    CHECK(out.joinWifi->password.empty());
+}
+
+TEST_CASE("an empty scan still offers to type a name")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, true);
+    app.onWifiScan({});
+    CHECK(contains(allText(app), "no networks found"));
     CHECK(selectedRow(app) == 3);
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "setup_ssid");
+}
+
+TEST_CASE("a typed name stops at the ssid limit, an empty one is refused, and backspace on empty goes back")
+{
+    App app = onList();
+    for (int i = 0; i < 3; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    press(app, named(KeyName::Enter));
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "setup_ssid");
+    CHECK(rows(app)[0].rfind("type a network name first", 0) == 0);
+    type(app, std::string(32, 'n'));
+    press(app, ch('x'));
+    CHECK(rows(app)[0].rfind("wifi_ssid_max=32, ssid needed 33", 0) == 0);
+    for (int i = 0; i < 32; ++i) {
+        press(app, named(KeyName::Backspace));
+    }
+    press(app, named(KeyName::Backspace));
+    CHECK(app.screenName() == "setup_wifi");
 }
 
 TEST_CASE("an empty scan says so and R scans again")
@@ -554,7 +632,7 @@ TEST_CASE("a link status never hides the setup bar")
 {
     App app(kCaps, 7);
     app.onBoot(false, false);
-    app.onLinkStatus("starting");
+    app.onLinkStatus("starting", tick());
     CHECK(rows(app)[0].rfind("setup", 0) == 0);
 }
 
@@ -596,4 +674,14 @@ TEST_CASE("setup screens count as editing from the first frame")
     noWifi.onBoot(false, false);
     CHECK(noWifi.screenName() == "setup_wifi");
     CHECK(noWifi.editing());
+}
+
+TEST_CASE("a boot fault shows on row 0 of setup until a key")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, false);
+    app.onDeviceError("settings reset: nvs ESP_ERR_NVS_NEW_VERSION_FOUND, wifi and token lost");
+    CHECK(rows(app)[0].rfind("settings reset: nvs", 0) == 0);
+    app.onWifiScan(kNets);
+    CHECK(rows(app)[0].rfind("settings reset: nvs", 0) == 0);
 }

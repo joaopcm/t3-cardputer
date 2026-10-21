@@ -18,6 +18,11 @@ inline constexpr uint32_t kBackoffMaxMs = 30000;
 inline constexpr uint32_t kHelloWaitMs = 12000;
 // why: tripwire past any good TLS connect, so only a wedged connect touches it; receipt: docs/receipts/2026-10-21-firmware-network.md "connect", worst measured connect 11.1 s on home WiFi (7.2 s DNS + 3.8 s TLS and upgrade), 30 s is 2.7x
 inline constexpr uint32_t kConnectWaitMs = 30000;
+// receipt: relay/src/config.ts heartbeatIntervalMs=30000 x heartbeatMaxMissed=2, the relay terminates a socket that stays silent this long
+inline constexpr uint32_t kRelaySilentDropMs = 60000;
+// receipt: docs/receipts/2026-10-21-firmware-network.md "dead link", a dead socket is found at most ping + pong + 1 s poll = 36 s after it dies, inside the relay's 60 s
+inline constexpr uint32_t kPingIntervalSec = 10;
+inline constexpr uint32_t kPongTimeoutSec = 25;
 
 class Link {
 public:
@@ -45,7 +50,7 @@ public:
     Out onUserReconnect(uint32_t nowMs);
 
     State state() const { return state_; }
-    bool canPair() const { return state_ == State::NeedsPair || state_ == State::Stopped; }
+    std::optional<std::string> pairRefused() const;
 
 private:
     Out connectNow(uint32_t nowMs);
@@ -60,6 +65,7 @@ private:
     uint32_t backoffMs_ = kBackoffMinMs;
     uint32_t deadlineMs_ = 0;
     std::string lastError_;
+    std::string lastDown_;
 };
 
 }

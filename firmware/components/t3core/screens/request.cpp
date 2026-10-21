@@ -87,6 +87,12 @@ App::RequestLayout App::requestLayout() const
 
 void App::onRequest(const Request &request, uint32_t nowMs)
 {
+    const bool answering = std::any_of(unacked_.begin(), unacked_.end(), [&](const Unacked &item) {
+        return item.request && item.request->requestId == request.requestId && item.request->lines == request.lines;
+    });
+    if (answering) {
+        return;
+    }
     if (request.threadId == threadId_ && screen_ == Screen::Voice && voiceFrom_ == Screen::Thread) {
         waiting_ = request;
         inform("request waiting: Tab opens it", Color::Warn);
@@ -130,6 +136,12 @@ void App::showRequest(const Request &request)
     if (request.options.empty()) {
         typingFor_ = Option{'T', "Type answer", "text"};
     }
+    const auto kept = std::find_if(unsent_.begin(), unsent_.end(), [&](const Unsent &item) { return item.requestId == request.requestId; });
+    if (kept != unsent_.end()) {
+        typingFor_ = kept->option;
+        answer_ = std::move(kept->text);
+        unsent_.erase(kept);
+    }
     screen_ = Screen::Request;
 }
 
@@ -146,24 +158,20 @@ App::Out App::showWaiting()
 App::Out App::respond(Option option, std::optional<std::string> text)
 {
     Out out;
-    const Request &request = *request_;
-    const std::string id = nextId();
-    std::optional<std::string_view> textView;
-    if (text) {
-        textView = *text;
-    }
-    if (!send(out, encodeRespond(id, request.threadId, request.requestId, option.value, textView), "respond")) {
+    if (!readyToSend("answer")) {
         return out;
     }
-    respondId_ = id;
-    responded_ = request_;
+    const Request &request = *request_;
+    Unacked item{nextId(), request.threadId, text.value_or(""), "sent: " + option.label, Mode::Queue, request, option};
+    if (!sendTracked(out, "answer", std::move(item))) {
+        return out;
+    }
     if (waiting_ && waiting_->requestId == request.requestId) {
         waiting_.reset();
     }
     typingFor_.reset();
     answer_.clear();
     screen_ = Screen::Thread;
-    inform("sent: " + option.label, Color::Ok);
     return out;
 }
 
