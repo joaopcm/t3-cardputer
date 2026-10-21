@@ -1304,6 +1304,22 @@ TEST_CASE("unacked text has a byte budget that names itself and keeps the text")
     CHECK(app.editing());
 }
 
+TEST_CASE("an answer over the byte budget names itself as an answer")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, named(KeyName::Enter));
+    push(app, relay(kBouncePage));
+    for (int i = 0; i < 2; ++i) {
+        type(app, std::string(static_cast<size_t>(t3::kReplyTextMax), 'x'));
+        only(press(app, named(KeyName::Enter)));
+    }
+    push(app, relay(kBounceRequest));
+    REQUIRE(app.screenName() == "approval");
+    CHECK(press(app, ch('Y')).send.empty());
+    CHECK(row(app, 0).rfind("unacked_bytes_max=" + std::to_string(t3::kUnackedBytesMax) + ", answer needed ", 0) == 0);
+}
+
 TEST_CASE("a reply given back while another thread is open comes back when its thread opens")
 {
     App app = live();
