@@ -8,7 +8,7 @@
 #include "sdkconfig.h"
 #include "t3/keys.h"
 
-enum class DebugNetCut { None, LeaveAp, BlackHole, Restore };
+enum class DebugNetCut { None, LeaveAp, BlackHole, Restore, Stage };
 
 #ifdef CONFIG_T3_DEBUG_SERIAL
 
@@ -18,7 +18,6 @@ bool debug_serial_poll_key(t3::Key *key);
 bool debug_serial_poll_drop();
 DebugNetCut debug_serial_poll_net_cut();
 bool debug_serial_poll_power(uint32_t *dimAfterMs, uint32_t *offAfterMs);
-bool debug_serial_poll_stage();
 bool debug_serial_staged();
 std::optional<std::string> debug_serial_poll_frame();
 void debug_serial_frame_done(std::string_view screen);
@@ -46,11 +45,6 @@ inline DebugNetCut debug_serial_poll_net_cut()
 }
 
 inline bool debug_serial_poll_power(uint32_t *, uint32_t *)
-{
-    return false;
-}
-
-inline bool debug_serial_poll_stage()
 {
     return false;
 }

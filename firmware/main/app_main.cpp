@@ -177,6 +177,9 @@ public:
             ESP_LOGI(TAG, "debug: sending packets again");
             wifi_debug_black_hole(false);
             break;
+        case DebugNetCut::Stage:
+            stage();
+            break;
         }
     }
 
@@ -196,17 +199,6 @@ public:
         }
     }
 
-    void stage()
-    {
-        ESP_LOGI(TAG, "debug: staged, relay link stopped, frames come from the serial port");
-        if (linked_) {
-            transport_close();
-        }
-        wifi_debug_black_hole(true);
-        feed(app_.onLinkStatus("", now_ms()));
-        dirty_ = true;
-    }
-
     void stagedFrame(std::string_view json)
     {
         feed(app_.onFrame(json, now_ms()));
@@ -222,6 +214,17 @@ public:
     }
 
 private:
+    void stage()
+    {
+        ESP_LOGI(TAG, "debug: staged until reset, relay link stopped, frames come from the serial port");
+        if (linked_) {
+            transport_close();
+        }
+        wifi_debug_black_hole(true);
+        feed(app_.onLinkStatus("", now_ms()));
+        dirty_ = true;
+    }
+
     void pollLink()
     {
         while (std::optional<WifiEvent> event = wifi_poll(now_ms())) {
@@ -720,13 +723,10 @@ extern "C" void app_main(void)
         if (serial_port_poll_info()) {
             replyInfo();
         }
-        if (debug_serial_poll_stage()) {
-            device.stage();
-        }
+        device.poll();
         if (const std::optional<std::string> frame = debug_serial_poll_frame()) {
             device.stagedFrame(*frame);
         }
-        device.poll();
         device.pumpAudio();
         if (device.takeDirty()) {
             draw(device.app());

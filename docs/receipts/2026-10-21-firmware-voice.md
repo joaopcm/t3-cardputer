@@ -115,6 +115,7 @@ After a talk-up whose tail could not be sent, the stats line reads `voice cut sh
 ## link lost while talking
 
 - Black hole (debug `\x02NETDOWN`: the WiFi netif swallows every outgoing frame while the association and socket stay up, like an access point that went out of range before the beacon timeout; `\x02NETUP` restores it).
+- Staging (debug `\x02STAGE`, for `firmware/scripts/stage-screens.py`) is not a link cut to undo: it black-holes like NETDOWN, also stops the link and drops every send, and only a reset ends it. NETUP does not bring a staged device back.
   - With the 5000 ms text send timeout, the main loop froze 5.2 s: from 44236 to 49456 ms the REC timer stopped and the DMA overflowed, then `voice: audio send failed, 3200 bytes not sent`.
   - With the 300 ms wait: the 16 KB send buffer filled, then one send waited 300 ms. In 12 of 12 cycles the send failed exactly 520 ms after the cut. Each time the websocket client had already marked itself disconnected (`NotConnected`, `connection closed, 3200 audio bytes not sent`). Its own close (1006) ended the recording with `voice: connection lost` (`/tmp/t3-task10-netdown-cancel.png`).
   - Talk-up 0.2 s after the cut, so the tail stalls: `voice cut short: 16 chunks`, no `audio_end`, and the bar keeps `voice: connection lost, transcript lost` (`/tmp/t3-task10-tail-stall.png`). The link came back after NETUP.
@@ -156,7 +157,17 @@ After a talk-up whose tail could not be sent, the stats line reads `voice cut sh
 - Connects after a plain drop always had 79872 (1.32x). The low readings (62464, 63488) were all connects after a drop mid-recording. There, the old socket's TLS session and up to 16 KB of unacknowledged audio are still being freed when the 500 ms backoff reconnects, so free heap at connect is about 145 KB instead of about 184 KB.
 - USB provisioning (`serial_port.cpp`, task 2 of the distribution plan) re-soak, debug build, same ADV and relay, 16 drops mid-recording on the new-task prompt (talk-down, 2 s, `\x02DROP`, talk-up): connect and TLS start never went under 71680 (1.19x the line), live never under 69632. Commit 21f4b30 under the same procedure: 73728 in 12 of 12. The first provisioning build created the debug key queue before the driver's ring buffers, and that order alone left 55296 in 12 of 12 (`tls_heap=60398, largest block 55296, connecting anyway`, still went live). Free heap was the same in both orders, so the heap at reconnect is placement-sensitive: re-soak after any change to what boots before the link.
 - Auto-pair from a provisioned code (task 3 of the distribution plan) reads the pending code from NVS before the link starts. Re-soak, debug build, same ADV and relay, 8 drops mid-recording on a thread (talk-down, 2 s, `\x02DROP`, talk-up): connect and TLS start never went under 75776 (1.25x the line), live never under 75776. Right after the auto-pair itself, connect read 83968.
-- Staged screenshots (`\x02STAGE`, `\x02FRAME`, task 11 of the distribution plan) add three debug-only atomics and nothing on the heap at boot; a frame is copied to the heap only when it arrives. Re-soak, debug build, same ADV and relay, 8 drops mid-recording on the new-task prompt (talk-down, 2 s, `\x02DROP`, talk-up): TLS start never went under 75776 (1.25x the line), live never under 73728. The main task's earlier `connect` line read 75776 in 7 of 8 and 58368 once, with TLS start at 75776 in that same cycle.
+- Staged screenshots (`\x02STAGE`, `\x02FRAME`, task 11 of the distribution plan). A/B, debug builds, same ADV and relay, 16 drops per run mid-recording on the new-task prompt (talk-down, 2 s, `\x02DROP`, talk-up), runs interleaved:
+
+  | build | drops | main `connect` under 60398 | TLS start under 60398 | TLS start min | live min |
+  | --- | --- | --- | --- | --- | --- |
+  | ce2d546 (base) | 96 | 8 (56320 to 59392) | 0 | 60416 | 71680 |
+  | 9eda71b (first STAGE/FRAME, .bss +16) | 48 | 7 | 2 (56320, two cycles in a row, gate waited 500 ms, went live) | 56320 | 56320 |
+  | ce2d546 + 16 unused .bss bytes | 48 | 3 | 0 | 61440 | 73728 |
+  | fix (.bss back to 25024, heap start 0x3fca7ca0 as base) | 96 | 10 (56320 to 59392) | 0 | 60416 | 71680 |
+
+  - The base dips at the main task's `connect` line as often as the fix does (8 and 10 of 96), so that reading is not new. It comes before the dropped session is freed (see above). The TLS gate is the line that counts.
+  - The only TLS starts under the line came from 9eda71b, whose 16 extra .bss bytes moved the heap start. The fix keeps the base layout: the staged flag sits in existing padding, the stage request rides `DebugNetCut::Stage`, and a frame waits in the serial line buffer through the provisioning hand-off instead of a new pointer. It made no TLS start under the line in 96. Placement is the likely cause. The unused-bytes build had the same heap start and 0 of 48, so 48 drops do not prove it.
 
 ## stacks
 

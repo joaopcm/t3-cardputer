@@ -33,6 +33,7 @@ SETTLE_S = 0.1
 VOICE_HOLD_S = 3.0
 # receipt: the app's power timeouts are 30 s dim, 60 s off (power.cpp); an hour keeps the screen lit for the whole run
 POWER = "3600000 7200000"
+STAGED = f"{STX}STAGE ok, until reset{ETX}"
 LIVE_MARKERS = ("t3: link live", "t3: rx largest")
 PROMPT = "add a health check that reports db latency"
 
@@ -85,18 +86,18 @@ class Device:
             self.send("STAGE")
             time.sleep(0.05)
             self.pump()
-            if f"{STX}STAGE ok{ETX}" in self.buf:
+            if STAGED in self.buf:
                 break
         else:
             sys.exit(f"stage: no `STAGE ok` within {BOOT_TIMEOUT_S}s of reset; is this a debug build (CONFIG_T3_DEBUG_SERIAL)?")
-        before = self.buf[: self.buf.index(f"{STX}STAGE ok{ETX}")]
+        before = self.buf[: self.buf.index(STAGED)]
         boot = before.rfind("t3: boot ")
         if boot < 0:
             sys.exit("stage: `STAGE ok` came with no `t3: boot` log before it, so the reset did not happen; rerun")
         for marker in LIVE_MARKERS:
             if marker in before[boot:]:
                 sys.exit(f"stage: `{marker}` came before `STAGE ok`, real relay data reached the screen; rerun")
-        self.cursor = self.buf.index(f"{STX}STAGE ok{ETX}")
+        self.cursor = self.buf.index(STAGED)
         self.send(f"POWER {POWER}")
         self.wait(f"{STX}POWER ok{ETX}", "power")
 

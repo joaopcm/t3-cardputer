@@ -29,8 +29,10 @@ constexpr UBaseType_t kTaskPriority = 3;
 constexpr TickType_t kReplyDrainTicks = pdMS_TO_TICKS(100);
 
 char lineBytes[t3::kProvisionLineMax];
-size_t provisionSize = 0;
-std::atomic<bool> provisionReady{false};
+enum class HandOff : uint8_t { None, Provision, DebugLine };
+
+size_t handOffSize = 0;
+std::atomic<HandOff> handOff{HandOff::None};
 std::atomic<bool> infoRequested{false};
 TaskHandle_t serialTaskHandle;
 
@@ -40,18 +42,29 @@ void logStack()
              static_cast<unsigned>(kSerialTaskStackBytes));
 }
 
-void handOver(size_t len)
+void handOver(HandOff kind, size_t len)
 {
-    provisionSize = len;
-    provisionReady.store(true, std::memory_order_release);
+    handOffSize = len;
+    handOff.store(kind, std::memory_order_release);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
+
+std::optional<std::string> takeHandOff(HandOff kind, size_t prefixBytes)
+{
+    if (handOff.load(std::memory_order_acquire) != kind) {
+        return std::nullopt;
+    }
+    std::string text(lineBytes + prefixBytes, handOffSize - prefixBytes);
+    handOff.store(HandOff::None, std::memory_order_release);
+    xTaskNotifyGive(serialTaskHandle);
+    return text;
 }
 
 void route(std::string_view text)
 {
     switch (t3::classifySerialLine(text)) {
     case t3::SerialLine::Provision:
-        handOver(text.size());
+        handOver(HandOff::Provision, text.size());
         break;
     case t3::SerialLine::Info:
         infoRequested = true;
@@ -137,14 +150,20 @@ bool serial_port_start()
 
 std::optional<std::string> serial_port_poll_provision()
 {
-    if (!provisionReady.load(std::memory_order_acquire)) {
-        return std::nullopt;
-    }
-    std::string json(lineBytes + kProvisionPrefix.size(), provisionSize - kProvisionPrefix.size());
-    provisionReady.store(false, std::memory_order_release);
-    xTaskNotifyGive(serialTaskHandle);
-    return json;
+    return takeHandOff(HandOff::Provision, kProvisionPrefix.size());
 }
+
+#ifdef CONFIG_T3_DEBUG_SERIAL
+void serial_port_hand_over_debug_line(size_t len)
+{
+    handOver(HandOff::DebugLine, len);
+}
+
+std::optional<std::string> serial_port_poll_debug_line(size_t prefixBytes)
+{
+    return takeHandOff(HandOff::DebugLine, prefixBytes);
+}
+#endif
 
 bool serial_port_poll_info()
 {

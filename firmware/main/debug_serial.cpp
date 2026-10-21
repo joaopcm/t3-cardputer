@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <memory>
 #include <string_view>
 
 #include "display.h"
@@ -29,11 +28,10 @@ constexpr size_t kMaxRowHexBytes = 2 * 120 + 1;
 
 QueueHandle_t keyQueue;
 std::atomic<bool> dropRequested{false};
+// why: one byte that lands in existing padding, so .bss stays 25024 bytes; the first staging build grew .bss by 16, moved the heap start, and was the only build whose reconnect TLS start went under the 60398 line (docs/receipts/2026-10-21-firmware-voice.md "heap")
+std::atomic<bool> staged{false};
 std::atomic<DebugNetCut> netCutRequested{DebugNetCut::None};
 std::atomic<uint64_t> powerRequested{0};
-std::atomic<bool> staged{false};
-std::atomic<bool> stageRequested{false};
-std::atomic<std::string *> pendingFrame{nullptr};
 
 void emit(const char *text, size_t len)
 {
@@ -121,19 +119,15 @@ void handlePower(std::string_view args)
     emitLine("POWER ok");
 }
 
+constexpr std::string_view kFramePrefix = "FRAME ";
+
 void handleFrame(std::string_view json)
 {
     if (!staged) {
         emitLine("ERR FRAME needs STAGE first, the relay link owns the screen");
         return;
     }
-    auto frame = std::make_unique<std::string>(json);
-    std::string *idle = nullptr;
-    if (!pendingFrame.compare_exchange_strong(idle, frame.get())) {
-        emitLine("ERR FRAME busy, the last frame is not taken yet");
-        return;
-    }
-    frame.release();
+    serial_port_hand_over_debug_line(kFramePrefix.size() + json.size());
 }
 
 }
@@ -152,7 +146,6 @@ void debug_serial_handle(std::string_view line)
 {
     constexpr std::string_view kKeyPrefix = "KEY ";
     constexpr std::string_view kPowerPrefix = "POWER ";
-    constexpr std::string_view kFramePrefix = "FRAME ";
     if (line == "SHOT") {
         sendShot();
         ESP_LOGI(TAG, "task_stack_free_min=%u of %u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
@@ -173,8 +166,8 @@ void debug_serial_handle(std::string_view line)
         emitLine("NETUP ok");
     } else if (line == "STAGE") {
         staged = true;
-        stageRequested = true;
-        emitLine("STAGE ok");
+        netCutRequested = DebugNetCut::Stage;
+        emitLine("STAGE ok, until reset");
     } else if (line.substr(0, kFramePrefix.size()) == kFramePrefix) {
         handleFrame(line.substr(kFramePrefix.size()));
     } else if (line.substr(0, kPowerPrefix.size()) == kPowerPrefix) {
@@ -213,11 +206,6 @@ bool debug_serial_poll_power(uint32_t *dimAfterMs, uint32_t *offAfterMs)
     return true;
 }
 
-bool debug_serial_poll_stage()
-{
-    return stageRequested.exchange(false);
-}
-
 bool debug_serial_staged()
 {
     return staged;
@@ -225,11 +213,7 @@ bool debug_serial_staged()
 
 std::optional<std::string> debug_serial_poll_frame()
 {
-    const std::unique_ptr<std::string> frame(pendingFrame.exchange(nullptr));
-    if (!frame) {
-        return std::nullopt;
-    }
-    return std::move(*frame);
+    return serial_port_poll_debug_line(kFramePrefix.size());
 }
 
 void debug_serial_frame_done(std::string_view screen)
