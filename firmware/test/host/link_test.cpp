@@ -520,25 +520,41 @@ TEST_CASE("a pong timeout is a network close: keep the token, show it, reconnect
     CHECK(out.statusText == "relay unreachable: pong_timeout_sec=25, no pong from relay");
 }
 
-TEST_CASE("pairing is allowed only while the link needs a token or has stopped")
+TEST_CASE("a refused pairing names the link's real state")
 {
-    CHECK_FALSE(makeLink().canPair());
-    CHECK_FALSE(connecting().canPair());
-    CHECK_FALSE(live().canPair());
+    CHECK(makeLink().pairRefused() == "pairing refused: wifi down, join a network first");
+    CHECK(connecting().pairRefused() == "pairing refused: connecting with the saved token, pair if the relay asks to re-pair");
+    t3::Link hello = connecting();
+    hello.onOpen(0);
+    CHECK(hello.pairRefused() == "pairing refused: connecting with the saved token, pair if the relay asks to re-pair");
+    CHECK(live().pairRefused() == "pairing refused: already paired and connected, pair if the relay asks to re-pair");
     t3::Link backingOff = live();
     backingOff.onClose(1006, "", 0);
-    CHECK_FALSE(backingOff.canPair());
+    CHECK(backingOff.pairRefused() == "pairing refused: relay unreachable, retrying with the saved token; pair if the relay asks to re-pair");
+    t3::Link unpaired(kCaps, "", "0.1.0");
+    unpaired.onWifi(true, 0);
+    CHECK_FALSE(unpaired.pairRefused().has_value());
+}
+
+TEST_CASE("pairing is allowed only while the link needs a token or has stopped")
+{
+    CHECK(makeLink().pairRefused().has_value());
+    CHECK(connecting().pairRefused().has_value());
+    CHECK(live().pairRefused().has_value());
+    t3::Link backingOff = live();
+    backingOff.onClose(1006, "", 0);
+    CHECK(backingOff.pairRefused().has_value());
 
     t3::Link unpaired(kCaps, "", "0.1.0");
     unpaired.onWifi(true, 0);
-    CHECK(unpaired.canPair());
+    CHECK_FALSE(unpaired.pairRefused().has_value());
 
     t3::Link rejected = live();
     rejected.onClose(4401, "", 0);
-    CHECK(rejected.canPair());
+    CHECK_FALSE(rejected.pairRefused().has_value());
 
     t3::Link stopped = connecting();
     stopped.onOpen(0);
     stopped.onClose(4402, "hello.cols: must be at most 255", 0);
-    CHECK(stopped.canPair());
+    CHECK_FALSE(stopped.pairRefused().has_value());
 }

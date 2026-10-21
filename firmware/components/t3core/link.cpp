@@ -188,6 +188,26 @@ Link::Out Link::onTick(uint32_t nowMs)
     }
 }
 
+std::optional<std::string> Link::pairRefused() const
+{
+    constexpr std::string_view kAfterRePair = "pair if the relay asks to re-pair";
+    switch (state_) {
+    case State::NeedsPair:
+    case State::Stopped:
+        return std::nullopt;
+    case State::NoWifi:
+        return "pairing refused: wifi down, join a network first";
+    case State::Connecting:
+    case State::Hello:
+        return "pairing refused: connecting with the saved token, " + std::string(kAfterRePair);
+    case State::Live:
+        return "pairing refused: already paired and connected, " + std::string(kAfterRePair);
+    case State::Backoff:
+        return "pairing refused: relay unreachable, retrying with the saved token; " + std::string(kAfterRePair);
+    }
+    return std::nullopt;
+}
+
 Link::Out Link::onUserReconnect(uint32_t nowMs)
 {
     if (state_ != State::Stopped && state_ != State::NeedsPair) {
