@@ -84,6 +84,13 @@ describe("usage", () => {
     for (const command of ["serve", "pair", "devices", "revoke", "pair-t3", "secrets set github", "canary", "sim"]) expect(out()).toContain(command);
   });
 
+  it("--version prints the package version and exits 0", async () => {
+    const { run, out } = await setup();
+    const { version } = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")) as { version: string };
+    expect(await run("--version")).toBe(0);
+    expect(out()).toBe(`t3-cardputer-relay ${version}`);
+  });
+
   it("no command exits 2", async () => {
     const { run, err } = await setup();
     expect(await run()).toBe(2);

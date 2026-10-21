@@ -16,6 +16,7 @@ import { DEFAULT_SIM_CONFIG_PATH } from "./sim/sim-config.js";
 import { getEnvironment } from "./t3/environment.js";
 import { pairT3Mcp } from "./t3/mcp-oauth.js";
 import { VersionWatch, verdictOf, type VersionCheck } from "./version-watch.js";
+import { RELAY_VERSION } from "./version.js";
 
 export type CliContext = {
   configPath: string;
@@ -29,6 +30,7 @@ export type CliContext = {
 };
 
 const USAGE = `usage: t3-cardputer-relay <command>
+  --version                                  print the version
   serve                                      run the relay
   pair                                       print a device pairing code (relay must be running)
   devices                                    list paired devices and locked-out sources (relay must be running)
@@ -190,6 +192,9 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
       case "-h":
       case "help":
         ctx.stdout(USAGE);
+        return 0;
+      case "--version":
+        ctx.stdout(`t3-cardputer-relay ${RELAY_VERSION}`);
         return 0;
       case "serve":
         return await serve(ctx, args);

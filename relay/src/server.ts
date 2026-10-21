@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
@@ -12,6 +11,7 @@ import { DEVICE_FRAME_BYTES_MAX, DEVICE_NAME_MAX, DEVICE_PATH, PAIR_BODY_BYTES_M
 import { Hub, type ApprovalsDownPhase, type ApprovalsState, type T3Client } from "./session.js";
 import { createSampleKeeper } from "./stt/samples.js";
 import type { Stt } from "./stt/types.js";
+import { RELAY_VERSION } from "./version.js";
 import { Watcher } from "./watcher.js";
 
 export type { ApprovalsState, T3Client } from "./session.js";
@@ -31,8 +31,6 @@ export type ServerDeps = {
 export const PAIR_PATH = "/v1/pair";
 // the relay sits behind the local tailscaled proxy (Funnel), so it never listens beyond loopback
 const LISTEN_HOST = "127.0.0.1";
-
-const RELAY_VERSION = z.object({ version: z.string() }).parse(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))).version;
 
 const pairBodySchema = z.strictObject({ code: z.string().min(1), name: z.string().trim().min(1).max(DEVICE_NAME_MAX) });
 
