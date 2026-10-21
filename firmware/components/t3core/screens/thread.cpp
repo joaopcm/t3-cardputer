@@ -65,7 +65,7 @@ App::Out App::threadKey(Key key)
         Unacked item{id, threadId_, reply_, "reply sent: " + std::string(modeName(mode)), mode, std::nullopt, std::nullopt};
         if (sendTracked(out, "reply", std::move(item))) {
             reply_.clear();
-            if (takeReply()) {
+            if (takeReply() && notice_.empty()) {
                 inform("next unsent reply back, Enter sends it", Color::Warn);
             }
         }

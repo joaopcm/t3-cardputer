@@ -82,6 +82,15 @@ bool App::editing() const
     return false;
 }
 
+namespace {
+
+std::string budgetText(std::string_view budget, size_t limit, std::string_view what, size_t needed)
+{
+    return std::string(budget) + "=" + std::to_string(limit) + ", " + std::string(what) + " needed " + std::to_string(needed);
+}
+
+}
+
 bool App::send(Out &out, std::optional<std::string> frame, std::string_view what)
 {
     if (!frame) {
@@ -98,21 +107,11 @@ bool App::readyToSend(std::string_view what)
         inform(std::string(what) + " not sent: " + linkStatus_);
         return false;
     }
-    const size_t held = unacked_.size() + unsent_.size();
-    if (static_cast<int>(held) >= kUnackedMax) {
-        inform(heldBudget("unacked_max", kUnackedMax, what, held + 1));
+    if (static_cast<int>(unacked_.size()) >= kUnackedMax) {
+        inform(budgetText("unacked_max", kUnackedMax, what, unacked_.size() + 1));
         return false;
     }
     return true;
-}
-
-std::string App::heldBudget(std::string budget, size_t limit, std::string_view what, size_t needed) const
-{
-    std::string text = budget + "=" + std::to_string(limit) + ", " + std::string(what) + " needed " + std::to_string(needed);
-    if (!unsent_.empty()) {
-        text += ", " + std::to_string(unsent_.size()) + " unsent wait for their threads";
-    }
-    return text;
 }
 
 namespace {
@@ -155,34 +154,85 @@ size_t bytesOf(const Request &request)
 
 }
 
-size_t App::heldBytes() const
+size_t App::sizeOf(const Unacked &item)
+{
+    size_t bytes = item.id.size() + item.threadId.size() + item.text.size() + item.confirmed.size();
+    bytes += item.request ? bytesOf(*item.request) : 0;
+    return bytes + (item.option ? bytesOf(*item.option) : 0);
+}
+
+size_t App::sizeOf(const Unsent &item)
+{
+    const size_t bytes = item.threadId.size() + item.text.size() + item.requestId.value_or("").size();
+    return bytes + (item.option ? bytesOf(*item.option) : 0);
+}
+
+size_t App::unackedBytes() const
 {
     size_t bytes = 0;
     for (const Unacked &item : unacked_) {
-        bytes += item.id.size() + item.threadId.size() + item.text.size() + item.confirmed.size();
-        bytes += item.request ? bytesOf(*item.request) : 0;
-        bytes += item.option ? bytesOf(*item.option) : 0;
-    }
-    for (const Unsent &item : unsent_) {
-        bytes += item.threadId.size() + item.text.size() + item.requestId.value_or("").size();
-        bytes += item.option ? bytesOf(*item.option) : 0;
+        bytes += sizeOf(item);
     }
     return bytes;
+}
+
+size_t App::unsentBytes() const
+{
+    size_t bytes = 0;
+    for (const Unsent &item : unsent_) {
+        bytes += sizeOf(item);
+    }
+    return bytes;
+}
+
+std::string App::dropOldestUnsent(size_t excess)
+{
+    size_t freed = 0;
+    size_t dropped = 0;
+    std::string oldest;
+    while (freed < excess && !unsent_.empty()) {
+        const Unsent &item = unsent_.front();
+        if (dropped == 0) {
+            oldest = std::string(item.requestId ? "answer" : "reply") + " to " + threadTitle(item.threadId);
+        }
+        freed += sizeOf(item);
+        dropped += 1;
+        unsent_.erase(unsent_.begin());
+    }
+    return dropped == 1 ? "oldest saved " + oldest + " dropped" : std::to_string(dropped) + " oldest saved replies and answers dropped";
+}
+
+void App::dropAnswersNoLongerPending()
+{
+    for (auto item = unsent_.begin(); item != unsent_.end();) {
+        const HomeRow *row = item->requestId ? homeRow(item->threadId) : nullptr;
+        const bool settled = row && (row->kind == HomeKind::Running || row->kind == HomeKind::Done || row->kind == HomeKind::Failed);
+        if (!settled) {
+            ++item;
+            continue;
+        }
+        inform("saved answer to " + row->title + " dropped: nothing pending there", Color::Warn);
+        item = unsent_.erase(item);
+    }
 }
 
 bool App::sendTracked(Out &out, std::string_view what, Unacked item)
 {
     unacked_.push_back(std::move(item));
-    const size_t bytes = heldBytes();
-    if (bytes > kUnackedBytesMax) {
+    const size_t sending = unackedBytes();
+    if (sending > kUnackedBytesMax) {
         unacked_.pop_back();
-        inform(heldBudget("unacked_bytes_max", kUnackedBytesMax, what, bytes));
+        inform(budgetText("unacked_bytes_max", kUnackedBytesMax, what, sending));
         return false;
     }
     const Unacked &sent = unacked_.back();
     if (!send(out, encodeUnacked(sent.id, sent.threadId, sent.text, sent.mode, sent.request, sent.option), what)) {
         unacked_.pop_back();
         return false;
+    }
+    const size_t held = sending + unsentBytes();
+    if (held > kUnackedBytesMax) {
+        inform(budgetText("unacked_bytes_max", kUnackedBytesMax, what, held) + ", " + dropOldestUnsent(held - kUnackedBytesMax));
     }
     return true;
 }

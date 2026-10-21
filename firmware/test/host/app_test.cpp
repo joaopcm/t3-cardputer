@@ -1325,7 +1325,7 @@ TEST_CASE("an answer given back while away comes back when its request shows aga
     CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
 }
 
-TEST_CASE("text waiting for its thread counts against the unacked budget and says so")
+TEST_CASE("text waiting for its thread does not hold an unacked slot")
 {
     App app = live();
     push(app, relay(kHome));
@@ -1342,8 +1342,55 @@ TEST_CASE("text waiting for its thread counts against the unacked budget and say
         app.onSendFailed(frame, "send failed", tick());
     }
     type(app, "more");
-    CHECK(press(app, named(KeyName::Enter)).send.empty());
-    CHECK(contains(shown(app), "unacked_max=" + std::to_string(t3::kUnackedMax) + ", reply needed " + std::to_string(t3::kUnackedMax + 1) + ", 8 unsent wait for their threads"));
+    CHECK(Frame(only(press(app, named(KeyName::Enter)))).str("text") == "more");
+}
+
+TEST_CASE("a send over the byte budget drops the oldest saved text and says so instead of refusing")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, named(KeyName::Enter));
+    std::vector<std::string> frames;
+    for (char c : {'a', 'b'}) {
+        type(app, std::string(static_cast<size_t>(t3::kReplyTextMax), c));
+        frames.push_back(only(press(app, named(KeyName::Enter))));
+    }
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Down));
+    press(app, named(KeyName::Enter));
+    for (const std::string &frame : frames) {
+        app.onSendFailed(frame, "send failed", tick());
+    }
+    const std::string third(static_cast<size_t>(t3::kReplyTextMax), 'c');
+    type(app, third);
+    CHECK(Frame(only(press(app, named(KeyName::Enter)))).str("text") == third);
+    CHECK(contains(shown(app), "unacked_bytes_max=" + std::to_string(t3::kUnackedBytesMax) + ", reply needed "));
+    CHECK(contains(shown(app), "oldest saved reply to fix bounce webhook dropped"));
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Up));
+    press(app, named(KeyName::Enter));
+    CHECK(contains(allText(app), "bbbbbbbbbb_"));
+    CHECK_FALSE(contains(allText(app), "aaaaaaaaaa"));
+}
+
+TEST_CASE("a saved answer is dropped once home shows its thread with nothing pending")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    app.onSendFailed(frame, "send failed, 120 bytes not sent", tick());
+    push(app, relay(kHome));
+    CHECK_FALSE(contains(shown(app), "dropped"));
+    push(app, relay(R"({"type":"home","rows":[{"threadId":"thr_bounce","kind":"running","project":"resend-api","title":"fix bounce webhook","age":"1m"}],
+ "counts":{"needs":0,"running":1,"done":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})"));
+    CHECK(contains(shown(app), "saved answer to fix bounce webhook dropped: nothing pending there"));
+    press(app, named(KeyName::Enter));
+    push(app, relay(kBouncePage));
+    push(app, relay(kBounceRequest));
+    CHECK(app.screenName() == "approval");
+    CHECK_FALSE(contains(allText(app), "use staging"));
 }
 
 TEST_CASE("4401 drops unconfirmed replies instead of re-sending them under the new device, and keeps their text")

@@ -116,8 +116,12 @@ private:
     bool send(Out &out, std::optional<std::string> frame, std::string_view what);
     bool readyToSend(std::string_view what);
     bool sendTracked(Out &out, std::string_view what, Unacked item);
-    size_t heldBytes() const;
-    std::string heldBudget(std::string budget, size_t limit, std::string_view what, size_t needed) const;
+    static size_t sizeOf(const Unacked &item);
+    static size_t sizeOf(const Unsent &item);
+    size_t unackedBytes() const;
+    size_t unsentBytes() const;
+    std::string dropOldestUnsent(size_t excess);
+    void dropAnswersNoLongerPending();
     void giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs);
     bool keep(const Unacked &item);
     bool takeReply();
