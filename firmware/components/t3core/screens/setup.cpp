@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <cctype>
+#include <variant>
 
 #include "screens/screen.h"
 #include "t3/app.h"
+#include "t3/relay_url.h"
 
 namespace t3 {
 
@@ -20,7 +22,7 @@ constexpr int kStatusRow = 6;
 constexpr int kInputLabelRow = 6;
 constexpr int kInputRow = 7;
 constexpr int kPairStatusRow = 8;
-constexpr int kPairBodyTop = 2;
+constexpr int kGuideTop = 2;
 
 // receipt: WPA/WPA2 passphrase is 8 to 63 characters (IEEE 802.11i), esp_wifi wifi_sta_config_t.password is char[64] with the NUL
 constexpr size_t kWifiPasswordMin = 8;
@@ -31,6 +33,7 @@ constexpr std::string_view kTypeSsidRow = "+ type a network name";
 // receipt: docs/protocol.md "Pairing": code is the 8 characters as shown
 constexpr size_t kPairCodeLen = 8;
 constexpr std::string_view kPairName = "cardputer";
+constexpr std::string_view kHttps = "https://";
 
 Key typed(Key key)
 {
@@ -56,11 +59,23 @@ std::string charCount(size_t count)
     return std::to_string(count) + (count == 1 ? " char" : " chars");
 }
 
+std::string relayHost(std::string_view https)
+{
+    return std::string(https.substr(https.rfind(kHttps, 0) == 0 ? kHttps.size() : 0));
 }
 
-App::Out App::onBoot(bool hasWifi, bool hasToken)
+}
+
+App::Out App::onBoot(bool hasWifi, bool hasToken, bool hasRelay)
 {
     hasToken_ = hasToken;
+    hasRelay_ = hasRelay;
+    if (!hasRelay) {
+        relayText_.clear();
+        screen_ = Screen::SetupRelay;
+        inform("relay: not set, type your relay url (setup.sh prints it)", Color::Warn);
+        return {};
+    }
     if (!hasWifi) {
         return openSetup();
     }
@@ -68,6 +83,11 @@ App::Out App::onBoot(bool hasWifi, bool hasToken)
         screen_ = Screen::SetupPair;
     }
     return {};
+}
+
+void App::setRelayUrl(std::string https)
+{
+    relayUrl_ = std::move(https);
 }
 
 App::Out App::onAuthRejected()
@@ -216,6 +236,8 @@ App::Out App::showWifiList()
 App::Out App::wifiListKey(Key key)
 {
     const int count = static_cast<int>(nets_.size());
+    const int typeSsidRow = count;
+    const int relayRow = count + 1;
     const bool onNet = netSelected_ < count;
     Out out;
     switch (key.name) {
@@ -223,7 +245,7 @@ App::Out App::wifiListKey(Key key)
         netSelected_ = std::max(0, netSelected_ - 1);
         break;
     case KeyName::Down:
-        netSelected_ = std::min(count, netSelected_ + 1);
+        netSelected_ = std::min(relayRow, netSelected_ + 1);
         break;
     case KeyName::Enter:
         if (onNet) {
@@ -231,9 +253,12 @@ App::Out App::wifiListKey(Key key)
             joinTyped_ = false;
             wifiPassword_.clear();
             screen_ = Screen::SetupWifiPassword;
-        } else {
+        } else if (netSelected_ == typeSsidRow) {
             typedSsid_.clear();
             screen_ = Screen::SetupWifiSsid;
+        } else {
+            relayText_ = relayHost(relayUrl_);
+            screen_ = Screen::SetupRelay;
         }
         return out;
     case KeyName::Tab:
@@ -362,6 +387,43 @@ App::Out App::pairKey(Key key)
     return out;
 }
 
+App::Out App::relayKey(Key key)
+{
+    Out out;
+    key = typed(key);
+    switch (key.name) {
+    case KeyName::Char:
+        type(relayText_, key.ch, static_cast<int>(kRelayUrlMax), "relay_url_max", "url");
+        break;
+    case KeyName::Backspace:
+        if (relayText_.empty()) {
+            return hasRelay_ ? showWifiList() : out;
+        }
+        relayText_.pop_back();
+        break;
+    case KeyName::Esc:
+        return hasRelay_ ? showWifiList() : out;
+    case KeyName::Enter: {
+        std::variant<RelayUrl, std::string> parsed = parseRelayUrl(relayText_);
+        if (const std::string *error = std::get_if<std::string>(&parsed)) {
+            inform(*error, Color::Warn);
+            break;
+        }
+        std::string https = std::move(std::get<RelayUrl>(parsed).https);
+        if (hasRelay_ && https == relayUrl_) {
+            out = showWifiList();
+            inform("relay unchanged", Color::Ok);
+            break;
+        }
+        out.relayUrl = std::move(https);
+        break;
+    }
+    default:
+        break;
+    }
+    return out;
+}
+
 void App::drawSetupBar(Grid &grid, std::string_view step) const
 {
     if (!notice_.empty()) {
@@ -382,19 +444,21 @@ void App::drawWifiList(Grid &grid) const
         grid.put(top++, 0, "no networks found, R scans again", Color::Warn);
     }
     const int count = static_cast<int>(nets_.size());
-    for (int i = 0; top + i <= kBodyBottom && netTop_ + i <= count; ++i) {
+    for (int i = 0; top + i <= kBodyBottom && netTop_ + i <= count + 1; ++i) {
         const int index = netTop_ + i;
         if (index < count) {
             grid.put(top + i, 0, netLine(nets_[index]), netColor(nets_[index]));
-        } else {
+        } else if (index == count) {
             grid.put(top + i, 0, kTypeSsidRow, Color::Dim);
+        } else {
+            grid.put(top + i, 0, "relay " + (relayUrl_.empty() ? std::string("not set") : relayHost(relayUrl_)), Color::Dim);
         }
         if (index == netSelected_) {
             grid.selectRow(top + i);
         }
     }
     drawHint(grid, "Enter join  R scan  D forget  Tab pair");
-    drawSetupBar(grid, "wifi 1/3");
+    drawSetupBar(grid, "wifi 2/4");
 }
 
 void App::drawWifiSsid(Grid &grid) const
@@ -403,7 +467,7 @@ void App::drawWifiSsid(Grid &grid) const
     grid.put(3, 0, inputLine(typedSsid_));
     grid.put(4, 0, std::to_string(typedSsid_.size()) + "/" + std::to_string(kWifiSsidMax), Color::Dim);
     drawHint(grid, "Enter next  Esc back");
-    drawSetupBar(grid, "wifi 1/3");
+    drawSetupBar(grid, "wifi 2/4");
 }
 
 void App::drawWifiPassword(Grid &grid) const
@@ -423,7 +487,7 @@ void App::drawWifiPassword(Grid &grid) const
         grid.put(kStatusRow, 0, "joining...", Color::Ok);
     }
     drawHint(grid, "Enter join  Esc back");
-    drawSetupBar(grid, "wifi 2/3");
+    drawSetupBar(grid, "wifi 3/4");
 }
 
 void App::drawPair(Grid &grid) const
@@ -437,7 +501,7 @@ void App::drawPair(Grid &grid) const
         lines.push_back(Line{std::move(line), Color::Text, -1});
     }
     for (size_t i = 0; i < lines.size(); ++i) {
-        grid.put(kPairBodyTop + static_cast<int>(i), 0, lines[i].text, lines[i].color);
+        grid.put(kGuideTop + static_cast<int>(i), 0, lines[i].text, lines[i].color);
     }
     grid.put(kInputLabelRow, 0, "code " + std::to_string(pairCode_.size()) + "/" + std::to_string(kPairCodeLen), Color::Dim);
     grid.put(kInputRow, 0, inputLine(pairCode_));
@@ -445,7 +509,20 @@ void App::drawPair(Grid &grid) const
         grid.put(kPairStatusRow, 0, "pairing...", Color::Ok);
     }
     drawHint(grid, "Enter pair  Esc back");
-    drawSetupBar(grid, "pair 3/3");
+    drawSetupBar(grid, "pair 4/4");
+}
+
+void App::drawRelay(Grid &grid) const
+{
+    grid.put(1, 0, "type your relay url", Color::Dim);
+    const std::vector<std::string> lines = wrapWords("run setup.sh on the relay host, it prints the url", Grid::Cols);
+    for (size_t i = 0; i < lines.size(); ++i) {
+        grid.put(kGuideTop + static_cast<int>(i), 0, lines[i]);
+    }
+    grid.put(kInputLabelRow, 0, "url " + std::to_string(relayText_.size()) + "/" + std::to_string(kRelayUrlMax), Color::Dim);
+    grid.put(kInputRow, 0, inputLine(relayText_));
+    drawHint(grid, hasRelay_ ? "Enter save  Esc back" : "Enter save");
+    drawSetupBar(grid, "relay 1/4");
 }
 
 }

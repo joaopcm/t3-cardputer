@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <variant>
 
 #include "debug_serial.h"
 #include "display.h"
@@ -9,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -20,6 +22,7 @@
 #include "t3/grid.h"
 #include "t3/keys.h"
 #include "t3/link.h"
+#include "t3/relay_url.h"
 #include "transport.h"
 #include "wifi.h"
 
@@ -102,10 +105,14 @@ public:
 
     t3::App &app() { return app_; }
 
-    void boot(bool hasWifi, bool hasToken)
+    void boot(bool hasWifi, bool hasToken, const std::optional<t3::RelayUrl> &relay)
     {
-        feed(app_.onBoot(hasWifi, hasToken));
-        if (hasWifi) {
+        linked_ = relay.has_value();
+        if (relay) {
+            app_.setRelayUrl(relay->https);
+        }
+        feed(app_.onBoot(hasWifi, hasToken, linked_));
+        if (hasWifi && linked_) {
             wifi_start(now_ms());
         }
     }
@@ -134,22 +141,8 @@ public:
 
     void poll()
     {
-        while (std::optional<WifiEvent> event = wifi_poll(now_ms())) {
-            onWifi(*event);
-            dirty_ = true;
-        }
-        while (std::optional<TransportEvent> event = transport_poll()) {
-            onTransport(*event);
-            dirty_ = true;
-        }
-        if (std::optional<std::string> dropped = transport_dropped()) {
-            ESP_LOGE(TAG, "%s", dropped->c_str());
-            app_.onDeviceError(*dropped);
-            dirty_ = true;
-        }
-        if (std::optional<PairDone> done = pair_poll()) {
-            onPairDone(*done);
-            dirty_ = true;
+        if (linked_) {
+            pollLink();
         }
         uint32_t dimAfterMs;
         uint32_t offAfterMs;
@@ -179,13 +172,6 @@ public:
             wifi_debug_black_hole(false);
             break;
         }
-        if (debug_serial_poll_drop()) {
-            ESP_LOGI(TAG, "debug: dropping the relay socket");
-            transport_close();
-            apply(link_.onClose(kAbnormalClose, "debug drop", now_ms()));
-            dirty_ = true;
-        }
-        apply(link_.onTick(now_ms()));
     }
 
     void pumpAudio()
@@ -212,6 +198,34 @@ public:
     }
 
 private:
+    void pollLink()
+    {
+        while (std::optional<WifiEvent> event = wifi_poll(now_ms())) {
+            onWifi(*event);
+            dirty_ = true;
+        }
+        while (std::optional<TransportEvent> event = transport_poll()) {
+            onTransport(*event);
+            dirty_ = true;
+        }
+        if (std::optional<std::string> dropped = transport_dropped()) {
+            ESP_LOGE(TAG, "%s", dropped->c_str());
+            app_.onDeviceError(*dropped);
+            dirty_ = true;
+        }
+        if (std::optional<PairDone> done = pair_poll()) {
+            onPairDone(*done);
+            dirty_ = true;
+        }
+        if (debug_serial_poll_drop()) {
+            ESP_LOGI(TAG, "debug: dropping the relay socket");
+            transport_close();
+            apply(link_.onClose(kAbnormalClose, "debug drop", now_ms()));
+            dirty_ = true;
+        }
+        apply(link_.onTick(now_ms()));
+    }
+
     void apply(const t3::Link::Out &out)
     {
         if (out.closeSocket) {
@@ -444,6 +458,14 @@ private:
             }
             feed(app_.onTokenStored(!error, error.value_or("")));
         }
+        if (out.relayUrl) {
+            if (const std::optional<std::string> error = settings::setRelayUrl(*out.relayUrl)) {
+                app_.onDeviceError(*error);
+            } else {
+                ESP_LOGI(TAG, "relay url saved, restarting");
+                esp_restart();
+            }
+        }
         if (out.reconnect) {
             apply(link_.onUserReconnect(now_ms()));
         }
@@ -471,6 +493,7 @@ private:
     int16_t chunk_[kMicChunkSamples];
     VoiceStats voice_;
     bool micOn_ = false;
+    bool linked_ = false;
     bool dark_ = true;
     bool dirty_ = true;
 };
@@ -493,6 +516,24 @@ void show_fatal(std::string_view message, std::string_view consequence)
     }
     grid.put(row + 1, 0, consequence, t3::Color::Warn);
     display_draw(grid);
+}
+
+struct SavedRelay {
+    std::optional<t3::RelayUrl> url;
+    std::optional<std::string> error;
+};
+
+SavedRelay savedRelay()
+{
+    const std::optional<std::string> stored = settings::relayUrl();
+    if (!stored) {
+        return {};
+    }
+    std::variant<t3::RelayUrl, std::string> parsed = t3::parseRelayUrl(*stored);
+    if (const std::string *error = std::get_if<std::string>(&parsed)) {
+        return {std::nullopt, "saved " + *error + ", type it again"};
+    }
+    return {std::get<t3::RelayUrl>(std::move(parsed)), std::nullopt};
 }
 
 [[noreturn]] void halt()
@@ -519,7 +560,8 @@ extern "C" void app_main(void)
     }
     const std::optional<std::string> keyboardError = keyboard_init();
     ESP_LOGI(TAG, "keyboard %s", keyboardError ? keyboardError->c_str() : "ready");
-    if (!transport_init(T3_RELAY_URL, static_cast<size_t>(kCaps.maxFrameBytes))) {
+    const SavedRelay relay = savedRelay();
+    if (relay.url && !transport_init(relay.url->wss, static_cast<size_t>(kCaps.maxFrameBytes))) {
         show_fatal("heap: relay frame buffers do not fit", "the relay link cannot start");
         halt();
     }
@@ -533,9 +575,11 @@ extern "C" void app_main(void)
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
     const settings::SavedWifi saved = settings::wifi();
-    device.boot(!saved.list.empty(), token.has_value());
+    device.boot(!saved.list.empty(), token.has_value(), relay.url);
+    const std::optional<std::string> relayChanged =
+        settings::takeRelayChanged() ? std::optional<std::string>("relay changed: token cleared, pair again") : std::nullopt;
     std::string faults;
-    for (const std::optional<std::string> &fault : {nvs.erased, saved.error, keyboardError}) {
+    for (const std::optional<std::string> &fault : {nvs.erased, saved.error, keyboardError, relay.error, relayChanged}) {
         if (fault) {
             faults += (faults.empty() ? "" : "; ") + *fault;
         }

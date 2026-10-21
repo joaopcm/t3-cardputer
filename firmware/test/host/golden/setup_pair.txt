@@ -1,4 +1,4 @@
-setup                           pair 3/3
+setup                           pair 4/4
 pair with the relay                     
 run t3-cardputer-relay pair on the relay
 host and type the code                  

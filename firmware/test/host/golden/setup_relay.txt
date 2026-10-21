@@ -1,0 +1,11 @@
+setup                          relay 1/4
+type your relay url                     
+run setup.sh on the relay host, it      
+prints the url                          
+                                        
+                                        
+url 22/320                              
+> relay.example.com:8443_               
+                                        
+                                        
+Enter save                              

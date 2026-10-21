@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "t3/relay_url.h"
 
 namespace settings {
 
@@ -15,6 +16,8 @@ constexpr char TAG[] = "settings";
 constexpr char kNamespace[] = "t3";
 constexpr char kWifiKey[] = "wifi";
 constexpr char kTokenKey[] = "token";
+constexpr char kRelayUrlKey[] = "relay_url";
+constexpr char kRelayChangedKey[] = "relay_changed";
 
 struct WifiRecord {
     char ssid[kSsidMax + 1];
@@ -248,6 +251,41 @@ std::optional<std::string> setToken(std::string_view token)
 std::optional<std::string> wipeToken()
 {
     return eraseKey(kTokenKey);
+}
+
+std::optional<std::string> relayUrl()
+{
+    return readString(kRelayUrlKey);
+}
+
+std::optional<std::string> setRelayUrl(std::string_view https)
+{
+    if (https.empty() || https.size() > t3::kRelayUrlMax) {
+        return budget("relay_url_max", t3::kRelayUrlMax, "url", https.size());
+    }
+    const std::optional<std::string> stored = relayUrl();
+    if (stored && *stored != https) {
+        // why: the token was issued by the old relay (docs/superpowers/plans/2026-10-21-distribution.md "Global Constraints"); the flag carries the notice across the restart that follows
+        if (std::optional<std::string> error = wipeToken()) {
+            return error;
+        }
+        if (std::optional<std::string> error = writeString(kRelayChangedKey, "1")) {
+            return error;
+        }
+        ESP_LOGI(TAG, "relay changed: token cleared, pair again");
+    }
+    return writeString(kRelayUrlKey, https);
+}
+
+bool takeRelayChanged()
+{
+    if (!readString(kRelayChangedKey)) {
+        return false;
+    }
+    if (const std::optional<std::string> error = eraseKey(kRelayChangedKey)) {
+        ESP_LOGE(TAG, "%s", error->c_str());
+    }
+    return true;
 }
 
 }

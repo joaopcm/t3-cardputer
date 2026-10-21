@@ -41,4 +41,8 @@ std::optional<std::string> token();
 std::optional<std::string> setToken(std::string_view token);
 std::optional<std::string> wipeToken();
 
+std::optional<std::string> relayUrl();
+std::optional<std::string> setRelayUrl(std::string_view https);
+bool takeRelayChanged();
+
 }

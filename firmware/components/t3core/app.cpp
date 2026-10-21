@@ -53,6 +53,8 @@ std::string_view App::screenName() const
         return "setup_password";
     case Screen::SetupPair:
         return "setup_pair";
+    case Screen::SetupRelay:
+        return "setup_relay";
     case Screen::Voice:
         return "voice";
     }
@@ -66,6 +68,7 @@ bool App::editing() const
     case Screen::SetupWifiSsid:
     case Screen::SetupWifiPassword:
     case Screen::SetupPair:
+    case Screen::SetupRelay:
     case Screen::Voice:
         return true;
     case Screen::Thread:
@@ -456,6 +459,8 @@ App::Out App::onKey(Key key, uint32_t nowMs)
         return wifiPasswordKey(key);
     case Screen::SetupPair:
         return pairKey(key);
+    case Screen::SetupRelay:
+        return relayKey(key);
     case Screen::Voice:
         return voiceKey(key, nowMs);
     }
@@ -655,6 +660,9 @@ void App::draw(Grid &grid) const
         return;
     case Screen::SetupPair:
         drawPair(grid);
+        return;
+    case Screen::SetupRelay:
+        drawRelay(grid);
         return;
     case Screen::Voice:
         drawVoice(grid);

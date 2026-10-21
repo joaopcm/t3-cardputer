@@ -9,11 +9,6 @@ cd "$FW_DIR"
 LAUNCHER_APP_SLOT_BYTES=$((0x800000 - 0x170000))
 LAUNCHER_APP_ALIGN=$((0x10000))
 
-if [[ ! -f local.cmake ]]; then
-  echo "firmware/local.cmake missing; copy local.cmake.example and set T3_RELAY_URL" >&2
-  exit 1
-fi
-
 . "$FW_DIR/scripts/idf-env.sh"
 
 mkdir -p "$OUT_DIR"
