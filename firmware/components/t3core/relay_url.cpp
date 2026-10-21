@@ -70,4 +70,9 @@ std::variant<RelayUrl, std::string> parseRelayUrl(std::string_view text)
     return RelayUrl{"https://" + authority, "wss://" + authority};
 }
 
+bool relayChangeWipesToken(std::optional<std::string_view> stored, std::string_view next)
+{
+    return stored && !stored->empty() && *stored != next;
+}
+
 }

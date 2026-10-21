@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 #include "sdkconfig.h"
 #include "t3/keys.h"
@@ -10,6 +11,7 @@ enum class DebugNetCut { None, LeaveAp, BlackHole, Restore };
 #ifdef CONFIG_T3_DEBUG_SERIAL
 
 bool debug_serial_start();
+void debug_serial_handle(std::string_view line);
 bool debug_serial_poll_key(t3::Key *key);
 bool debug_serial_poll_drop();
 DebugNetCut debug_serial_poll_net_cut();

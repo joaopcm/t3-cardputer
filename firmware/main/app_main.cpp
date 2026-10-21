@@ -17,11 +17,13 @@
 #include "keyboard.h"
 #include "mic.h"
 #include "power.h"
+#include "serial_port.h"
 #include "settings.h"
 #include "t3/app.h"
 #include "t3/grid.h"
 #include "t3/keys.h"
 #include "t3/link.h"
+#include "t3/provision.h"
 #include "t3/relay_url.h"
 #include "transport.h"
 #include "wifi.h"
@@ -536,9 +538,69 @@ SavedRelay savedRelay()
     return {std::get<t3::RelayUrl>(std::move(parsed)), std::nullopt};
 }
 
+std::optional<std::string> applyProvision(const t3::ProvisionRequest &request)
+{
+    if (request.wifi) {
+        if (std::optional<std::string> error = settings::addWifi({request.wifi->ssid, request.wifi->password})) {
+            return error;
+        }
+    }
+    if (request.relay) {
+        if (std::optional<std::string> error = settings::setRelayUrl(request.relay->https)) {
+            return error;
+        }
+    }
+    if (request.code) {
+        if (std::optional<std::string> error = settings::setPendingPairCode(*request.code)) {
+            return error;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string provisionedFields(const t3::ProvisionRequest &request)
+{
+    std::string fields;
+    const auto add = [&fields](bool present, const char *name) {
+        if (present) {
+            fields += (fields.empty() ? "" : ", ") + std::string(name);
+        }
+    };
+    add(request.wifi.has_value(), "wifi");
+    add(request.relay.has_value(), "relay");
+    add(request.code.has_value(), "code");
+    return fields;
+}
+
+void provision(std::string_view json)
+{
+    const std::variant<t3::ProvisionRequest, std::string> parsed = t3::parseProvision(json);
+    if (const std::string *error = std::get_if<std::string>(&parsed)) {
+        ESP_LOGW(TAG, "provision refused, reason sent to the host");
+        serial_port_reply("T3PROV err " + *error);
+        return;
+    }
+    const t3::ProvisionRequest &request = std::get<t3::ProvisionRequest>(parsed);
+    if (const std::optional<std::string> error = applyProvision(request)) {
+        ESP_LOGW(TAG, "provision not saved, reason sent to the host");
+        serial_port_reply("T3PROV err " + *error);
+        return;
+    }
+    ESP_LOGI(TAG, "provision: %s, restarting", provisionedFields(request).c_str());
+    serial_port_reply("T3PROV ok");
+    esp_restart();
+}
+
+void replyInfo()
+{
+    const t3::DeviceInfo info{esp_app_get_description()->version, savedRelay().url.has_value(), settings::token().has_value(),
+                              static_cast<int>(settings::wifi().list.size())};
+    serial_port_reply("T3INFO " + t3::encodeInfo(info));
+}
+
 [[noreturn]] void halt()
 {
-    debug_serial_start();
+    serial_port_start();
     for (;;) {
         vTaskDelay(portMAX_DELAY);
     }
@@ -591,7 +653,9 @@ extern "C" void app_main(void)
     draw(device.app());
     const bool mic_ok = mic_init(system_i2c_bus());
     ESP_LOGI(TAG, "mic %s", mic_ok ? "ready" : "missing");
-    debug_serial_start();
+    if (!serial_port_start()) {
+        device.app().onDeviceError("usb serial: driver or task did not start, usb setup unavailable");
+    }
     log_heap("ready");
 
     for (;;) {
@@ -601,6 +665,12 @@ extern "C" void app_main(void)
         }
         while (const std::optional<t3::Key> pressed = keyboard_poll()) {
             device.key(*pressed);
+        }
+        if (const std::optional<std::string> json = serial_port_poll_provision()) {
+            provision(*json);
+        }
+        if (serial_port_poll_info()) {
+            replyInfo();
         }
         device.poll();
         device.pumpAudio();

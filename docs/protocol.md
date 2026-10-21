@@ -473,3 +473,35 @@ See "Errors".
 ```json relay
 {"type":"error","code":"protocol_version","message":"update relay: device protocol v=2, relay v=1"}
 ```
+
+## USB provisioning
+
+The install page (and `firmware/scripts/provision.py`) sets WiFi, the relay URL and the pairing code over the device's USB serial port. The channel is write-only: nothing it answers can carry a token, a WiFi password or screen content. Release builds have it too. It is separate from the relay WebSocket above.
+
+Open the port at 115200 baud. USB-JTAG serial ignores the baud, but the page still opens with it. Lower RTS before DTR: the chip resets on DTR=0 with RTS=1. Every frame starts with `\x02` and ends with `\n`. Lines without the `\x02` are device logs: skip them.
+
+Set any of the three:
+
+```text
+host   \x02T3PROV <json>\n
+json   {"wifi"?:{"ssid":string,"password":string},"relay"?:string,"code"?:string}
+device \x02T3PROV ok\n
+device \x02T3PROV err <reason>\n
+```
+
+- Every key is optional, at least one must be there. `{}` gets `err provision: nothing to set`. An unknown key gets `err provision: unknown key '<key>'`.
+- `wifi.ssid` is 1-32 bytes, kept byte-exact (UTF-8 and spaces are fine). `wifi.password` is 8-63 chars, a 64 hex digit raw PSK, or empty for an open network, also byte-exact. Saving a known SSID replaces its password.
+- `relay` is trimmed and normalized like the relay URL typed on the device (`https://` or `wss://` or no scheme, host and port only).
+- `code` is trimmed and uppercased, then must be 8 letters or digits. The device pairs with it on the next boot.
+- The whole line after `\x02` is at most 1024 bytes (`provision_line_max`). A longer one gets `err provision_line_max=1024, line needed <n>`.
+- The device writes wifi, then relay, then code. On the first failure it stops and answers `err <reason>`; nothing after the failure is written. A relay URL different from a stored one wipes the device token, and the device says so on screen.
+- After `ok` the device restarts within 500 ms.
+
+Ask what the device has:
+
+```text
+host   \x02T3INFO\n
+device \x02T3INFO {"fw":string,"protocol":1,"relaySet":bool,"paired":bool,"wifiSaved":int}\n
+```
+
+`fw` is the firmware version, `protocol` is the device protocol version (`hello.v`), `relaySet` says a valid relay URL is saved, `paired` says a token is saved, `wifiSaved` counts saved networks.

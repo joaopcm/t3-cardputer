@@ -2,7 +2,7 @@
 
 Measured on the real ADV with the Task 7 firmware (`firmware/main/settings.cpp`), ESP-IDF v5.4.2, `nvs` partition 24K at 0x9000 (`firmware/partitions.csv`). Numbers are `nvs_get_stats()` entry counts logged by a temporary boot loop that added records of the largest legal size, read them back, removed them and logged again (the loop is not in the tree).
 
-Layout: namespace `t3`, keys `wifi` (blob, array of `WifiRecord {char ssid[33]; char password[64];}` = 97 bytes each), `token` (string), `relay_url` (string, normalized `https://host[:port]`, at most `kRelayUrlMax` = 320 chars) and `relay_changed` (string `"1"`, a one-shot flag: set when a different relay URL replaced a stored one and wiped the token, erased at the next boot once its notice is up).
+Layout: namespace `t3`, keys `wifi` (blob, array of `WifiRecord {char ssid[33]; char password[64];}` = 97 bytes each), `token` (string), `relay_url` (string, normalized `https://host[:port]`, at most `kRelayUrlMax` = 320 chars), `relay_changed` (string `"1"`, a one-shot flag: set when a different relay URL replaced a stored one and wiped the token, erased at the next boot once its notice is up), and `pair_code` (string, the 8-character pairing code USB provisioning leaves for the next boot). `password` holds a NUL-terminated passphrase of up to 63 chars or a 64 hex digit raw PSK that fills all 64 bytes with no NUL, so it is read with `strnlen`; the record stays 97 bytes.
 
 | what | entries | where it comes from |
 | --- | --- | --- |

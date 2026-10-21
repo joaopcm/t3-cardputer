@@ -7,13 +7,12 @@
 #include <string_view>
 
 #include "display.h"
-#include "driver/usb_serial_jtag.h"
-#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "serial_port.h"
 
 namespace {
 
@@ -23,11 +22,7 @@ constexpr char kStx = 0x02;
 constexpr char kEtx = 0x03;
 
 // receipts: docs/receipts/2026-10-21-firmware-baseline.md, section "grid, sprite and debug serial"
-constexpr uint32_t kRxBufferBytes = 256;
-constexpr uint32_t kTxBufferBytes = 1024;
-constexpr size_t kMaxLineBytes = 64;
-constexpr uint32_t kTaskStackBytes = 4096;
-constexpr UBaseType_t kTaskPriority = 3;
+constexpr size_t kEchoBytes = 64;
 constexpr UBaseType_t kKeyQueueDepth = 16;
 constexpr size_t kMaxRowHexBytes = 2 * 120 + 1;
 
@@ -45,7 +40,7 @@ void emitLine(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
 void emitLine(const char *format, ...)
 {
-    char line[kMaxLineBytes + 64];
+    char line[kEchoBytes + 64];
     line[0] = kStx;
     va_list args;
     va_start(args, format);
@@ -110,7 +105,7 @@ void handleKey(std::string_view name)
 
 void handlePower(std::string_view args)
 {
-    char text[kMaxLineBytes];
+    char text[kEchoBytes];
     std::snprintf(text, sizeof(text), "%.*s", static_cast<int>(args.size()), args.data());
     unsigned dimAfterMs = 0;
     unsigned offAfterMs = 0;
@@ -122,14 +117,26 @@ void handlePower(std::string_view args)
     emitLine("POWER ok");
 }
 
-void handleLine(std::string_view line)
+}
+
+bool debug_serial_start()
+{
+    keyQueue = xQueueCreate(kKeyQueueDepth, sizeof(t3::Key));
+    if (keyQueue == nullptr) {
+        ESP_LOGE(TAG, "key_queue=%u alloc failed", static_cast<unsigned>(kKeyQueueDepth));
+        return false;
+    }
+    return true;
+}
+
+void debug_serial_handle(std::string_view line)
 {
     constexpr std::string_view kKeyPrefix = "KEY ";
     constexpr std::string_view kPowerPrefix = "POWER ";
     if (line == "SHOT") {
         sendShot();
         ESP_LOGI(TAG, "task_stack_free_min=%u of %u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
-                 static_cast<unsigned>(kTaskStackBytes));
+                 static_cast<unsigned>(kSerialTaskStackBytes));
     } else if (line == "HEAP") {
         sendHeap();
     } else if (line == "DROP") {
@@ -152,57 +159,6 @@ void handleLine(std::string_view line)
         ESP_LOGW(TAG, "command unknown: %.*s", static_cast<int>(line.size()), line.data());
         emitLine("ERR command unknown: %.*s", static_cast<int>(line.size()), line.data());
     }
-}
-
-void serialTask(void *)
-{
-    char line[kMaxLineBytes];
-    size_t len = 0;
-    bool inCommand = false;
-    bool overflowed = false;
-    for (;;) {
-        uint8_t byte;
-        if (usb_serial_jtag_read_bytes(&byte, 1, portMAX_DELAY) != 1) {
-            continue;
-        }
-        if (byte == kStx) {
-            inCommand = true;
-            overflowed = false;
-            len = 0;
-        } else if (!inCommand) {
-            continue;
-        } else if (byte == '\n') {
-            inCommand = false;
-            if (overflowed) {
-                ESP_LOGE(TAG, "line_buf=%u, command needed more", static_cast<unsigned>(kMaxLineBytes));
-            } else {
-                handleLine(std::string_view(line, len));
-            }
-        } else if (len < kMaxLineBytes) {
-            line[len++] = static_cast<char>(byte);
-        } else {
-            overflowed = true;
-        }
-    }
-}
-
-}
-
-bool debug_serial_start()
-{
-    usb_serial_jtag_driver_config_t config = {.tx_buffer_size = kTxBufferBytes, .rx_buffer_size = kRxBufferBytes};
-    if (usb_serial_jtag_driver_install(&config) != ESP_OK) {
-        ESP_LOGE(TAG, "usb_serial_jtag driver install failed, rx=%u tx=%u", static_cast<unsigned>(kRxBufferBytes),
-                 static_cast<unsigned>(kTxBufferBytes));
-        return false;
-    }
-    usb_serial_jtag_vfs_use_driver();
-    keyQueue = xQueueCreate(kKeyQueueDepth, sizeof(t3::Key));
-    if (keyQueue == nullptr || xTaskCreate(serialTask, "debug_serial", kTaskStackBytes, nullptr, kTaskPriority, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "debug task or key_queue=%u alloc failed", static_cast<unsigned>(kKeyQueueDepth));
-        return false;
-    }
-    return true;
 }
 
 bool debug_serial_poll_key(t3::Key *key)

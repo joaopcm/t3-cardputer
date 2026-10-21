@@ -8,14 +8,13 @@
 #include <memory>
 
 #include "cJSON.h"
+#include "json_hooks.h"
 
 static_assert(CJSON_NESTING_LIMIT == t3::kJsonNestingMax, "set CJSON_NESTING_LIMIT to kJsonNestingMax where cJSON.c is compiled");
 
 namespace t3 {
 
-namespace {
-
-int nestingDepth(std::string_view json)
+int jsonNestingDepth(std::string_view json)
 {
     int depth = 0;
     int deepest = 0;
@@ -40,6 +39,8 @@ int nestingDepth(std::string_view json)
     }
     return deepest;
 }
+
+namespace {
 
 struct JsonDeleter {
     void operator()(cJSON *json) const { cJSON_Delete(json); }
@@ -564,16 +565,6 @@ void hookedRelease(void *block)
     jsonHeap().allocator.release(block);
 }
 
-void installJsonHooks()
-{
-    static const bool installed = [] {
-        cJSON_Hooks hooks{hookedAllocate, hookedRelease};
-        cJSON_InitHooks(&hooks);
-        return true;
-    }();
-    static_cast<void>(installed);
-}
-
 JsonPtr Builder::createRoot()
 {
     installJsonHooks();
@@ -585,6 +576,16 @@ bool startsWith(std::string_view text, std::string_view prefix)
     return text.substr(0, prefix.size()) == prefix;
 }
 
+}
+
+void installJsonHooks()
+{
+    static const bool installed = [] {
+        cJSON_Hooks hooks{hookedAllocate, hookedRelease};
+        cJSON_InitHooks(&hooks);
+        return true;
+    }();
+    static_cast<void>(installed);
 }
 
 std::string_view workspaceName(Workspace value)
@@ -647,7 +648,7 @@ std::optional<RelayMsg> parseRelay(std::string_view json, const HelloCaps &caps,
         p.fail("heap: parse needed more than available, frame was " + std::to_string(json.size()) + " bytes");
         return std::nullopt;
     }
-    if (const int depth = root ? 0 : nestingDepth(json); depth > kJsonNestingMax) {
+    if (const int depth = root ? 0 : jsonNestingDepth(json); depth > kJsonNestingMax) {
         p.fail("json_nesting_max=" + std::to_string(kJsonNestingMax) + ", frame needed " + std::to_string(depth));
         return std::nullopt;
     }

@@ -1,4 +1,4 @@
-set(srcs "app_main.cpp" "display.cpp" "keyboard.cpp" "mic.cpp" "power.cpp" "settings.cpp" "transport.cpp" "wifi.cpp")
+set(srcs "app_main.cpp" "display.cpp" "keyboard.cpp" "mic.cpp" "power.cpp" "serial_port.cpp" "settings.cpp" "transport.cpp" "wifi.cpp")
 if(CONFIG_T3_DEBUG_SERIAL)
     list(APPEND srcs "debug_serial.cpp")
 endif()

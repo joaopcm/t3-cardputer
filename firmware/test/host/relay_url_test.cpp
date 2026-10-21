@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -84,4 +85,12 @@ TEST_CASE("a url over the budget names it")
     REQUIRE(text.size() == 321);
     CHECK(refused(text) == "relay_url_max=320, url needed 321");
     CHECK(parsed(text.substr(0, 320 - 4) + ".com").https.size() == 320);
+}
+
+TEST_CASE("only replacing a stored relay with a different one wipes the token")
+{
+    CHECK_FALSE(t3::relayChangeWipesToken(std::nullopt, "https://relay.example.com:8443"));
+    CHECK_FALSE(t3::relayChangeWipesToken(std::string_view(""), "https://relay.example.com:8443"));
+    CHECK_FALSE(t3::relayChangeWipesToken(std::string_view("https://relay.example.com:8443"), "https://relay.example.com:8443"));
+    CHECK(t3::relayChangeWipesToken(std::string_view("https://relay.example.com:8443"), "https://other.example.com:8443"));
 }
