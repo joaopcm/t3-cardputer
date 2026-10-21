@@ -70,7 +70,8 @@ TaskHandle_t controlTask;
 uint32_t startGen = 0;
 
 uint32_t taskGen = 0;
-bool closePosted = false;
+// why: esp_websocket_client 1.8.0 dispatches DISCONNECTED from a failed send on the sending task and FINISH on its own task, see the receipt "transport"
+std::atomic<bool> closePosted{false};
 bool opened = false;
 std::atomic<uint32_t> startLargest{UINT32_MAX};
 std::string errorReason;
@@ -147,10 +148,9 @@ std::string failureReason(const esp_websocket_event_data_t &event)
 void postClose(int code, std::string_view reason)
 {
     abandonFill();
-    if (closePosted) {
+    if (closePosted.exchange(true)) {
         return;
     }
-    closePosted = true;
     const uint32_t largest = startLargest.load();
     std::string lowHeap;
     if (!opened && largest < kTlsHeapBytes) {
