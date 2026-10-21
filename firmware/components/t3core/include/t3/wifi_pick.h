@@ -15,7 +15,6 @@ public:
     std::optional<std::string> next() const;
     void failed(std::string_view ssid);
     void joined();
-    bool anyInRange() const { return !candidates_.empty(); }
 
 private:
     bool tried(std::string_view ssid) const;

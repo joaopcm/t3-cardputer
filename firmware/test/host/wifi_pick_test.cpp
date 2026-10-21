@@ -30,7 +30,6 @@ TEST_CASE("a failed network falls back to the next strongest saved one, then to 
     CHECK(picker.next() == "phone");
     picker.failed("phone");
     CHECK_FALSE(picker.next().has_value());
-    CHECK(picker.anyInRange());
 }
 
 TEST_CASE("the same scan keeps the round, a finished round starts over at the strongest")
@@ -84,5 +83,4 @@ TEST_CASE("no saved network in range has nothing to try")
     WifiPicker picker;
     picker.scanned(kNets, {"attic"}, false);
     CHECK_FALSE(picker.next().has_value());
-    CHECK_FALSE(picker.anyInRange());
 }
