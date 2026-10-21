@@ -5,7 +5,7 @@
 #include "sdkconfig.h"
 #include "t3/keys.h"
 
-enum class DebugNetCut { None, LeaveAp, BlackHole };
+enum class DebugNetCut { None, LeaveAp, BlackHole, Restore };
 
 #ifdef CONFIG_T3_DEBUG_SERIAL
 

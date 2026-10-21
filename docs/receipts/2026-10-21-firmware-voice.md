@@ -103,11 +103,21 @@ Not changed. A build that turned WiFi modem sleep off while recording was a misd
 
 ## send
 
-Audio frames go through the text path's open-generation check (`sendable()`): a frame for a connection that is no longer the open one is refused, never sent into the next connection. Each send waits at most `kMicBufferMs` (300 ms), what the DMA can hold. A send that waits longer means the link stopped carrying audio. The device then closes the socket like a drop (`relay unreachable: audio send stalled 300 ms, 3200 bytes not sent`), and the recording ends with `voice: connection lost`. One send writes up to four 1024-byte websocket fragments, each with that wait, so the worst main-loop block is 1.2 s.
+`kAudioSendWaitMs` = 300 (`firmware/main/app_main.cpp`): 6x the home WiFi `send max` (48 ms, "streaming on home WiFi"), and no longer than the 300 ms the mic buffer holds (`static_assert`). Retune at Checkpoint B: 4x the hotspot `send max` from the `voice sent:` line, keeping total tolerance under the relay's 5000 ms `audio_idle_timeout_ms`. One send writes up to four 1024-byte websocket fragments with that wait each, so the worst main-loop block is 1.2 s.
+
+Audio frames go through the text path's open-generation check (`sendable()`): a frame for a connection that is no longer the open one is refused, never sent into the next connection. `transport_send_audio` says which failure it was:
+
+- `NotConnected`: the frame was refused, or the send failed and the websocket client had already marked itself disconnected. The device sends nothing more and waits for the socket's own queued close. That close carries the real code: 4000 must stop and 4401 must re-pair, and a synthesized 1006 would have bumped the generation, dropped that close as stale and reconnected. The close ends the recording as `voice: connection lost` on the next pass.
+- `Stalled`: the send failed and the client still says connected. Only then does the device close the socket itself with 1006 (`relay unreachable: audio send stalled 300 ms, ...`), because nothing else would close it until the ping timeout.
+
+After a talk-up whose tail could not be sent, the stats line reads `voice cut short:` (not `voice sent:`), and `audio_end` is not attempted, so its `not connected` notice can't replace `voice: connection lost, transcript lost`.
 
 ## link lost while talking
 
-- Black hole (debug `\x02NETDOWN`: the WiFi netif swallows every outgoing frame, the association and socket stay up, like an access point that went out of range before the beacon timeout). With the 5000 ms text send timeout, the main loop froze 5.2 s: from 44236 to 49456 ms the REC timer stopped and the DMA overflowed, then `voice: audio send failed, 3200 bytes not sent`. With the 300 ms wait, the recording ended 520 to 530 ms after the cut (the 16 KB send buffer filled, then one 300 ms wait), with `voice: connection lost` on screen (`/tmp/t3-task10-blackhole-held.png`), and nothing more was sent.
+- Black hole (debug `\x02NETDOWN`: the WiFi netif swallows every outgoing frame while the association and socket stay up, like an access point that went out of range before the beacon timeout; `\x02NETUP` restores it).
+  - With the 5000 ms text send timeout, the main loop froze 5.2 s: from 44236 to 49456 ms the REC timer stopped and the DMA overflowed, then `voice: audio send failed, 3200 bytes not sent`.
+  - With the 300 ms wait: the 16 KB send buffer filled, then one send waited 300 ms. In 12 of 12 cycles the send failed exactly 520 ms after the cut. Each time the websocket client had already marked itself disconnected (`NotConnected`, `connection closed, 3200 audio bytes not sent`). Its own close (1006) ended the recording with `voice: connection lost` (`/tmp/t3-task10-netdown-cancel.png`).
+  - Talk-up 0.2 s after the cut, so the tail stalls: `voice cut short: 16 chunks`, no `audio_end`, and the bar keeps `voice: connection lost, transcript lost` (`/tmp/t3-task10-tail-stall.png`). The link came back after NETUP.
 - Leaving the access point (debug `\x02WIFIOFF`, `esp_wifi_disconnect`): `link wifi down` and `voice cancelled` in the same millisecond, 10 ms after the cut. After talk-up, WiFi and the link came back by themselves, and the next hold streamed 20 chunks and got its transcript.
 - Socket drop (debug `\x02DROP`): cancelled in the same pass (Review Focus 1, in the report).
 
@@ -138,8 +148,11 @@ Audio frames go through the text path's open-generation check (`sendable()`): a 
 | DMA only while the clock runs: 32-cycle soak (16 drops mid-recording), at connect | 145456 at least | 62464 at least, 79872 at most |
 | same soak, at live | 143856 at least | 63488 at least |
 | same soak, at mic on | 128432 at least | 65536 |
+| 12 NETDOWN, NETUP cycles mid-recording (connect after a stall), at TLS start (`tls start after ... heap wait`) | | 60416 at least (once), 61440, 63488, 79872 in the other 9 |
+| same cycles, at live | 143556 at least | 61440 at least, 79872 in 9 of 12 |
 
 - First soak: with the DMA held for good, the largest block fell to 49152 at both connect and live, under the 60398 TLS line (`firmware-network.md` "soak"). The ruling fix moved the DMA to "only while the clock runs". Re-soak: connect never went under 62464 (1.03x the line).
+- TLS start is gated (`kTlsHeapBytes` = 60398 in `firmware/main/transport.cpp`): the control task waits up to one link backoff step (500 ms, 10 checks) for a largest block of 60398 bytes, then connects anyway. If that handshake fails, the close reason reads `tls_heap=60398, largest block N`. In the 12 connects after a stall the gate never had to wait: the stalled client's stop already ran first, so the heap was free by then. The main task's `connect` log line comes earlier (at the link's decision) and read 59392 in the same cycles.
 - Connects after a plain drop always had 79872 (1.32x). The low readings (62464, 63488) were all connects after a drop mid-recording. There, the old socket's TLS session and up to 16 KB of unacknowledged audio are still being freed when the 500 ms backoff reconnects, so free heap at connect is about 145 KB instead of about 184 KB.
 
 ## stacks

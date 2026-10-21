@@ -1,7 +1,7 @@
 menu "T3"
 
     config T3_DEBUG_SERIAL
-        bool "Serial debug channel (SHOT, KEY, HEAP, DROP, POWER, WIFIOFF, NETDOWN on the USB console)"
+        bool "Serial debug channel (SHOT, KEY, HEAP, DROP, POWER, WIFIOFF, NETDOWN, NETUP on the USB console)"
         default y
         help
             Compiles and starts the debug channel. Release builds turn it off.

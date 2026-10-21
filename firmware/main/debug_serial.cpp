@@ -141,6 +141,9 @@ void handleLine(std::string_view line)
     } else if (line == "NETDOWN") {
         netCutRequested = DebugNetCut::BlackHole;
         emitLine("NETDOWN ok");
+    } else if (line == "NETUP") {
+        netCutRequested = DebugNetCut::Restore;
+        emitLine("NETUP ok");
     } else if (line.substr(0, kPowerPrefix.size()) == kPowerPrefix) {
         handlePower(line.substr(kPowerPrefix.size()));
     } else if (line.substr(0, kKeyPrefix.size()) == kKeyPrefix) {

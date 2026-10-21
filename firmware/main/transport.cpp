@@ -5,12 +5,14 @@
 #include <cstring>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "t3/link.h"
 
 namespace {
 
@@ -26,6 +28,11 @@ constexpr UBaseType_t kInboxDepth = 16;
 constexpr uint32_t kControlTaskStackBytes = 4096;
 // why: above the main task (priority 1) so a queued stop or start is never starved by the UI loop, below the websocket task (5) it waits on
 constexpr UBaseType_t kControlTaskPriority = 4;
+// receipt: docs/receipts/2026-10-21-firmware-network.md "soak", one TLS handshake needs 50332 bytes, x1.2 for fragmentation
+constexpr size_t kTlsHeapBytes = 60398;
+// receipt: docs/receipts/2026-10-21-firmware-voice.md "heap", waits at most the link's first backoff step and checks 10 times in it; in 12 reconnects after a stalled recording it never had to wait
+constexpr uint32_t kTlsHeapWaitMs = t3::kBackoffMinMs;
+constexpr TickType_t kTlsHeapPollTicks = pdMS_TO_TICKS(kTlsHeapWaitMs / 10);
 constexpr int kPairTimeoutMs = 10000;
 constexpr uint32_t kPairTaskStackBytes = 6144;
 constexpr size_t kPairReplyMax = 1024;
@@ -64,6 +71,8 @@ uint32_t startGen = 0;
 
 uint32_t taskGen = 0;
 bool closePosted = false;
+bool opened = false;
+std::atomic<uint32_t> startLargest{UINT32_MAX};
 std::string errorReason;
 bool filling = false;
 uint64_t fillStart = 0;
@@ -130,6 +139,12 @@ void postClose(int code, std::string_view reason)
         return;
     }
     closePosted = true;
+    const uint32_t largest = startLargest.load();
+    std::string lowHeap;
+    if (!opened && largest < kTlsHeapBytes) {
+        lowHeap = "tls_heap=" + std::to_string(kTlsHeapBytes) + ", largest block " + std::to_string(largest);
+        reason = lowHeap;
+    }
     Item item{TransportEvent::Kind::Close, 0, code, 0, 0, 0, {}};
     const size_t bytes = std::min(reason.size(), kReasonMax);
     std::memcpy(item.reason, reason.data(), bytes);
@@ -188,10 +203,12 @@ void onWsEvent(void *, esp_event_base_t, int32_t id, void *data)
     case WEBSOCKET_EVENT_BEGIN:
         taskGen = startGen;
         closePosted = false;
+        opened = false;
         errorReason.clear();
         abandonFill();
         return;
     case WEBSOCKET_EVENT_CONNECTED: {
+        opened = true;
         Item item{TransportEvent::Kind::Open, 0, 0, 0, 0, 0, {}};
         if (!post(item, taskGen)) {
             ESP_LOGE(TAG, "rx_inbox_depth=%u, open dropped, queue full", static_cast<unsigned>(kInboxDepth));
@@ -238,6 +255,21 @@ void controlLoop(void *)
                 started = 0;
             }
             if (wanted != 0 && started != wanted) {
+                size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+                uint32_t waitedMs = 0;
+                for (; largest < kTlsHeapBytes && waitedMs < kTlsHeapWaitMs && wantedGen.load() == wanted;
+                     waitedMs += pdTICKS_TO_MS(kTlsHeapPollTicks)) {
+                    vTaskDelay(kTlsHeapPollTicks);
+                    largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+                }
+                if (wantedGen.load() != wanted) {
+                    continue;
+                }
+                ESP_LOGI(TAG, "tls start after %u ms heap wait, largest block %u", static_cast<unsigned>(waitedMs), static_cast<unsigned>(largest));
+                if (largest < kTlsHeapBytes) {
+                    ESP_LOGW(TAG, "tls_heap=%u, largest block %u, connecting anyway", static_cast<unsigned>(kTlsHeapBytes), static_cast<unsigned>(largest));
+                }
+                startLargest = static_cast<uint32_t>(std::min<size_t>(largest, UINT32_MAX));
                 started = wanted;
                 startGen = wanted;
                 if (esp_websocket_client_start(client) != ESP_OK) {
@@ -406,17 +438,20 @@ std::optional<std::string> transport_send(std::string_view text)
     return std::nullopt;
 }
 
-std::optional<std::string> transport_send_audio(const int16_t *samples, size_t count, uint32_t waitMs)
+std::optional<AudioSendError> transport_send_audio(const int16_t *samples, size_t count, uint32_t waitMs)
 {
     const int bytes = static_cast<int>(count * sizeof(int16_t));
     if (!sendable()) {
-        return "not connected, " + std::to_string(bytes) + " audio bytes not sent";
+        return AudioSendError{AudioSendError::Kind::NotConnected, "not connected, " + std::to_string(bytes) + " audio bytes not sent"};
     }
     const int sent = esp_websocket_client_send_bin(client, reinterpret_cast<const char *>(samples), bytes, pdMS_TO_TICKS(waitMs));
-    if (sent != bytes) {
-        return "audio send stalled " + std::to_string(waitMs) + " ms, " + std::to_string(bytes) + " bytes not sent";
+    if (sent == bytes) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    if (!esp_websocket_client_is_connected(client)) {
+        return AudioSendError{AudioSendError::Kind::NotConnected, "connection closed, " + std::to_string(bytes) + " audio bytes not sent"};
+    }
+    return AudioSendError{AudioSendError::Kind::Stalled, "audio send stalled " + std::to_string(waitMs) + " ms, " + std::to_string(bytes) + " bytes not sent"};
 }
 
 std::optional<TransportEvent> transport_poll()

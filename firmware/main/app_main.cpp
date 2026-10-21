@@ -32,6 +32,10 @@ constexpr int kAbnormalClose = 1006;
 // receipt: docs/receipts/2026-10-21-firmware-network.md "json parse budget", 1.46x the ADV's honest worst parse (4.1 x 8192 = 33.6 KB), about 70 KB at the cap leaves about 63 KB of the live heap
 constexpr size_t kJsonParseBudgetBytes = 49152;
 
+// receipt: docs/receipts/2026-10-21-firmware-voice.md "send", 6x the home WiFi send max (48 ms) and inside the 300 ms the mic buffer holds; retune at Checkpoint B
+constexpr uint32_t kAudioSendWaitMs = 300;
+static_assert(kAudioSendWaitMs <= kMicBufferMs);
+
 // receipt: docs/receipts/2026-10-21-firmware-voice.md "tail", the chunk in flight at talk-up finishes within one chunk period, 2x is the tripwire
 constexpr uint32_t kTailWaitMs = 2 * kMicChunkMs;
 
@@ -159,9 +163,21 @@ public:
             dark ? mic_power_down() : mic_power_up();
         }
         mic_tick();
-        if (const DebugNetCut cut = debug_serial_poll_net_cut(); cut != DebugNetCut::None) {
-            ESP_LOGI(TAG, "debug: %s", cut == DebugNetCut::BlackHole ? "dropping every outgoing packet" : "leaving the access point");
-            wifi_debug_cut(cut == DebugNetCut::BlackHole);
+        switch (debug_serial_poll_net_cut()) {
+        case DebugNetCut::None:
+            break;
+        case DebugNetCut::LeaveAp:
+            ESP_LOGI(TAG, "debug: leaving the access point");
+            wifi_debug_leave_ap();
+            break;
+        case DebugNetCut::BlackHole:
+            ESP_LOGI(TAG, "debug: dropping every outgoing packet");
+            wifi_debug_black_hole(true);
+            break;
+        case DebugNetCut::Restore:
+            ESP_LOGI(TAG, "debug: sending packets again");
+            wifi_debug_black_hole(false);
+            break;
         }
         if (debug_serial_poll_drop()) {
             ESP_LOGI(TAG, "debug: dropping the relay socket");
@@ -244,7 +260,7 @@ private:
         log_heap("mic on");
     }
 
-    void finishRecording()
+    bool finishRecording()
     {
         bool sent = true;
         while (sent) {
@@ -255,9 +271,10 @@ private:
             sent = sendChunk(count);
         }
         if (const size_t tail = sent ? mic_read(chunk_, kMicChunkSamples, kTailWaitMs) : 0) {
-            sendChunk(tail);
+            sent = sendChunk(tail);
         }
-        endRecording("sent");
+        endRecording(sent ? "sent" : "cut short");
+        return sent;
     }
 
     void endRecording(const char *how)
@@ -278,12 +295,16 @@ private:
     bool sendChunk(size_t count)
     {
         const uint32_t before = now_ms();
-        // why: a send that waits longer than the mic buffer holds means the link stopped carrying audio; a blocked send also froze the whole main loop for the 5 s text timeout (docs/receipts/2026-10-21-firmware-voice.md "link lost while talking")
-        if (std::optional<std::string> error = transport_send_audio(chunk_, count, kMicBufferMs)) {
-            ESP_LOGE(TAG, "%s", error->c_str());
-            transport_close();
-            apply(link_.onClose(kAbnormalClose, *error, now_ms()));
+        if (std::optional<AudioSendError> error = transport_send_audio(chunk_, count, kAudioSendWaitMs)) {
+            ESP_LOGE(TAG, "%s", error->text.c_str());
             dirty_ = true;
+            if (error->kind == AudioSendError::Kind::NotConnected) {
+                // why: the socket's own close is already queued and carries the real code (4000 must stop, 4401 must re-pair); it ends the recording as `voice: connection lost` on the next pass
+                return false;
+            }
+            // why: a socket that holds a send past the mic buffer has stopped carrying audio, and nothing else will close it until the ping times out; a blocked send froze the main loop for the 5 s text timeout (docs/receipts/2026-10-21-firmware-voice.md "link lost while talking")
+            transport_close();
+            apply(link_.onClose(kAbnormalClose, error->text, now_ms()));
             return false;
         }
         const uint32_t after = now_ms();
@@ -389,9 +410,11 @@ private:
 
     void feed(const t3::App::Out &out)
     {
-        if (out.audio == t3::App::Out::Audio::Stop) {
-            finishRecording();
-        } else if (out.audio == t3::App::Out::Audio::Cancel) {
+        if (out.audio == t3::App::Out::Audio::Stop && !finishRecording()) {
+            // why: the link is already gone, so audio_end would only fail and its notice would replace `voice: connection lost, transcript lost`
+            return;
+        }
+        if (out.audio == t3::App::Out::Audio::Cancel) {
             endRecording("cancelled");
         }
         if (out.scanWifi) {
