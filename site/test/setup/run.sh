@@ -319,6 +319,17 @@ expect_last_lines
 finish_case "$before"
 
 before=$failures
+fresh_case canary-gemini-is-not-mini
+without nvidia-smi
+catalog='[{"id":"gemini-3-pro","label":"Gemini 3 Pro","providerInstanceId":"gemini-1"},{"id":"gpt-5-mini","label":"GPT-5 mini","providerInstanceId":"codex-1"}]'
+answers 'y\ny\n'
+run_setup
+expect_status 0
+expect_line "✓ Canary on, using gpt-5-mini"
+expect_json "$dir/home/.config/t3-cardputer/relay.json" canary '{"enabled":true,"model":"gpt-5-mini","providerInstanceId":"codex-1"}'
+finish_case "$before"
+
+before=$failures
 fresh_case dry-run
 answers 'y\ny\ny\n'
 run_setup --dry-run

@@ -122,7 +122,7 @@ const commands = {
   "canary-pick": () => {
     const models = JSON.parse(stdin());
     if (models.length === 0) process.exit(4);
-    const cheap = models.find((model) => /haiku|mini|flash/.test(model.id));
+    const cheap = models.find((model) => /(^|[-_.])(haiku|mini|flash)([-_.]|$)/.test(model.id));
     if (!cheap) process.exit(3);
     console.log(canaryOf(cheap));
   },
