@@ -13,7 +13,7 @@ Measured 2026-10-21 against bmorcelli/Launcher release 2.9.1 (published 2026-09-
 
 `LAUNCHER_APP_SLOT_BYTES` in `firmware/scripts/release.sh` is 0x800000 - 0x170000. Launcher builds its own table at install time, so the app's `partitions.csv` is ignored under Launcher. Our firmware needs from that table: an `nvs` partition (20K there, 24K in ours) and no `phy_init` (Launcher dropped it; our sdkconfig has `CONFIG_ESP_PHY_INIT_DATA_IN_PARTITION` unset, so PHY data is compiled in).
 
-NVS under Launcher: 20K is 5 pages against 6 for our 24K. The measured count was 756 entries for 6 pages (126 per page), so 20K is 630. The `nvs-settings` receipt measured 147 used before ours and 37 for 8 wifi records plus a 256-char token: 184 of 630 (29%).
+NVS under Launcher: 20K is 5 pages against 6 for our 24K. The measured count was 756 entries for 6 pages (126 per page), so 20K is 630 with one page reserved, 504 usable. The `nvs-settings` receipt measured 147 used before ours and 37 for 8 wifi records plus a 256-char token: 184 of 504 (36%).
 
 ## sizes
 

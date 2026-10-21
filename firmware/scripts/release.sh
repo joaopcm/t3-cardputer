@@ -17,6 +17,7 @@ fi
 . "$FW_DIR/scripts/idf-env.sh"
 
 mkdir -p "$OUT_DIR"
+rm -f "$OUT_DIR/t3-cardputer-app.bin" "$OUT_DIR/t3-cardputer-full.bin"
 rm -f "$OUT_DIR/sdkconfig"
 export IDF_TARGET=esp32s3
 idf.py -B "$OUT_DIR" \
