@@ -320,6 +320,9 @@ void App::inform(const std::vector<std::string> &notes, Color color)
 
 void App::informAlso(const std::vector<std::string> &notes, Color color)
 {
+    if (notes.empty()) {
+        return;
+    }
     if (notice_.empty()) {
         inform(notes, color);
         return;

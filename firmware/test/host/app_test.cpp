@@ -93,6 +93,13 @@ std::string row(const App &app, int index)
     return rows(app)[index];
 }
 
+t3::Color noticeColor(const App &app)
+{
+    t3::Grid grid;
+    app.draw(grid);
+    return grid.at(0, 0).fg;
+}
+
 int selectedRow(const App &app)
 {
     t3::Grid grid;
@@ -1156,6 +1163,36 @@ TEST_CASE("reply sent shows only on its ack")
     CHECK_FALSE(contains(row(app, 0), "reply sent"));
     push(app, t3::Ack{reply.str("id"), true, std::nullopt});
     CHECK(row(app, 0).rfind("reply sent: queue", 0) == 0);
+}
+
+TEST_CASE("a confirmed reply stays green when home is pushed with nothing to add")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    const Frame reply(only(press(app, named(KeyName::Enter))));
+    push(app, t3::Ack{reply.str("id"), true, std::nullopt});
+    REQUIRE(noticeColor(app) == t3::Color::Ok);
+    push(app, relay(kWeaverHome));
+    CHECK(row(app, 0).rfind("reply sent: queue", 0) == 0);
+    CHECK(noticeColor(app) == t3::Color::Ok);
+}
+
+TEST_CASE("task launched stays green when home is pushed with nothing to add")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, ch('n'));
+    push(app, relay(kProjects));
+    press(app, named(KeyName::Enter));
+    press(app, named(KeyName::Enter));
+    type(app, "go");
+    const Frame launch(only(press(app, named(KeyName::Enter))));
+    REQUIRE(launch.str("type") == "launch");
+    push(app, t3::Ack{launch.str("id"), true, std::nullopt});
+    REQUIRE(row(app, 0).rfind("task launched", 0) == 0);
+    push(app, relay(kHome));
+    CHECK(row(app, 0).rfind("task launched", 0) == 0);
+    CHECK(noticeColor(app) == t3::Color::Ok);
 }
 
 TEST_CASE("a reply whose send fails comes back with a named notice")
