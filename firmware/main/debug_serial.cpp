@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string_view>
 
 #include "display.h"
@@ -30,6 +31,9 @@ QueueHandle_t keyQueue;
 std::atomic<bool> dropRequested{false};
 std::atomic<DebugNetCut> netCutRequested{DebugNetCut::None};
 std::atomic<uint64_t> powerRequested{0};
+std::atomic<bool> staged{false};
+std::atomic<bool> stageRequested{false};
+std::atomic<std::string *> pendingFrame{nullptr};
 
 void emit(const char *text, size_t len)
 {
@@ -117,6 +121,21 @@ void handlePower(std::string_view args)
     emitLine("POWER ok");
 }
 
+void handleFrame(std::string_view json)
+{
+    if (!staged) {
+        emitLine("ERR FRAME needs STAGE first, the relay link owns the screen");
+        return;
+    }
+    auto frame = std::make_unique<std::string>(json);
+    std::string *idle = nullptr;
+    if (!pendingFrame.compare_exchange_strong(idle, frame.get())) {
+        emitLine("ERR FRAME busy, the last frame is not taken yet");
+        return;
+    }
+    frame.release();
+}
+
 }
 
 bool debug_serial_start()
@@ -133,6 +152,7 @@ void debug_serial_handle(std::string_view line)
 {
     constexpr std::string_view kKeyPrefix = "KEY ";
     constexpr std::string_view kPowerPrefix = "POWER ";
+    constexpr std::string_view kFramePrefix = "FRAME ";
     if (line == "SHOT") {
         sendShot();
         ESP_LOGI(TAG, "task_stack_free_min=%u of %u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
@@ -151,6 +171,12 @@ void debug_serial_handle(std::string_view line)
     } else if (line == "NETUP") {
         netCutRequested = DebugNetCut::Restore;
         emitLine("NETUP ok");
+    } else if (line == "STAGE") {
+        staged = true;
+        stageRequested = true;
+        emitLine("STAGE ok");
+    } else if (line.substr(0, kFramePrefix.size()) == kFramePrefix) {
+        handleFrame(line.substr(kFramePrefix.size()));
     } else if (line.substr(0, kPowerPrefix.size()) == kPowerPrefix) {
         handlePower(line.substr(kPowerPrefix.size()));
     } else if (line.substr(0, kKeyPrefix.size()) == kKeyPrefix) {
@@ -185,4 +211,28 @@ bool debug_serial_poll_power(uint32_t *dimAfterMs, uint32_t *offAfterMs)
     *dimAfterMs = static_cast<uint32_t>(request >> 32);
     *offAfterMs = static_cast<uint32_t>(request);
     return true;
+}
+
+bool debug_serial_poll_stage()
+{
+    return stageRequested.exchange(false);
+}
+
+bool debug_serial_staged()
+{
+    return staged;
+}
+
+std::optional<std::string> debug_serial_poll_frame()
+{
+    const std::unique_ptr<std::string> frame(pendingFrame.exchange(nullptr));
+    if (!frame) {
+        return std::nullopt;
+    }
+    return std::move(*frame);
+}
+
+void debug_serial_frame_done(std::string_view screen)
+{
+    emitLine("FRAME ok screen=%.*s", static_cast<int>(screen.size()), screen.data());
 }

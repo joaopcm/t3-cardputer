@@ -147,7 +147,7 @@ public:
 
     void poll()
     {
-        if (linked_) {
+        if (linked_ && !debug_serial_staged()) {
             pollLink();
         }
         uint32_t dimAfterMs;
@@ -194,6 +194,24 @@ public:
             app_.onDeviceError("voice: " + *lost);
             dirty_ = true;
         }
+    }
+
+    void stage()
+    {
+        ESP_LOGI(TAG, "debug: staged, relay link stopped, frames come from the serial port");
+        if (linked_) {
+            transport_close();
+        }
+        wifi_debug_black_hole(true);
+        feed(app_.onLinkStatus("", now_ms()));
+        dirty_ = true;
+    }
+
+    void stagedFrame(std::string_view json)
+    {
+        feed(app_.onFrame(json, now_ms()));
+        dirty_ = true;
+        debug_serial_frame_done(app_.screenName());
     }
 
     bool takeDirty()
@@ -326,7 +344,7 @@ private:
     bool sendChunk(size_t count)
     {
         const uint32_t before = now_ms();
-        if (std::optional<AudioSendError> error = transport_send_audio(chunk_, count, kAudioSendWaitMs)) {
+        if (std::optional<AudioSendError> error = debug_serial_staged() ? std::nullopt : transport_send_audio(chunk_, count, kAudioSendWaitMs)) {
             ESP_LOGE(TAG, "%s", error->text.c_str());
             dirty_ = true;
             if (error->kind == AudioSendError::Kind::NotConnected) {
@@ -497,6 +515,11 @@ private:
         }
         std::optional<std::string> sendError;
         for (const std::string &frame : out.send) {
+            if (debug_serial_staged()) {
+                const std::string_view type = frameType(frame);
+                ESP_LOGI(TAG, "staged: %.*s not sent", static_cast<int>(type.size()), type.data());
+                continue;
+            }
             if (std::optional<std::string> error = transport_send(frame)) {
                 ESP_LOGE(TAG, "%s", error->c_str());
                 app_.onSendFailed(frame, *error, now_ms());
@@ -696,6 +719,12 @@ extern "C" void app_main(void)
         }
         if (serial_port_poll_info()) {
             replyInfo();
+        }
+        if (debug_serial_poll_stage()) {
+            device.stage();
+        }
+        if (const std::optional<std::string> frame = debug_serial_poll_frame()) {
+            device.stagedFrame(*frame);
         }
         device.poll();
         device.pumpAudio();
