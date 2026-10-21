@@ -3,7 +3,7 @@ pick a network
 corner-cafe                          -48
 home-5g                       saved  -61
 guest                         open   -70
-                                        
++ type a network name                   
                                         
                                         
                                         

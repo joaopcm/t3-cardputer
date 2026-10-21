@@ -47,6 +47,8 @@ std::string_view App::screenName() const
         return "new_task";
     case Screen::SetupWifiList:
         return "setup_wifi";
+    case Screen::SetupWifiSsid:
+        return "setup_ssid";
     case Screen::SetupWifiPassword:
         return "setup_password";
     case Screen::SetupPair:
@@ -61,6 +63,7 @@ bool App::editing() const
 {
     switch (screen_) {
     case Screen::SetupWifiList:
+    case Screen::SetupWifiSsid:
     case Screen::SetupWifiPassword:
     case Screen::SetupPair:
     case Screen::Voice:
@@ -249,6 +252,8 @@ App::Out App::onKey(Key key, uint32_t nowMs)
         return talk ? startVoice(nowMs) : promptKey(key);
     case Screen::SetupWifiList:
         return wifiListKey(key);
+    case Screen::SetupWifiSsid:
+        return wifiSsidKey(key);
     case Screen::SetupWifiPassword:
         return wifiPasswordKey(key);
     case Screen::SetupPair:
@@ -429,6 +434,9 @@ void App::draw(Grid &grid) const
         return;
     case Screen::SetupWifiList:
         drawWifiList(grid);
+        return;
+    case Screen::SetupWifiSsid:
+        drawWifiSsid(grid);
         return;
     case Screen::SetupWifiPassword:
         drawWifiPassword(grid);

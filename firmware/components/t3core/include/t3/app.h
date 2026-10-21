@@ -78,7 +78,7 @@ public:
     bool recording() const;
 
 private:
-    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiPassword, SetupPair, Voice };
+    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiSsid, SetupWifiPassword, SetupPair, Voice };
     enum class Voice { Recording, Transcribing, Review };
     enum class Field { None, Model, Workspace, Mode };
 
@@ -149,10 +149,12 @@ private:
     void leaveSetup();
     Out showWifiList();
     Out wifiListKey(Key key);
+    Out wifiSsidKey(Key key);
     Out wifiPasswordKey(Key key);
     Out pairKey(Key key);
     void drawSetupBar(Grid &grid, std::string_view step) const;
     void drawWifiList(Grid &grid) const;
+    void drawWifiSsid(Grid &grid) const;
     void drawWifiPassword(Grid &grid) const;
     void drawPair(Grid &grid) const;
 
@@ -208,6 +210,7 @@ private:
     int netSelected_ = 0;
     int netTop_ = 0;
     WifiNet joinTarget_;
+    std::string typedSsid_;
     std::string wifiPassword_;
     bool joining_ = false;
     std::string pairCode_;
