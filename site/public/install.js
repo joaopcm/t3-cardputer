@@ -5,7 +5,7 @@ import { parseFragment } from "/lib/fragment.js";
 import { flashErrorMessage, portOpenMessage, replug } from "/lib/install-errors.js";
 import { encodeInfoRequest, encodeProvision, lineSplitter, parseDeviceLine } from "/lib/serial-frames.js";
 
-// receipt: provisional, not measured on the ADV yet. The device polls USB serial every 20 ms (kMainPollTicks), drains a reply within 100 ms (kReplyDrainTicks) and restarts within 500 ms after ok (docs/protocol.md), and provision.py uses the same 5 s tripwire. Replace with 5x the slowest of 10 provision.py runs.
+// receipt: the device replied in 15-30 ms over 10 runs (docs/receipts/2026-10-21-firmware-network.md "provisioning reply time"); the post-reset boot until the serial port is up is not measured yet (Checkpoint D), so 5 s stays the tripwire until then
 const kProvisionReplyMs = 5000;
 // receipt: esptool.py's HardReset holds RTS for 100 ms
 const kResetHoldMs = 100;
