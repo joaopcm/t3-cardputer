@@ -10,3 +10,4 @@ firmware/sdkconfig.old
 firmware/test/host/build/
 firmware/build-release/
 site/public/fw/
+dist-bundle/

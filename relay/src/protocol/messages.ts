@@ -235,9 +235,13 @@ export function rejectionFor(raw: string, err: ProtocolError, established: boole
 }
 
 export function clipText(text: string): string {
+  return clipTextTo(text, REJECTION_TEXT_MAX);
+}
+
+export function clipTextTo(text: string, max: number): string {
   const ascii = text.replace(/[^\x20-\x7e]/g, "?");
-  if (ascii.length <= REJECTION_TEXT_MAX) return ascii;
-  return `${ascii.slice(0, REJECTION_TEXT_MAX - 3)}...`;
+  if (ascii.length <= max) return ascii;
+  return `${ascii.slice(0, max - 3)}...`;
 }
 
 function tryParse(raw: string): unknown {

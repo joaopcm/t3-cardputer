@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PendingApproval } from "../src/approvals/index.js";
-import type { Limits } from "../src/config.js";
-import type { RelayMessage } from "../src/protocol/messages.js";
+import { DEFAULT_CONFIG, type Limits, type RelayConfig } from "../src/config.js";
+import { REJECTION_TEXT_MAX, type RelayMessage } from "../src/protocol/messages.js";
 import { T3UnavailableError } from "../src/t3/mcp.js";
 import { requestHandle } from "../src/views/request.js";
 import { Watcher, type WatchSnapshot } from "../src/watcher.js";
@@ -11,8 +11,8 @@ import { Device, FakeApprovals, FakeT3, HOURS_AGO, POLL_MS, cleanupAfterEach, de
 
 cleanupAfterEach();
 
-async function setup(limits: Partial<Limits> = {}) {
-  const relay = await startRelay(limits);
+async function setup(limits: Partial<Limits> = {}, config: Partial<RelayConfig> = {}) {
+  const relay = await startRelay(limits, undefined, config);
   const { code } = relay.auth.createPairingCode();
   const { token, deviceId } = relay.auth.redeem(code, "cardputer", "198.51.100.1");
   const connect = async (options: WebSocket.ClientOptions = {}) => {
@@ -203,7 +203,7 @@ describe("device session", () => {
     const device = await connected();
     t3.authBroken = true;
     const home = await device.next("home", (h) => h.warnings.length > 0);
-    expect(home.warnings).toContain("T3 token rejected: run `t3-cardputer-relay pair-t3` on homelab");
+    expect(home.warnings).toContain("T3 token rejected: run t3-cardputer-relay renew");
   });
 
   it("open_thread sends the page then jumps to the pending approval", async () => {
@@ -488,6 +488,41 @@ describe("device session", () => {
     expect(brokenReasons).toEqual([]);
     approvals.unreachable = undefined;
     await device.next("home", (h) => h.approvals.available);
+  });
+
+  it("without self-repair the approvals-down reason ends with the update command", async () => {
+    const { t3, approvals, connected } = await setup({}, { repair: { ...DEFAULT_CONFIG.repair } });
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.broken = "snapshot moved";
+    const broken = await device.next("home", (h) => !h.approvals.available);
+    expect(broken.approvals.reason).toBe("approvals down: snapshot moved, checking again; update: t3-cardputer-relay update");
+  });
+
+  it("a long approvals-down reason is clipped before the update hint, so the hint always fits", async () => {
+    const { t3, server, connected } = await setup({}, { repair: { ...DEFAULT_CONFIG.repair } });
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    server.markApprovalsDown(`canary respond: ${"x".repeat(200)}`, "none");
+    const long = await device.next("home", (h) => h.approvals.reason?.includes("xxx") === true);
+    expect(long.approvals.reason).toHaveLength(REJECTION_TEXT_MAX);
+    expect(long.approvals.reason?.endsWith("...; update: t3-cardputer-relay update")).toBe(true);
+  });
+
+  it("with self-repair the approvals-down reason has no update hint", async () => {
+    const { t3, approvals, connected } = await setup({}, { repair: { ...DEFAULT_CONFIG.repair, projectId: "p1" } });
+    t3.threads = [summary("t1")];
+    const device = await connected();
+    approvals.broken = "snapshot moved";
+    const home = await device.next("home", (h) => !h.approvals.available);
+    expect(home.approvals.reason).toBe("approvals down: snapshot moved, checking again");
+  });
+
+  it("GET /healthz answers 200 ok", async () => {
+    const { server } = await setup();
+    const response = await fetch(`http://127.0.0.1:${server.port}/healthz`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ok");
   });
 
   it("a canary failure marks approvals down on connected devices until a canary passes, whatever the live adapter says", async () => {

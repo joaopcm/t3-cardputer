@@ -39,13 +39,3 @@ function usage(problem: string): number {
   console.error(`${problem}\n${USAGE}`);
   return 2;
 }
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    (error: unknown) => {
-      console.error(error instanceof Error ? error.message : error);
-      process.exit(1);
-    },
-  );
-}

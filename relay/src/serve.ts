@@ -8,38 +8,23 @@ import { DefaultsStore } from "./defaults-store.js";
 import { deploy } from "./deploy.js";
 import { execRunner } from "./exec.js";
 import { RepairOrchestrator } from "./repair/orchestrator.js";
-import { SecretsStore, type Secrets } from "./secrets.js";
+import { SecretsStore } from "./secrets.js";
 import { startServer, type ApprovalsState, type T3Client } from "./server.js";
 import { createWhisperStt } from "./stt/whisper.js";
 import { clearWhisperPid, reapOrphanWhisper, recordWhisperPid } from "./stt/whisper-pid.js";
 import { getEnvironment } from "./t3/environment.js";
 import { T3AuthError, T3Mcp } from "./t3/mcp.js";
+import { tokenExpiryWarnings } from "./t3/token-expiry.js";
 import { VersionWatch, startVersionLoop, type VersionLoop } from "./version-watch.js";
 
 export type RelayPaths = { configPath: string; secretsPath: string };
 
 export const ADMIN_SOCKET_NAME = "admin.sock";
 export const VERSION_STATE_NAME = "t3-version.json";
-const PAIR_T3_HINT = "run `t3-cardputer-relay pair-t3`";
+const RENEW_HINT = "run t3-cardputer-relay renew";
+export const REPAIR_NEEDS_CANARY_WARNING = "self-repair needs canary.enabled=true in relay.json, repair is off";
 // receipt: docs/receipts/2026-10-20-canary.md, one version check is a single GET of the environment document that took 2.3-21.4 ms over 10 calls, so every pollIntervalMs x 10 (20 s) is negligible
 const VERSION_CHECK_EVERY_POLLS = 10;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const TOKEN_LABELS = { t3McpToken: "T3 MCP token", t3InternalToken: "T3 internal token" } as const;
-
-export function tokenExpiryWarnings(secrets: Pick<Secrets, "t3McpToken" | "t3InternalToken">, nowMs: number, warnMs: number): string[] {
-  const warnings: string[] = [];
-  for (const [field, label] of Object.entries(TOKEN_LABELS) as [keyof typeof TOKEN_LABELS, string][]) {
-    const expiresAt = secrets[field]?.expiresAt;
-    if (expiresAt === undefined) continue;
-    const left = Date.parse(expiresAt) - nowMs;
-    if (!(left > 0 && left <= warnMs)) continue;
-    const days = Math.floor(left / DAY_MS);
-    const when = days === 0 ? "under a day" : `${days} ${days === 1 ? "day" : "days"}`;
-    warnings.push(`${label} expires in ${when}: ${PAIR_T3_HINT} on homelab`);
-  }
-  return warnings;
-}
 
 export type T3Connection = { t3: T3Client & Pick<T3Mcp, "waitForRun" | "settleThread">; approvals: ApprovalsAdapter; close(): Promise<void> };
 
@@ -55,7 +40,7 @@ export function connectT3(config: RelayConfig, secrets: SecretsStore): { t3: T3M
     config.t3BaseUrl,
     () => {
       const record = secrets.read().t3InternalToken;
-      if (record === undefined) throw new T3AuthError("internal", `no T3 internal token: ${PAIR_T3_HINT}`);
+      if (record === undefined) throw new T3AuthError("internal", `no T3 internal token: ${RENEW_HINT}`);
       return record.token;
     },
     config.limits,
@@ -98,10 +83,13 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
     const { t3, approvals, close: closeT3 } = (hooks.connect ?? connectT3)(config, secrets);
     closers.push(closeT3);
 
+    const repairWithoutCanary = config.repair.projectId !== undefined && !config.canary.enabled;
+    if (repairWithoutCanary) console.error(REPAIR_NEEDS_CANARY_WARNING);
+
     const approvalsState = (): ApprovalsState => {
       const record = secrets.read().t3InternalToken;
-      if (record === undefined) return { available: false, reason: `no T3 internal token: ${PAIR_T3_HINT}` };
-      if (Date.parse(record.expiresAt) <= Date.now()) return { available: false, reason: `T3 internal token expired: ${PAIR_T3_HINT}` };
+      if (record === undefined) return { available: false, reason: `no T3 internal token: ${RENEW_HINT}` };
+      if (Date.parse(record.expiresAt) <= Date.now()) return { available: false, reason: `T3 internal token expired: ${RENEW_HINT}` };
       return { available: true };
     };
 
@@ -113,7 +101,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       defaults: new DefaultsStore(join(stateDir, "defaults.json")),
       stt,
       approvalsState,
-      warnings: () => tokenExpiryWarnings(secrets.read(), Date.now(), limits.tokenExpiryWarningMs),
+      warnings: () => [...tokenExpiryWarnings(secrets.read(), new Date()), ...(repairWithoutCanary ? [REPAIR_NEEDS_CANARY_WARNING] : [])],
       onAdapterBroken: () => versionLoop?.recheck() ?? "none",
     });
     closers.push(server.close);
@@ -121,8 +109,8 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
 
     const canaryBlocked = (): string | undefined => {
       const mcp = secrets.read().t3McpToken;
-      if (mcp === undefined) return `no T3 MCP token: ${PAIR_T3_HINT}`;
-      if (Date.parse(mcp.expiresAt) <= Date.now()) return `T3 MCP token expired: ${PAIR_T3_HINT}`;
+      if (mcp === undefined) return `no T3 MCP token: ${RENEW_HINT}`;
+      if (Date.parse(mcp.expiresAt) <= Date.now()) return `T3 MCP token expired: ${RENEW_HINT}`;
       const state = approvalsState();
       return state.available ? undefined : state.reason;
     };
@@ -136,17 +124,21 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       deploy: () => deploy(config),
     });
     closers.push(() => repair.close());
-    versionLoop = startVersionLoop({
-      watch: new VersionWatch(() => getEnvironment(config.t3BaseUrl), join(stateDir, VERSION_STATE_NAME)),
-      intervalMs: limits.pollIntervalMs * VERSION_CHECK_EVERY_POLLS,
-      blocked: canaryBlocked,
-      retryMaxMs: limits.canaryRetryMaxMs,
-      canary: hooks.canary ?? (() => runCanary({ t3, approvals }, { model: config.canary.model, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs })),
-      markApprovalsUp: server.markApprovalsUp,
-      markApprovalsDown: server.markApprovalsDown,
-      onCanaryFailed: hooks.onCanaryFailed ?? ((failure, versions) => repair.onBroken(failure, versions)),
-    });
-    closers.push(versionLoop.stop);
+    if (config.canary.enabled) {
+      const canaryOptions = { model: config.canary.model, providerInstanceId: config.canary.providerInstanceId, timeoutMs: limits.canaryTimeoutMs, pollIntervalMs: limits.pollIntervalMs };
+      const loop = startVersionLoop({
+        watch: new VersionWatch(() => getEnvironment(config.t3BaseUrl), join(stateDir, VERSION_STATE_NAME)),
+        intervalMs: limits.pollIntervalMs * VERSION_CHECK_EVERY_POLLS,
+        blocked: canaryBlocked,
+        retryMaxMs: limits.canaryRetryMaxMs,
+        canary: hooks.canary ?? (() => runCanary({ t3, approvals }, canaryOptions)),
+        markApprovalsUp: server.markApprovalsUp,
+        markApprovalsDown: server.markApprovalsDown,
+        onCanaryFailed: hooks.onCanaryFailed ?? ((failure, versions) => repair.onBroken(failure, versions)),
+      });
+      versionLoop = loop;
+      closers.push(loop.stop);
+    }
     return { port: server.port, close };
   } catch (error) {
     await close();

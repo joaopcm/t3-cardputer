@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
@@ -12,6 +11,7 @@ import { DEVICE_FRAME_BYTES_MAX, DEVICE_NAME_MAX, DEVICE_PATH, PAIR_BODY_BYTES_M
 import { Hub, type ApprovalsDownPhase, type ApprovalsState, type T3Client } from "./session.js";
 import { createSampleKeeper } from "./stt/samples.js";
 import type { Stt } from "./stt/types.js";
+import { RELAY_VERSION } from "./version.js";
 import { Watcher } from "./watcher.js";
 
 export type { ApprovalsState, T3Client } from "./session.js";
@@ -29,10 +29,9 @@ export type ServerDeps = {
 };
 
 export const PAIR_PATH = "/v1/pair";
+export const HEALTH_PATH = "/healthz";
 // the relay sits behind the local tailscaled proxy (Funnel), so it never listens beyond loopback
 const LISTEN_HOST = "127.0.0.1";
-
-const RELAY_VERSION = z.object({ version: z.string() }).parse(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))).version;
 
 const pairBodySchema = z.strictObject({ code: z.string().min(1), name: z.string().trim().min(1).max(DEVICE_NAME_MAX) });
 
@@ -48,7 +47,7 @@ export async function startServer(deps: ServerDeps): Promise<{
   const watcher = new Watcher(deps.t3, deps.approvals, limits.pollIntervalMs);
   const { stt: sttConfig } = deps.config;
   const samples = sttConfig.keepSamples ? createSampleKeeper({ dir: samplesDirOf(deps.config), maxSamples: sttConfig.maxSamples }) : undefined;
-  const hub = new Hub({ ...deps, limits, relayVersion: RELAY_VERSION, sttModel: deps.config.whisper.model, samples }, watcher);
+  const hub = new Hub({ ...deps, limits, relayVersion: RELAY_VERSION, sttModel: deps.config.whisper.model, selfRepair: deps.config.repair.projectId !== undefined, samples }, watcher);
 
   const http = createServer((req, res) => {
     handleHttp(req, res, deps.auth).catch((error: unknown) => {
@@ -87,6 +86,11 @@ export async function startServer(deps: ServerDeps): Promise<{
 }
 
 async function handleHttp(req: IncomingMessage, res: ServerResponse, auth: DeviceAuth): Promise<void> {
+  if (req.method === "GET" && pathOf(req) === HEALTH_PATH) {
+    res.writeHead(200, { "content-type": "text/plain", connection: "close" });
+    res.end("ok");
+    return;
+  }
   if (req.method !== "POST" || pathOf(req) !== PAIR_PATH) {
     json(res, 404, { error: "not found" });
     return;
