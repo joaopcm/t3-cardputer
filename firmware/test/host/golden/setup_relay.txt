@@ -1,0 +1,11 @@
+setup                          relay 1/4
+type your relay url                     
+tailscale funnel status on the relay    
+host shows it                           
+                                        
+                                        
+url 22/320                              
+> relay.example.com:8443_               
+                                        
+                                        
+Enter save                              

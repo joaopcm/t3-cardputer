@@ -109,7 +109,7 @@ const std::vector<WifiNet> kNets = {
 App live()
 {
     App app(kCaps, 7);
-    app.onBoot(true, true);
+    app.onBoot(true, true, true);
     app.onLinkStatus("", tick());
     app.onFrame(kHome, tick());
     return app;
@@ -118,7 +118,8 @@ App live()
 App onList()
 {
     App app(kCaps, 7);
-    app.onBoot(false, false);
+    app.setRelayUrl("https://relay.example.com:8443");
+    app.onBoot(false, false, true);
     app.onWifiScan(kNets);
     return app;
 }
@@ -133,7 +134,7 @@ App onPassword()
 App onPair()
 {
     App app(kCaps, 7);
-    app.onBoot(true, false);
+    app.onBoot(true, false, true);
     return app;
 }
 
@@ -142,7 +143,7 @@ App onPair()
 TEST_CASE("no token opens pairing")
 {
     App app(kCaps, 7);
-    const App::Out out = app.onBoot(true, false);
+    const App::Out out = app.onBoot(true, false, true);
     CHECK(app.screenName() == "setup_pair");
     CHECK_FALSE(out.scanWifi);
     CHECK(contains(allText(app), "t3-cardputer-relay pair"));
@@ -151,7 +152,7 @@ TEST_CASE("no token opens pairing")
 TEST_CASE("no wifi opens the network list and asks for a scan")
 {
     App app(kCaps, 7);
-    const App::Out out = app.onBoot(false, true);
+    const App::Out out = app.onBoot(false, true, true);
     CHECK(app.screenName() == "setup_wifi");
     CHECK(out.scanWifi);
     CHECK(contains(allText(app), "scanning"));
@@ -160,7 +161,7 @@ TEST_CASE("no wifi opens the network list and asks for a scan")
 TEST_CASE("saved wifi and a saved token leave setup closed")
 {
     App app(kCaps, 7);
-    const App::Out out = app.onBoot(true, true);
+    const App::Out out = app.onBoot(true, true, true);
     CHECK(app.screenName() == "connecting");
     CHECK_FALSE(out.scanWifi);
 }
@@ -186,7 +187,7 @@ TEST_CASE("fn+s opens setup from home")
 TEST_CASE("fn+s opens setup while still connecting, so a bad network is fixable")
 {
     App app(kCaps, 7);
-    app.onBoot(true, true);
+    app.onBoot(true, true, true);
     press(app, named(KeyName::FnS));
     CHECK(app.screenName() == "setup_wifi");
 }
@@ -215,9 +216,10 @@ TEST_CASE("the list shows scan results with the saved and open ones tagged and p
     CHECK(selectedRow(app) == 4);
     press(app, named(KeyName::Down));
     press(app, named(KeyName::Down));
-    CHECK(selectedRow(app) == 5);
+    press(app, named(KeyName::Down));
+    CHECK(selectedRow(app) == 6);
     press(app, named(KeyName::Up));
-    CHECK(selectedRow(app) == 4);
+    CHECK(selectedRow(app) == 5);
 }
 
 TEST_CASE("the list ends with a row to type a hidden network's name, then its password")
@@ -268,7 +270,7 @@ TEST_CASE("a typed network joins open with no password, a short one is still ref
 TEST_CASE("an empty scan still offers to type a name")
 {
     App app(kCaps, 7);
-    app.onBoot(false, true);
+    app.onBoot(false, true, true);
     app.onWifiScan({});
     CHECK(contains(allText(app), "no networks found"));
     CHECK(selectedRow(app) == 3);
@@ -299,7 +301,7 @@ TEST_CASE("a typed name stops at the ssid limit, an empty one is refused, and ba
 TEST_CASE("an empty scan says so and R scans again")
 {
     App app(kCaps, 7);
-    app.onBoot(false, true);
+    app.onBoot(false, true, true);
     app.onWifiScan({});
     CHECK(contains(allText(app), "no networks found"));
     CHECK(press(app, ch('r')).scanWifi);
@@ -313,7 +315,7 @@ TEST_CASE("a long scan list scrolls to keep the selection visible")
         many.push_back({"net" + std::to_string(i), -50 - i, true, false});
     }
     App app(kCaps, 7);
-    app.onBoot(false, true);
+    app.onBoot(false, true, true);
     app.onWifiScan(many);
     for (int i = 0; i < 19; ++i) {
         press(app, named(KeyName::Down));
@@ -533,7 +535,7 @@ TEST_CASE("a paired token is handed out to store, and only a stored token closes
     App app = onPair();
     type(app, "7KQ2M9XA");
     press(app, named(KeyName::Enter));
-    const App::Out out = app.onPairResult("tok_abc", "");
+    const App::Out out = app.onPairResult("tok_abc", "", 200);
     REQUIRE(out.storeToken.has_value());
     CHECK(*out.storeToken == "tok_abc");
     CHECK_FALSE(out.reconnect);
@@ -550,7 +552,7 @@ TEST_CASE("a token that was not written says why, never says paired and asks for
     App app = onPair();
     type(app, "7KQ2M9XA");
     press(app, named(KeyName::Enter));
-    app.onPairResult("tok_abc", "");
+    app.onPairResult("tok_abc", "", 200);
     const App::Out out = app.onTokenStored(false, "nvs: token not saved: ESP_ERR_NVS_NOT_ENOUGH_SPACE");
     CHECK_FALSE(out.reconnect);
     CHECK(app.screenName() == "setup_pair");
@@ -575,10 +577,10 @@ TEST_CASE("a failed pairing says why, keeps the code and lets the user retry")
     App app = onPair();
     type(app, "7KQ2M9XA");
     press(app, named(KeyName::Enter));
-    const App::Out out = app.onPairResult(std::nullopt, "pairing failed");
+    const App::Out out = app.onPairResult(std::nullopt, "pairing failed (401): pairing failed", 401);
     CHECK_FALSE(out.storeToken.has_value());
     CHECK(app.screenName() == "setup_pair");
-    CHECK(rows(app)[0].rfind("pairing failed", 0) == 0);
+    CHECK(rows(app)[0].rfind("pairing failed (401): pairing failed", 0) == 0);
     CHECK(contains(allText(app), "> 7KQ2M9XA_"));
     CHECK(press(app, named(KeyName::Enter)).pair.has_value());
 }
@@ -586,7 +588,7 @@ TEST_CASE("a failed pairing says why, keeps the code and lets the user retry")
 TEST_CASE("a pair result nobody asked for is ignored")
 {
     App app = onPair();
-    const App::Out out = app.onPairResult("tok_abc", "");
+    const App::Out out = app.onPairResult("tok_abc", "", 200);
     CHECK_FALSE(out.storeToken.has_value());
     CHECK(app.screenName() == "setup_pair");
 }
@@ -631,7 +633,7 @@ TEST_CASE("a request pushed during setup is a notice, not a screen change")
 TEST_CASE("a link status never hides the setup bar")
 {
     App app(kCaps, 7);
-    app.onBoot(false, false);
+    app.onBoot(false, false, true);
     app.onLinkStatus("starting", tick());
     CHECK(rows(app)[0].rfind("setup", 0) == 0);
 }
@@ -667,11 +669,11 @@ TEST_CASE("re-pair screen matches the setup look")
 TEST_CASE("setup screens count as editing from the first frame")
 {
     App app(kCaps, 7);
-    app.onBoot(true, false);
+    app.onBoot(true, false, true);
     CHECK(app.screenName() == "setup_pair");
     CHECK(app.editing());
     App noWifi(kCaps, 7);
-    noWifi.onBoot(false, false);
+    noWifi.onBoot(false, false, true);
     CHECK(noWifi.screenName() == "setup_wifi");
     CHECK(noWifi.editing());
 }
@@ -679,9 +681,128 @@ TEST_CASE("setup screens count as editing from the first frame")
 TEST_CASE("a boot fault shows on row 0 of setup until a key")
 {
     App app(kCaps, 7);
-    app.onBoot(false, false);
+    app.onBoot(false, false, true);
     app.onDeviceError("settings reset: nvs ESP_ERR_NVS_NEW_VERSION_FOUND, wifi and token lost");
     CHECK(rows(app)[0].rfind("settings reset: nvs", 0) == 0);
     app.onWifiScan(kNets);
     CHECK(rows(app)[0].rfind("settings reset: nvs", 0) == 0);
+}
+
+TEST_CASE("no relay url opens the relay screen and says where to get one")
+{
+    App app(kCaps, 7);
+    const App::Out out = app.onBoot(false, false, false);
+    CHECK(app.screenName() == "setup_relay");
+    CHECK_FALSE(out.scanWifi);
+    CHECK(app.editing());
+    CHECK(rows(app)[0].rfind("relay: not set, open the install link", 0) == 0);
+    CHECK(contains(allText(app), "from setup.sh or type the relay url"));
+    CHECK_FALSE(contains(allText(app), "setup.sh prints"));
+    CHECK_FALSE(contains(allText(app), "prints the url"));
+    CHECK(contains(allText(app), "tailscale funnel status"));
+}
+
+TEST_CASE("a typed relay url is handed out normalized to save")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, false, false);
+    type(app, "relay.example.com:8443");
+    CHECK(contains(allText(app), "> relay.example.com:8443_"));
+    const App::Out out = press(app, named(KeyName::Enter));
+    REQUIRE(out.relayUrl.has_value());
+    CHECK(*out.relayUrl == "https://relay.example.com:8443");
+}
+
+TEST_CASE("an invalid relay url shows the parse error and keeps the text")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, false, false);
+    type(app, "http://relay.example.com");
+    const App::Out out = press(app, named(KeyName::Enter));
+    CHECK_FALSE(out.relayUrl.has_value());
+    CHECK(app.screenName() == "setup_relay");
+    CHECK(rows(app)[0].rfind("relay url must be https:// or wss://", 0) == 0);
+    CHECK(contains(allText(app), "> http://relay.example.com_"));
+}
+
+TEST_CASE("the relay url stops at its budget and names it")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, false, false);
+    type(app, std::string(320, 'a'));
+    press(app, ch('b'));
+    CHECK(rows(app)[0].rfind("relay_url_max=320, url needed 321", 0) == 0);
+    CHECK(contains(allText(app), "url 320/320"));
+}
+
+TEST_CASE("with no relay url there is nowhere to go back to")
+{
+    App app(kCaps, 7);
+    app.onBoot(true, true, false);
+    press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "setup_relay");
+    press(app, named(KeyName::Backspace));
+    CHECK(app.screenName() == "setup_relay");
+}
+
+TEST_CASE("fn+s shows the relay host on the setup list, and enter edits it prefilled")
+{
+    App app = live();
+    app.setRelayUrl("https://relay.example.com:8443");
+    press(app, named(KeyName::FnS));
+    app.onWifiScan(kNets);
+    CHECK(rows(app)[6].rfind("relay relay.example.com:8443", 0) == 0);
+    CHECK_FALSE(contains(allText(app), "https://"));
+    for (int i = 0; i < 4; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    CHECK(selectedRow(app) == 6);
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "setup_relay");
+    CHECK(contains(allText(app), "> relay.example.com:8443_"));
+    press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "setup_wifi");
+}
+
+TEST_CASE("saving the relay url it already has changes nothing")
+{
+    App app = live();
+    app.setRelayUrl("https://relay.example.com:8443");
+    press(app, named(KeyName::FnS));
+    app.onWifiScan(kNets);
+    for (int i = 0; i < 4; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    press(app, named(KeyName::Enter));
+    const App::Out same = press(app, named(KeyName::Enter));
+    CHECK_FALSE(same.relayUrl.has_value());
+    CHECK(app.screenName() == "setup_wifi");
+    CHECK(rows(app)[0].rfind("relay unchanged", 0) == 0);
+}
+
+TEST_CASE("a different relay url from the list is handed out to save")
+{
+    App app = live();
+    app.setRelayUrl("https://relay.example.com:8443");
+    press(app, named(KeyName::FnS));
+    app.onWifiScan(kNets);
+    for (int i = 0; i < 4; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    press(app, named(KeyName::Enter));
+    for (int i = 0; i < 4; ++i) {
+        press(app, named(KeyName::Backspace));
+    }
+    type(app, "9443");
+    const App::Out out = press(app, named(KeyName::Enter));
+    REQUIRE(out.relayUrl.has_value());
+    CHECK(*out.relayUrl == "https://relay.example.com:9443");
+}
+
+TEST_CASE("relay screen matches the setup look")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, false, false);
+    type(app, "relay.example.com:8443");
+    checkGolden(app, "setup_relay");
 }

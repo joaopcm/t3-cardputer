@@ -1,0 +1,27 @@
+#!/bin/sh
+printf 'tailscale %s\n' "$*" >>"$STUB_STATE/calls.log"
+case "$*" in
+  "status --json")
+    printf '{"BackendState":"%s","Self":{"HostName":"t3-box","CapMap":{%s}}}\n' "$STUB_TS_STATE" "$STUB_TS_CAPS"
+    ;;
+  "funnel status --json")
+    if [ -f "$STUB_STATE/funnel-port" ]; then
+      port=$(cat "$STUB_STATE/funnel-port")
+      printf '{"TCP":{"8443":{"HTTPS":true}},"Web":{"%s:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:%s"}}}},"AllowFunnel":{"%s:8443":true}}\n' "$STUB_HOST" "$port" "$STUB_HOST"
+    else
+      echo '{}'
+    fi
+    ;;
+  "funnel --bg --https=8443 "*)
+    if [ -e "$STUB_STATE/not-operator" ]; then
+      echo "Access denied: serve config denied" >&2
+      exit 1
+    fi
+    echo "$4" >"$STUB_STATE/funnel-port"
+    printf 'Available on the internet:\n\nhttps://%s:8443/\n|-- proxy http://127.0.0.1:%s\n' "$STUB_HOST" "$4"
+    ;;
+  *)
+    echo "stub tailscale: unexpected $*" >&2
+    exit 2
+    ;;
+esac

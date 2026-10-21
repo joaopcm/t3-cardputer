@@ -33,4 +33,4 @@ The tripwire is a size check in `release.sh`: it prints `launcher app slot=<n> b
 
 - Not measured: an install through Launcher on the device (no Launcher on the ADV, no SD card used). The slot comes from Launcher's table and source, not from a run.
 - The slot is the empty-Launcher figure. Each installed app and each data partition Launcher creates for it takes from the same free range. Re-read the table and this constant when Launcher changes.
-- Release `.bin` files embed the relay URL, so they stay local in `firmware/build-release/` (gitignored) and are never committed or uploaded.
+- Release `.bin` files no longer embed a relay URL (it is an NVS setting). `release.sh` greps `firmware/build-release/` for the leak pattern and exits 1 on a hit, so the public parts in `build-release/web/` are safe to publish. `build-release/` itself stays gitignored.

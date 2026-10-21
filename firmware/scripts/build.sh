@@ -4,10 +4,8 @@ set -euo pipefail
 FW_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$FW_DIR"
 
-if [[ ! -f local.cmake ]]; then
-  echo "firmware/local.cmake missing; copy local.cmake.example and set T3_RELAY_URL" >&2
-  exit 1
-fi
+# receipt: docs/receipts/2026-10-21-firmware-voice.md "heap", the debug .bss the connect-after-voice A/B soaked
+DEBUG_BSS_BYTES=25024
 
 . "$FW_DIR/scripts/idf-env.sh"
 
@@ -17,3 +15,4 @@ if [[ ! -f sdkconfig || sdkconfig.defaults -nt sdkconfig || partitions.csv -nt s
 fi
 
 idf.py build "$@"
+"$FW_DIR/scripts/check-bss.sh" "$FW_DIR/build/t3_cardputer.elf" "$DEBUG_BSS_BYTES"

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <variant>
 
 #include "debug_serial.h"
 #include "display.h"
@@ -9,17 +10,21 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "keyboard.h"
 #include "mic.h"
 #include "power.h"
+#include "serial_port.h"
 #include "settings.h"
 #include "t3/app.h"
 #include "t3/grid.h"
 #include "t3/keys.h"
 #include "t3/link.h"
+#include "t3/provision.h"
+#include "t3/relay_url.h"
 #include "transport.h"
 #include "wifi.h"
 
@@ -102,10 +107,18 @@ public:
 
     t3::App &app() { return app_; }
 
-    void boot(bool hasWifi, bool hasToken)
+    void boot(bool hasWifi, bool hasToken, const std::optional<t3::RelayUrl> &relay, std::optional<std::string> pairCode)
     {
-        feed(app_.onBoot(hasWifi, hasToken));
-        if (hasWifi) {
+        linked_ = relay.has_value();
+        if (relay) {
+            app_.setRelayUrl(relay->https);
+        }
+        feed(app_.onBoot(hasWifi, hasToken, linked_));
+        pairCode_ = std::move(pairCode);
+        if (hasToken) {
+            startAutoPair();
+        }
+        if (hasWifi && linked_) {
             wifi_start(now_ms());
         }
     }
@@ -134,22 +147,8 @@ public:
 
     void poll()
     {
-        while (std::optional<WifiEvent> event = wifi_poll(now_ms())) {
-            onWifi(*event);
-            dirty_ = true;
-        }
-        while (std::optional<TransportEvent> event = transport_poll()) {
-            onTransport(*event);
-            dirty_ = true;
-        }
-        if (std::optional<std::string> dropped = transport_dropped()) {
-            ESP_LOGE(TAG, "%s", dropped->c_str());
-            app_.onDeviceError(*dropped);
-            dirty_ = true;
-        }
-        if (std::optional<PairDone> done = pair_poll()) {
-            onPairDone(*done);
-            dirty_ = true;
+        if (linked_ && !debug_serial_staged()) {
+            pollLink();
         }
         uint32_t dimAfterMs;
         uint32_t offAfterMs;
@@ -178,14 +177,10 @@ public:
             ESP_LOGI(TAG, "debug: sending packets again");
             wifi_debug_black_hole(false);
             break;
+        case DebugNetCut::Stage:
+            stage();
+            break;
         }
-        if (debug_serial_poll_drop()) {
-            ESP_LOGI(TAG, "debug: dropping the relay socket");
-            transport_close();
-            apply(link_.onClose(kAbnormalClose, "debug drop", now_ms()));
-            dirty_ = true;
-        }
-        apply(link_.onTick(now_ms()));
     }
 
     void pumpAudio()
@@ -204,6 +199,13 @@ public:
         }
     }
 
+    void stagedFrame(std::string_view json)
+    {
+        feed(app_.onFrame(json, now_ms()));
+        dirty_ = true;
+        debug_serial_frame_done(app_.screenName());
+    }
+
     bool takeDirty()
     {
         const bool was = dirty_;
@@ -212,6 +214,56 @@ public:
     }
 
 private:
+    void stage()
+    {
+        ESP_LOGI(TAG, "debug: staged until reset, relay link stopped, frames come from the serial port");
+        if (linked_) {
+            transport_close();
+        }
+        wifi_debug_black_hole(true);
+        feed(app_.onLinkStatus("", now_ms()));
+        dirty_ = true;
+    }
+
+    void pollLink()
+    {
+        while (std::optional<WifiEvent> event = wifi_poll(now_ms())) {
+            onWifi(*event);
+            dirty_ = true;
+        }
+        while (std::optional<TransportEvent> event = transport_poll()) {
+            onTransport(*event);
+            dirty_ = true;
+        }
+        if (std::optional<std::string> dropped = transport_dropped()) {
+            ESP_LOGE(TAG, "%s", dropped->c_str());
+            app_.onDeviceError(*dropped);
+            dirty_ = true;
+        }
+        if (std::optional<PairDone> done = pair_poll()) {
+            onPairDone(*done);
+            dirty_ = true;
+        }
+        if (debug_serial_poll_drop()) {
+            ESP_LOGI(TAG, "debug: dropping the relay socket");
+            transport_close();
+            apply(link_.onClose(kAbnormalClose, "debug drop", now_ms()));
+            dirty_ = true;
+        }
+        apply(link_.onTick(now_ms()));
+    }
+
+    void startAutoPair()
+    {
+        if (!pairCode_) {
+            return;
+        }
+        std::string code = std::move(*pairCode_);
+        pairCode_.reset();
+        ESP_LOGI(TAG, "pair: provisioned code found");
+        feed(app_.startAutoPair(std::move(code)));
+    }
+
     void apply(const t3::Link::Out &out)
     {
         if (out.closeSocket) {
@@ -295,7 +347,7 @@ private:
     bool sendChunk(size_t count)
     {
         const uint32_t before = now_ms();
-        if (std::optional<AudioSendError> error = transport_send_audio(chunk_, count, kAudioSendWaitMs)) {
+        if (std::optional<AudioSendError> error = debug_serial_staged() ? std::nullopt : transport_send_audio(chunk_, count, kAudioSendWaitMs)) {
             ESP_LOGE(TAG, "%s", error->text.c_str());
             dirty_ = true;
             if (error->kind == AudioSendError::Kind::NotConnected) {
@@ -366,6 +418,9 @@ private:
         case WifiEvent::Kind::Up:
             log_heap("wifi up");
             apply(link_.onWifi(true, now_ms()));
+            if (link_.state() == t3::Link::State::NeedsPair) {
+                startAutoPair();
+            }
             return;
         case WifiEvent::Kind::Down:
             apply(link_.onWifi(false, now_ms()));
@@ -397,7 +452,7 @@ private:
     {
         if (!done.error.empty()) {
             ESP_LOGW(TAG, "%s", done.error.c_str());
-            feed(app_.onPairResult(std::nullopt, done.error));
+            feed(app_.onPairResult(std::nullopt, done.error, 0));
             return;
         }
         t3::PairReply reply = t3::parsePairReply(done.status, done.body);
@@ -405,7 +460,7 @@ private:
         if (!reply.token) {
             ESP_LOGW(TAG, "%s", reply.error.c_str());
         }
-        feed(app_.onPairResult(std::move(reply.token), reply.error));
+        feed(app_.onPairResult(std::move(reply.token), reply.error, done.status));
     }
 
     void feed(const t3::App::Out &out)
@@ -429,12 +484,18 @@ private:
             wifi_join(out.joinWifi->ssid, out.joinWifi->password, now_ms());
         }
         if (const std::optional<std::string> refused = out.pair ? link_.pairRefused() : std::nullopt) {
-            feed(app_.onPairResult(std::nullopt, *refused));
+            feed(app_.onPairResult(std::nullopt, *refused, 0));
         } else if (out.pair) {
             const std::optional<std::string> body = t3::encodePair(out.pair->code, out.pair->name);
             const std::optional<std::string> error = body ? pair_start(*body) : std::optional<std::string>("out of memory: pair body not built");
             if (error) {
-                feed(app_.onPairResult(std::nullopt, *error));
+                feed(app_.onPairResult(std::nullopt, *error, 0));
+            }
+        }
+        if (out.pairCodeSpent) {
+            if (const std::optional<std::string> error = settings::clearPendingPairCode()) {
+                ESP_LOGE(TAG, "%s", error->c_str());
+                app_.onDeviceError(*error + ", spent pair code still saved");
             }
         }
         if (out.storeToken) {
@@ -444,11 +505,24 @@ private:
             }
             feed(app_.onTokenStored(!error, error.value_or("")));
         }
+        if (out.relayUrl) {
+            if (const std::optional<std::string> error = settings::setRelayUrl(*out.relayUrl)) {
+                app_.onDeviceError(*error);
+            } else {
+                ESP_LOGI(TAG, "relay url saved, restarting");
+                esp_restart();
+            }
+        }
         if (out.reconnect) {
             apply(link_.onUserReconnect(now_ms()));
         }
         std::optional<std::string> sendError;
         for (const std::string &frame : out.send) {
+            if (debug_serial_staged()) {
+                const std::string_view type = frameType(frame);
+                ESP_LOGI(TAG, "staged: %.*s not sent", static_cast<int>(type.size()), type.data());
+                continue;
+            }
             if (std::optional<std::string> error = transport_send(frame)) {
                 ESP_LOGE(TAG, "%s", error->c_str());
                 app_.onSendFailed(frame, *error, now_ms());
@@ -467,10 +541,12 @@ private:
     t3::App app_;
     t3::Link link_;
     settings::WifiCred joining_;
+    std::optional<std::string> pairCode_;
     std::map<std::string, size_t> largestFrame_;
     int16_t chunk_[kMicChunkSamples];
     VoiceStats voice_;
     bool micOn_ = false;
+    bool linked_ = false;
     bool dark_ = true;
     bool dirty_ = true;
 };
@@ -495,9 +571,87 @@ void show_fatal(std::string_view message, std::string_view consequence)
     display_draw(grid);
 }
 
+struct SavedRelay {
+    std::optional<t3::RelayUrl> url;
+    std::optional<std::string> error;
+};
+
+SavedRelay savedRelay()
+{
+    const std::optional<std::string> stored = settings::relayUrl();
+    if (!stored) {
+        return {};
+    }
+    std::variant<t3::RelayUrl, std::string> parsed = t3::parseRelayUrl(*stored);
+    if (const std::string *error = std::get_if<std::string>(&parsed)) {
+        return {std::nullopt, "saved " + *error + ", type it again"};
+    }
+    return {std::get<t3::RelayUrl>(std::move(parsed)), std::nullopt};
+}
+
+std::optional<std::string> applyProvision(const t3::ProvisionRequest &request)
+{
+    if (request.wifi) {
+        if (std::optional<std::string> error = settings::addWifi({request.wifi->ssid, request.wifi->password})) {
+            return error;
+        }
+    }
+    if (request.relay) {
+        if (std::optional<std::string> error = settings::setRelayUrl(request.relay->https)) {
+            return error;
+        }
+    }
+    if (request.code) {
+        if (std::optional<std::string> error = settings::setPendingPairCode(*request.code)) {
+            return error;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string provisionedFields(const t3::ProvisionRequest &request)
+{
+    std::string fields;
+    const auto add = [&fields](bool present, const char *name) {
+        if (present) {
+            fields += (fields.empty() ? "" : ", ") + std::string(name);
+        }
+    };
+    add(request.wifi.has_value(), "wifi");
+    add(request.relay.has_value(), "relay");
+    add(request.code.has_value(), "code");
+    return fields;
+}
+
+void provision(std::string_view json)
+{
+    const std::variant<t3::ProvisionRequest, std::string> parsed = t3::parseProvision(json);
+    if (const std::string *error = std::get_if<std::string>(&parsed)) {
+        ESP_LOGW(TAG, "provision refused, reason sent to the host");
+        serial_port_reply("T3PROV err " + *error);
+        return;
+    }
+    const t3::ProvisionRequest &request = std::get<t3::ProvisionRequest>(parsed);
+    if (const std::optional<std::string> error = applyProvision(request)) {
+        ESP_LOGW(TAG, "provision not saved, reason sent to the host");
+        serial_port_reply("T3PROV err " + *error);
+        return;
+    }
+    ESP_LOGI(TAG, "provision: %s, restarting", provisionedFields(request).c_str());
+    serial_port_reply("T3PROV ok");
+    esp_restart();
+}
+
+void replyInfo()
+{
+    const t3::DeviceInfo info{esp_app_get_description()->version, savedRelay().url.has_value(), settings::token().has_value(),
+                              static_cast<int>(settings::wifi().list.size())};
+    serial_port_reply("T3INFO " + t3::encodeInfo(info));
+}
+
 [[noreturn]] void halt()
 {
-    debug_serial_start();
+    serial_port_start();
     for (;;) {
         vTaskDelay(portMAX_DELAY);
     }
@@ -519,7 +673,8 @@ extern "C" void app_main(void)
     }
     const std::optional<std::string> keyboardError = keyboard_init();
     ESP_LOGI(TAG, "keyboard %s", keyboardError ? keyboardError->c_str() : "ready");
-    if (!transport_init(T3_RELAY_URL, static_cast<size_t>(kCaps.maxFrameBytes))) {
+    const SavedRelay relay = savedRelay();
+    if (relay.url && !transport_init(relay.url->wss, static_cast<size_t>(kCaps.maxFrameBytes))) {
         show_fatal("heap: relay frame buffers do not fit", "the relay link cannot start");
         halt();
     }
@@ -533,9 +688,11 @@ extern "C" void app_main(void)
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
     const settings::SavedWifi saved = settings::wifi();
-    device.boot(!saved.list.empty(), token.has_value());
+    device.boot(!saved.list.empty(), token.has_value(), relay.url, settings::pendingPairCode());
+    const std::optional<std::string> relayChanged =
+        settings::takeRelayChanged() ? std::optional<std::string>("relay changed: token cleared, pair again") : std::nullopt;
     std::string faults;
-    for (const std::optional<std::string> &fault : {nvs.erased, saved.error, keyboardError}) {
+    for (const std::optional<std::string> &fault : {nvs.erased, saved.error, keyboardError, relay.error, relayChanged}) {
         if (fault) {
             faults += (faults.empty() ? "" : "; ") + *fault;
         }
@@ -547,7 +704,9 @@ extern "C" void app_main(void)
     draw(device.app());
     const bool mic_ok = mic_init(system_i2c_bus());
     ESP_LOGI(TAG, "mic %s", mic_ok ? "ready" : "missing");
-    debug_serial_start();
+    if (!serial_port_start()) {
+        device.app().onDeviceError("usb serial: driver or task did not start, usb setup unavailable");
+    }
     log_heap("ready");
 
     for (;;) {
@@ -558,7 +717,16 @@ extern "C" void app_main(void)
         while (const std::optional<t3::Key> pressed = keyboard_poll()) {
             device.key(*pressed);
         }
+        if (const std::optional<std::string> json = serial_port_poll_provision()) {
+            provision(*json);
+        }
+        if (serial_port_poll_info()) {
+            replyInfo();
+        }
         device.poll();
+        if (const std::optional<std::string> frame = debug_serial_poll_frame()) {
+            device.stagedFrame(*frame);
+        }
         device.pumpAudio();
         if (device.takeDirty()) {
             draw(device.app());

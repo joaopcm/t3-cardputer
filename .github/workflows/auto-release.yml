@@ -1,0 +1,57 @@
+name: auto-release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - relay/**
+      - firmware/**
+      - site/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  tag:
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: next
+        run: |
+          existing=$(git tag --points-at "$GITHUB_SHA" --list 'v*')
+          if [ -n "$existing" ]; then
+            echo "$GITHUB_SHA is already release $existing, skipping"
+            exit 0
+          fi
+          latest=$(git tag --list 'v*' --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ && !found { print; found = 1 }')
+          if [ -z "$latest" ]; then
+            next=v0.1.0
+          else
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            next="v$major.$minor.$((patch + 1))"
+          fi
+          echo "releasing $GITHUB_SHA as $next (previous ${latest:-none}); release.yml creates the tag when it publishes"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    # why: the tag is created by gh release create with GITHUB_TOKEN, which never triggers release.yml's tag push trigger, so it is called directly
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit
+    permissions:
+      contents: write

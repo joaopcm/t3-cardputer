@@ -1,0 +1,227 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag, v<x.y.z>
+        type: string
+        required: true
+        default: v0.0.0-dry-run
+      dry_run:
+        description: build and upload the assets to this run, publish and deploy nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - id: resolve
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          HAVE_VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+          HAVE_VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID != '' }}
+          HAVE_VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID != '' }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$TAG' is not v<x.y.z>; push a tag like v0.1.0 or pass one as the tag input"
+            exit 1
+          fi
+          publish=true
+          if [ "$DRY_RUN" = true ]; then publish=false; fi
+          if [ "$publish" = true ]; then
+            if [[ "$TAG" == *-* ]]; then
+              echo "::error::release tag '$TAG' has a suffix, which only a dry run accepts; publish a plain v<x.y.z> or set dry_run"
+              exit 1
+            fi
+            if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+              echo "::error::publishing runs only from refs/heads/main or refs/tags/$TAG, this run is on $GITHUB_REF; run it from main or set dry_run"
+              exit 1
+            fi
+            missing=""
+            for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+              have="HAVE_$name"
+              if [ "${!have}" != true ]; then missing="$missing $name"; fi
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::repository secrets missing:$missing; add them under Settings > Secrets and variables > Actions, then re-run (nothing was published)"
+              exit 1
+            fi
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  relay:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: relay/pnpm-lock.yaml
+      - name: install
+        working-directory: relay
+        run: pnpm install --frozen-lockfile
+      - name: bundle
+        working-directory: relay
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          npm pkg set version="$VERSION"
+          pnpm bundle
+          reported=$(node dist-bundle/t3-cardputer-relay.mjs --version)
+          if [ "$reported" != "t3-cardputer-relay $VERSION" ]; then
+            echo "::error::the bundle reports '$reported', setup.sh will want 't3-cardputer-relay $VERSION'"
+            exit 1
+          fi
+      - name: stage
+        run: |
+          mkdir -p out
+          cp relay/dist-bundle/t3-cardputer-relay.mjs relay/scripts/install-whisper.sh relay/deploy/com.t3-cardputer.relay.plist out/
+          # why: relay/deploy/t3-cardputer-relay.service is the homelab unit; setup.sh downloads the release unit under this name
+          cp relay/deploy/t3-cardputer-relay.release.service out/t3-cardputer-relay.service
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay
+          path: out/
+          if-no-files-found: error
+
+  firmware:
+    needs: version
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.4.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: release build
+        shell: bash
+        env:
+          T3_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          firmware/scripts/release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: firmware/build-release/web/
+          if-no-files-found: error
+
+  publish:
+    needs: [version, relay, firmware]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: relay
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: assets
+      - name: checksums
+        working-directory: assets
+        run: |
+          want="bootloader.bin com.t3-cardputer.relay.plist install-whisper.sh manifest.json partition-table.bin t3-cardputer-relay.mjs t3-cardputer-relay.service t3-cardputer.bin"
+          got=$(find . -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ')
+          if [ "${got% }" != "$want" ]; then
+            echo "::error::release assets are '${got% }', want '$want'"
+            exit 1
+          fi
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: leak grep
+        run: .github/scripts/leak-grep.sh assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: assets/
+          if-no-files-found: error
+      - name: github release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+
+  site:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: site-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: site/public/fw/${{ needs.version.outputs.version }}
+      - name: assemble
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cp -R "site/public/fw/$VERSION" site/public/fw/latest
+          sed -i "s/__VERSION__/$VERSION/g" site/public/setup.sh
+          if ! grep -qx "VERSION=\"$VERSION\"" site/public/setup.sh; then
+            echo "::error::site/public/setup.sh has no VERSION=\"$VERSION\" line after substituting __VERSION__"
+            exit 1
+          fi
+          find site/public -type f | LC_ALL=C sort
+      - name: leak grep
+        run: .github/scripts/leak-grep.sh site/public
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site/public/
+          if-no-files-found: error
+      - uses: actions/setup-node@v4
+        if: needs.version.outputs.publish == 'true'
+        with:
+          node-version: 22
+      - name: install vercel
+        if: needs.version.outputs.publish == 'true'
+        run: npm install --global vercel@65.0.0
+      - name: vercel deploy
+        if: needs.version.outputs.publish == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+          if [ ! -f .vercel/output/static/install.html ]; then
+            echo "::error::vercel build made no .vercel/output/static/install.html, so the project's Root Directory is not site; set it to site in the Vercel project settings (Build and Deployment), then re-run (nothing was deployed)"
+            exit 1
+          fi
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"

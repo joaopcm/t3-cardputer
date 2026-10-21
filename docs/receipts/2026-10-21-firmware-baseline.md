@@ -35,7 +35,7 @@ Measured on the ADV with the task 2 firmware at HEAD ffa124c plus the `sdkconfig
 | free internal heap after `debug_serial_start()` | 347184 bytes, largest block 278528 | `t3: ready ...` and `\x02HEAP` reply, same numbers |
 | first `display_draw()` (panel push buffer) | 1456 bytes of heap | `t3: sprite` to `t3: ready` with the debug channel off |
 | debug task stack | 2340 bytes used of 4096 (1756 free at the worst point, during `SHOT`) | `debug: task_stack_free_min` |
-| longest command | 13 bytes (`KEY talk-down`), line buffer 64 | `debug_serial.cpp` `kMaxLineBytes`, an over-long line logs `line_buf=64, command needed more` |
+| longest command | 13 bytes (`KEY talk-down`), echoed whole in 64 bytes | `debug_serial.cpp` `kEchoBytes`; since USB provisioning the line buffer is `serial_port.cpp` at `kProvisionLineMax` = 1024 (receipt in `t3/provision.h`), and an over-long line logs `provision_line_max=1024, line needed <n>` |
 | rx buffer 256, tx buffer 1024 | commands are at most 13 bytes, one `SHOT` row is 241 bytes | 8 back-to-back screenshots all arrived with 135 intact rows and identical pixels |
 | key queue depth 16 | injected keys are consumed every 20 ms; a full queue logs `key_queue=16, injected key dropped` | `debug_serial.cpp` |
 | app image | 385072 bytes (0x5e030), 88% of the 3 MB slot free | `build/t3_cardputer.bin` |
@@ -60,6 +60,21 @@ Notes:
 | largest free block at `ready` | 278528 | 294912 | 16384 bytes |
 | app image | 385072 (0x5e030) | 358672 (0x57910) | 26400 bytes of flash |
 | debug task stack used | 2340 of 4096 | - | |
+
+Since USB provisioning (`firmware/main/serial_port.cpp`) the driver, both ring buffers and the 4096-byte task run in every build, so the "off" column above no longer describes a release. Measured on the ADV, release builds (`firmware/scripts/release.sh`, both debug Kconfigs off), commit 21f4b30 against the provisioning channel after its fix round (`t3: boot|ready|connect|live` log lines):
+
+| what | 21f4b30 release | with provisioning | note |
+| --- | --- | --- | --- |
+| free heap at boot (app_main entry) | 310324 | 305188 | 5136 bytes of static RAM, 1024 of them the line buffer |
+| free heap at `ready`, relay set | | 192500, largest block 129024 | 5 boots, same every time |
+| largest block at connect, relay set | | 116736 at least, 129024 in 4 of 5 boots | `t3: connect` and `tls start after 0 ms heap wait` |
+| largest block at live | | 79872 at least, 83968 at most | 5 boots |
+| app image | 1294128 | 1311456 | 17328 bytes of flash |
+| serial task stack | | 2376 used of 4096 (1720 free at the worst point, after an err reply and its log line) | `serial: task_stack_free_min` |
+
+The worst connect (after a drop mid-recording) needs the debug channel to reproduce, so it is in `2026-10-21-firmware-voice.md` "heap". A release carries less static RAM than that debug build, not more.
+
+A host that writes to the 21f4b30 release gets its writes stuck (nothing reads the port). With provisioning, `\x02T3INFO` and `\x02T3PROV` lines get their replies and `\x02HEAP` or any other line gets nothing.
 
 ## draw lock
 

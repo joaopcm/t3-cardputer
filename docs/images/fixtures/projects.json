@@ -1,0 +1,13 @@
+{
+  "type": "projects",
+  "items": [
+    {"projectId": "proj_api", "name": "demo-api", "defaults": {"model": "claude-sonnet-5-5", "workspace": "worktree", "runtimeMode": "approval-required"}},
+    {"projectId": "proj_landing", "name": "landing-page", "defaults": {"model": "claude-sonnet-5-5", "workspace": "worktree", "runtimeMode": "auto"}},
+    {"projectId": "proj_migrate", "name": "migrate-db", "defaults": {"model": "gpt-5", "workspace": "root", "runtimeMode": "approval-required"}}
+  ],
+  "models": [
+    {"id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5"},
+    {"id": "claude-opus-5-5", "label": "Claude Opus 5.5"},
+    {"id": "gpt-5", "label": "GPT-5"}
+  ]
+}

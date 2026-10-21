@@ -1,0 +1,16 @@
+[Unit]
+Description=t3-cardputer relay
+# receipt: serve reached its listening line in 241-249 ms over 5 local starts (no T3 tokens, temp config), so a loop that dies at start fires 5 starts in 5 x 0.25 s + 4 x RestartSec=5 s = ~21 s and trips this limit; 5 starts in 300 s lets a one-off crash age out
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=__NODE__ __BUNDLE__ serve
+Restart=on-failure
+RestartSec=5
+# receipt: worst stop waits for a staging canary, canaryTimeoutMs 32165 ms + 3 x repairStepTimeoutMs 60000 ms = 212 s (Task 14 report); mid live canary ~32 s (Task 13 report); 240 s clears the worst
+TimeoutStopSec=240
+
+[Install]
+WantedBy=default.target

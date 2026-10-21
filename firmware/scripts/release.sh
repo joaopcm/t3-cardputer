@@ -8,21 +8,33 @@ cd "$FW_DIR"
 # receipt: docs/receipts/2026-10-21-launcher-slot.md "slot", Launcher 2.9.1 on 8 MB flash leaves 0x170000..0x800000 free for installed apps
 LAUNCHER_APP_SLOT_BYTES=$((0x800000 - 0x170000))
 LAUNCHER_APP_ALIGN=$((0x10000))
-
-if [[ ! -f local.cmake ]]; then
-  echo "firmware/local.cmake missing; copy local.cmake.example and set T3_RELAY_URL" >&2
-  exit 1
-fi
+# receipt: esp_app_desc_t.version is char[32] (esp-idf v5.4.2 components/esp_app_format/include/esp_app_desc.h), 31 chars plus the nul
+APP_VERSION_MAX_CHARS=31
+# receipt: docs/receipts/2026-10-21-firmware-voice.md "heap", the release .bss, the same as the ce2d546 release
+RELEASE_BSS_BYTES=25000
+LEAK_PATTERN='[a-z0-9]\.ts\.net|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|prod-[0-9a-f]+\.t3coderelay'
 
 . "$FW_DIR/scripts/idf-env.sh"
+
+version=${T3_VERSION:-$(git -C "$FW_DIR" describe --tags --always --dirty 2>/dev/null || true)}
+if [[ -z "$version" ]]; then
+  echo "release version unknown: git describe failed (no repo access?) and T3_VERSION is empty; set T3_VERSION=<tag>" >&2
+  exit 1
+fi
+if (( ${#version} > APP_VERSION_MAX_CHARS )); then
+  echo "app version=$APP_VERSION_MAX_CHARS chars, release version '$version' needed ${#version}" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR/t3-cardputer-app.bin" "$OUT_DIR/t3-cardputer-full.bin"
 rm -f "$OUT_DIR/sdkconfig"
+rm -rf "$OUT_DIR/web"
 export IDF_TARGET=esp32s3
 idf.py -B "$OUT_DIR" \
   -DSDKCONFIG="$OUT_DIR/sdkconfig" \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
+  -DPROJECT_VER="$version" \
   build
 
 for option in T3_DEBUG_SERIAL T3_KEYBOARD_TRACE; do
@@ -31,6 +43,8 @@ for option in T3_DEBUG_SERIAL T3_KEYBOARD_TRACE; do
     exit 1
   fi
 done
+
+"$FW_DIR/scripts/check-bss.sh" "$OUT_DIR/t3_cardputer.elf" "$RELEASE_BSS_BYTES"
 
 app_bytes=$(stat -c %s "$OUT_DIR/t3_cardputer.bin")
 needed=$(( (app_bytes + LAUNCHER_APP_ALIGN - 1) / LAUNCHER_APP_ALIGN * LAUNCHER_APP_ALIGN ))
@@ -44,5 +58,22 @@ idf.py -B "$OUT_DIR" merge-bin -o "$OUT_DIR/t3-cardputer-full.bin"
 
 full_bytes=$(stat -c %s "$OUT_DIR/t3-cardputer-full.bin")
 echo "app image $app_bytes bytes (partition $needed of launcher slot $LAUNCHER_APP_SLOT_BYTES), full image $full_bytes bytes"
-echo "artifacts embed the relay URL: keep them local, never commit or upload"
+
+python3 "$FW_DIR/scripts/web-manifest.py" "$OUT_DIR" "$FW_DIR/partitions.csv" "$FW_DIR/components/t3core/include/t3/protocol.h" "$OUT_DIR/web" "$version"
+
+# why: scan only what ships; cmake caches and ELF paths in the rest of build-release/ are false-positive surface
+leak_status=0
+leaks=$(grep -raEl "$LEAK_PATTERN" "$OUT_DIR/web" "$OUT_DIR"/t3-cardputer-*.bin) || leak_status=$?
+if (( leak_status == 0 )); then
+  rm -rf "$OUT_DIR/web"
+  echo "release leak check failed: relay url, tailnet name or tailscale ip found in:" >&2
+  echo "$leaks" >&2
+  exit 1
+fi
+if (( leak_status != 1 )); then
+  rm -rf "$OUT_DIR/web"
+  echo "release leak check could not read the release parts (grep exit $leak_status)" >&2
+  exit 1
+fi
+
 echo "full image at 0x0 erases NVS (wifi + token); scripts/flash-app.sh writes only the app and keeps it"

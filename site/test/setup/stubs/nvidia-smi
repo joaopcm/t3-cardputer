@@ -1,0 +1,3 @@
+#!/bin/sh
+[ "$*" = -L ] || { echo "stub nvidia-smi: unexpected $*" >&2; exit 2; }
+echo "GPU 0: NVIDIA Test GPU (UUID: GPU-0)"

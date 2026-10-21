@@ -215,3 +215,16 @@ A 30-reconnect run straight after the stopped-relay test settled from 154188 to 
 - The library default `CJSON_NESTING_LIMIT` is 1000, which is 64 KB of recursion. One garbled 8 KiB frame of `[[[[...` could overflow the main task, which parses every frame with 4240 bytes free at its worst ("stacks").
 - The deepest relay frame is `projects` at 4 levels (`items[]`, then each item's `defaults` or `models[]`). The `docs/protocol.md` examples were measured with a script. 32 is 8x that and costs at most 32 x 64 = 2048 bytes, 48% of the free main stack.
 - Set on both cJSON builds: `idf_build_set_property(COMPILE_DEFINITIONS "CJSON_NESTING_LIMIT=32")` in `firmware/CMakeLists.txt` (checked on `cJSON.c` in `build/compile_commands.json`) and `target_compile_definitions(cjson PUBLIC ...)` in `test/host/CMakeLists.txt`. A `static_assert` in `protocol.cpp` keeps both equal to `kJsonNestingMax`. A deeper frame is refused as `json_nesting_max=32, frame needed N`.
+
+## provisioning reply time
+
+Release build, ADV on home WiFi, link live on Home, 10 `T3PROV` frames with wifi, the same relay URL and a pair code (the device has a token, so the code is spent at boot without pairing). The time is from the frame write to the `\x02T3PROV ok` line, read through `provision.py`'s own `open_port`, `read_frame` and `PREFIX`, with the port's read timeout cut to 2 ms:
+
+| run | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ms | 18 | 15 | 28 | 17 | 30 | 30 | 20 | 26 | 15 | 17 |
+
+- Slowest 30 ms. That covers three NVS writes (wifi, relay, code) and the 100 ms drain wait, which returns as soon as the bytes are out.
+- With `provision.py` as shipped, all 10 runs read 201 ms. That is its 0.2 s serial read timeout, not the device.
+- Every run then restarted and went live again 20.1 to 20.6 s after the reply.
+

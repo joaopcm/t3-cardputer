@@ -1,0 +1,9 @@
+#!/bin/sh
+printf 'loginctl %s\n' "$*" >>"$STUB_STATE/calls.log"
+case "$*" in
+  "show-user tester -p Linger")
+    if [ -e "$STUB_STATE/linger" ]; then echo Linger=yes; else echo Linger=no; fi
+    ;;
+  "enable-linger tester") touch "$STUB_STATE/linger" ;;
+  *) echo "stub loginctl: unexpected $*" >&2; exit 2 ;;
+esac

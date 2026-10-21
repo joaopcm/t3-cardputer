@@ -52,7 +52,9 @@ public:
         std::optional<std::string> forgetWifi;
         std::optional<PairRequest> pair;
         std::optional<std::string> storeToken;
+        std::optional<std::string> relayUrl;
         bool reconnect = false;
+        bool pairCodeSpent = false;
     };
 
     App(const HelloCaps &caps, uint64_t idSeed);
@@ -64,13 +66,15 @@ public:
     Out onRelay(const RelayMsg &msg, uint32_t nowMs);
     Out onFrame(std::string_view json, uint32_t nowMs);
     Out onLinkStatus(std::string_view status, uint32_t nowMs);
-    Out onBoot(bool hasWifi, bool hasToken);
+    Out onBoot(bool hasWifi, bool hasToken, bool hasRelay);
+    void setRelayUrl(std::string https);
     Out onAuthRejected();
     void onDeviceError(std::string_view why);
     void onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs);
     void onWifiScan(std::vector<WifiNet> nets);
     Out onWifiResult(bool ok, std::string_view why);
-    Out onPairResult(std::optional<std::string> token, std::string_view why);
+    Out startAutoPair(std::string code);
+    Out onPairResult(std::optional<std::string> token, std::string_view why, int httpStatus);
     Out onTokenStored(bool ok, std::string_view why);
     void onWifiForgotten(std::string_view ssid, bool ok, std::string_view why);
     void draw(Grid &grid) const;
@@ -79,7 +83,7 @@ public:
     bool recording() const;
 
 private:
-    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiSsid, SetupWifiPassword, SetupPair, Voice };
+    enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiSsid, SetupWifiPassword, SetupPair, SetupRelay, Voice };
     enum class Voice { Recording, Transcribing, Review };
     enum class Field { None, Model, Workspace, Mode };
     enum class GiveBack { Refused, NotSent, Unconfirmed };
@@ -173,11 +177,13 @@ private:
     Out wifiSsidKey(Key key);
     Out wifiPasswordKey(Key key);
     Out pairKey(Key key);
+    Out relayKey(Key key);
     void drawSetupBar(Grid &grid, std::string_view step) const;
     void drawWifiList(Grid &grid) const;
     void drawWifiSsid(Grid &grid) const;
     void drawWifiPassword(Grid &grid) const;
     void drawPair(Grid &grid) const;
+    void drawRelay(Grid &grid) const;
 
     Out startVoice(uint32_t nowMs);
     Out stopVoice(uint32_t nowMs);
@@ -239,6 +245,10 @@ private:
     std::string pairCode_;
     std::string pairNote_;
     bool pairing_ = false;
+    bool autoPairing_ = false;
+    bool hasRelay_ = false;
+    std::string relayUrl_;
+    std::string relayText_;
 
     Screen voiceFrom_ = Screen::Thread;
     Voice voice_ = Voice::Review;

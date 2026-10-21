@@ -1,19 +1,26 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #include "sdkconfig.h"
 #include "t3/keys.h"
 
-enum class DebugNetCut { None, LeaveAp, BlackHole, Restore };
+enum class DebugNetCut { None, LeaveAp, BlackHole, Restore, Stage };
 
 #ifdef CONFIG_T3_DEBUG_SERIAL
 
 bool debug_serial_start();
+void debug_serial_handle(std::string_view line);
 bool debug_serial_poll_key(t3::Key *key);
 bool debug_serial_poll_drop();
 DebugNetCut debug_serial_poll_net_cut();
 bool debug_serial_poll_power(uint32_t *dimAfterMs, uint32_t *offAfterMs);
+bool debug_serial_staged();
+std::optional<std::string> debug_serial_poll_frame();
+void debug_serial_frame_done(std::string_view screen);
 
 #else
 
@@ -41,5 +48,17 @@ inline bool debug_serial_poll_power(uint32_t *, uint32_t *)
 {
     return false;
 }
+
+inline bool debug_serial_staged()
+{
+    return false;
+}
+
+inline std::optional<std::string> debug_serial_poll_frame()
+{
+    return std::nullopt;
+}
+
+inline void debug_serial_frame_done(std::string_view) {}
 
 #endif

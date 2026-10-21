@@ -1,2 +1,0 @@
-# esp_websocket_client needs ws/wss; an https:// URL here is rewritten to wss:// at configure time
-set(T3_RELAY_URL "wss://relay.example.invalid:8443")

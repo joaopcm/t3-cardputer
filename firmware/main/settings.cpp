@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cstring>
+#include <variant>
 
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "t3/relay_url.h"
 
 namespace settings {
 
@@ -15,10 +17,13 @@ constexpr char TAG[] = "settings";
 constexpr char kNamespace[] = "t3";
 constexpr char kWifiKey[] = "wifi";
 constexpr char kTokenKey[] = "token";
+constexpr char kRelayUrlKey[] = "relay_url";
+constexpr char kRelayChangedKey[] = "relay_changed";
+constexpr char kPairCodeKey[] = "pair_code";
 
 struct WifiRecord {
     char ssid[kSsidMax + 1];
-    char password[kPasswordMax + 1];
+    char password[kPasswordMax];
 };
 
 class Handle {
@@ -185,7 +190,7 @@ SavedWifi wifi()
     Records read = readRecords();
     SavedWifi saved{{}, std::move(read.error)};
     for (const WifiRecord &record : read.list) {
-        saved.list.push_back({record.ssid, record.password});
+        saved.list.push_back({record.ssid, std::string(record.password, strnlen(record.password, sizeof(record.password)))});
     }
     return saved;
 }
@@ -248,6 +253,65 @@ std::optional<std::string> setToken(std::string_view token)
 std::optional<std::string> wipeToken()
 {
     return eraseKey(kTokenKey);
+}
+
+std::optional<std::string> relayUrl()
+{
+    return readString(kRelayUrlKey);
+}
+
+std::optional<std::string> setRelayUrl(std::string_view url)
+{
+    if (url.empty()) {
+        return std::string("relay url: empty");
+    }
+    std::variant<t3::RelayUrl, std::string> parsed = t3::parseRelayUrl(url);
+    if (std::string *error = std::get_if<std::string>(&parsed)) {
+        return std::move(*error);
+    }
+    const std::string &https = std::get<t3::RelayUrl>(parsed).https;
+    const std::optional<std::string> stored = relayUrl();
+    const bool wipe = t3::relayChangeWipesToken(stored ? std::optional<std::string_view>(*stored) : std::nullopt, https);
+    if (std::optional<std::string> error = writeString(kRelayUrlKey, https)) {
+        return error;
+    }
+    if (!wipe) {
+        return std::nullopt;
+    }
+    // why: the token was issued by the old relay (docs/superpowers/plans/2026-10-21-distribution.md "Global Constraints"); the flag carries the notice across the restart that follows, and goes after the url so a failed url write never shows a false notice
+    const std::optional<std::string> flagError = writeString(kRelayChangedKey, "1");
+    const std::optional<std::string> wipeError = wipeToken();
+    if (flagError || wipeError) {
+        return flagError ? flagError : wipeError;
+    }
+    ESP_LOGI(TAG, "relay changed: token cleared, pair again");
+    return std::nullopt;
+}
+
+bool takeRelayChanged()
+{
+    if (!readString(kRelayChangedKey)) {
+        return false;
+    }
+    if (const std::optional<std::string> error = eraseKey(kRelayChangedKey)) {
+        ESP_LOGE(TAG, "%s", error->c_str());
+    }
+    return true;
+}
+
+std::optional<std::string> pendingPairCode()
+{
+    return readString(kPairCodeKey);
+}
+
+std::optional<std::string> setPendingPairCode(std::string_view code)
+{
+    return writeString(kPairCodeKey, code);
+}
+
+std::optional<std::string> clearPendingPairCode()
+{
+    return eraseKey(kPairCodeKey);
 }
 
 }
