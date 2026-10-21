@@ -8,12 +8,14 @@ cd "$FW_DIR"
 # receipt: docs/receipts/2026-10-21-launcher-slot.md "slot", Launcher 2.9.1 on 8 MB flash leaves 0x170000..0x800000 free for installed apps
 LAUNCHER_APP_SLOT_BYTES=$((0x800000 - 0x170000))
 LAUNCHER_APP_ALIGN=$((0x10000))
+LEAK_PATTERN='[a-z0-9]\.ts\.net|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|prod-[0-9a-f]+\.t3coderelay'
 
 . "$FW_DIR/scripts/idf-env.sh"
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR/t3-cardputer-app.bin" "$OUT_DIR/t3-cardputer-full.bin"
 rm -f "$OUT_DIR/sdkconfig"
+rm -rf "$OUT_DIR/web"
 export IDF_TARGET=esp32s3
 idf.py -B "$OUT_DIR" \
   -DSDKCONFIG="$OUT_DIR/sdkconfig" \
@@ -39,5 +41,20 @@ idf.py -B "$OUT_DIR" merge-bin -o "$OUT_DIR/t3-cardputer-full.bin"
 
 full_bytes=$(stat -c %s "$OUT_DIR/t3-cardputer-full.bin")
 echo "app image $app_bytes bytes (partition $needed of launcher slot $LAUNCHER_APP_SLOT_BYTES), full image $full_bytes bytes"
-echo "artifacts embed the relay URL: keep them local, never commit or upload"
+
+version=$(git -C "$FW_DIR" describe --tags --always --dirty)
+python3 "$FW_DIR/scripts/web-manifest.py" "$OUT_DIR" "$FW_DIR/partitions.csv" "$OUT_DIR/web" "$version"
+
+leak_status=0
+leaks=$(grep -raEl "$LEAK_PATTERN" "$OUT_DIR") || leak_status=$?
+if (( leak_status == 0 )); then
+  echo "release leak check failed: relay url, tailnet name or tailscale ip found in:" >&2
+  echo "$leaks" >&2
+  exit 1
+fi
+if (( leak_status != 1 )); then
+  echo "release leak check could not read $OUT_DIR (grep exit $leak_status)" >&2
+  exit 1
+fi
+
 echo "full image at 0x0 erases NVS (wifi + token); scripts/flash-app.sh writes only the app and keeps it"
