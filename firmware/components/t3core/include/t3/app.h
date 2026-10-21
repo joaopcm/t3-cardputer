@@ -82,6 +82,7 @@ private:
     enum class Screen { Connecting, Home, Thread, Request, Projects, Prompt, SetupWifiList, SetupWifiSsid, SetupWifiPassword, SetupPair, Voice };
     enum class Voice { Recording, Transcribing, Review };
     enum class Field { None, Model, Workspace, Mode };
+    enum class GiveBack { Refused, NotSent, Unconfirmed };
 
     struct Line {
         std::string text;
@@ -122,11 +123,12 @@ private:
     size_t unsentBytes() const;
     std::string dropOldestUnsent(size_t excess);
     void dropAnswersNoLongerPending();
-    void giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs);
+    std::string giveBack(const Unacked &item, GiveBack outcome, std::string_view why, uint32_t nowMs);
     bool keep(const Unacked &item);
     bool takeReply();
     void inform(std::string text, Color color = Color::Red);
     void inform(const std::vector<std::string> &notes, Color color);
+    void informAlso(const std::vector<std::string> &notes, Color color);
     Out dropLink(std::vector<std::string> &notes, Color &color);
     std::string dropUnacked();
     void type(std::string &text, char c, int max, std::string_view budget, std::string_view what);

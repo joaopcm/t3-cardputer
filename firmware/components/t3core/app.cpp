@@ -208,6 +208,7 @@ void App::dropAnswersNoLongerPending()
     if (!home_ || !home_->approvals.available || home_->t3 != T3Status::Ok) {
         return;
     }
+    std::vector<std::string> notes;
     for (auto item = unsent_.begin(); item != unsent_.end();) {
         const HomeRow *row = item->requestId ? homeRow(item->threadId) : nullptr;
         const bool settled = row && (row->kind == HomeKind::Running || row->kind == HomeKind::Done || row->kind == HomeKind::Failed);
@@ -215,9 +216,10 @@ void App::dropAnswersNoLongerPending()
             ++item;
             continue;
         }
-        inform("saved answer to " + row->title + " dropped: nothing pending there", Color::Warn);
+        notes.push_back("saved answer to " + row->title + " dropped: nothing pending there");
         item = unsent_.erase(item);
     }
+    informAlso(notes, Color::Warn);
 }
 
 bool App::sendTracked(Out &out, std::string_view what, Unacked item)
@@ -241,14 +243,15 @@ bool App::sendTracked(Out &out, std::string_view what, Unacked item)
     return true;
 }
 
-void App::giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs)
+std::string App::giveBack(const Unacked &item, GiveBack outcome, std::string_view why, uint32_t nowMs)
 {
+    const bool refused = outcome == GiveBack::Refused;
     const std::string kind = item.request ? "answer" : "reply";
-    const std::string here = (refused ? std::string("refused: ") : kind + " not sent: ") + std::string(why);
+    const std::string lost = outcome == GiveBack::Unconfirmed ? " unconfirmed: " : " not sent: ";
+    const std::string here = (refused ? std::string("refused: ") : kind + lost) + std::string(why);
     const bool onThread = screen_ == Screen::Thread && threadId_ == item.threadId;
     if (refused && item.request && requestGone(why)) {
-        inform(onThread ? here : "answer to " + threadTitle(item.threadId) + " failed: " + std::string(why));
-        return;
+        return onThread ? here : "answer to " + threadTitle(item.threadId) + " failed: " + std::string(why);
     }
     if (onThread) {
         if (item.request) {
@@ -257,24 +260,20 @@ void App::giveBack(const Unacked &item, bool refused, std::string_view why, uint
                     typingFor_ = item.option;
                     answer_ = item.text;
                 }
-                inform(here);
-                return;
+                return here;
             }
             keep(item);
-            inform(here + ", Tab reopens it");
-            return;
+            return here + ", Tab reopens it";
         }
         if (reply_.empty()) {
             reply_ = item.text;
-            inform(here);
-            return;
+            return here;
         }
         keep(item);
-        inform(here + ", text back after this reply is sent");
-        return;
+        return here + ", text back after this reply is sent";
     }
-    const std::string elsewhere = kind + " to " + threadTitle(item.threadId) + (refused ? " failed: " : " not sent: ") + std::string(why);
-    inform(keep(item) ? elsewhere + ", text back when it opens" : elsewhere);
+    const std::string elsewhere = kind + " to " + threadTitle(item.threadId) + (refused ? " failed: " : lost) + std::string(why);
+    return keep(item) ? elsewhere + ", text back when it opens" : elsewhere;
 }
 
 bool App::keep(const Unacked &item)
@@ -317,6 +316,17 @@ void App::inform(const std::vector<std::string> &notes, Color color)
         text += (text.empty() ? "" : "; ") + note;
     }
     inform(std::move(text), color);
+}
+
+void App::informAlso(const std::vector<std::string> &notes, Color color)
+{
+    if (notice_.empty()) {
+        inform(notes, color);
+        return;
+    }
+    std::vector<std::string> joined{notice_};
+    joined.insert(joined.end(), notes.begin(), notes.end());
+    inform(joined, noticeColor_ == Color::Red ? Color::Red : color);
 }
 
 App::Out App::dropLink(std::vector<std::string> &notes, Color &color)
@@ -525,9 +535,11 @@ App::Out App::onLinkStatus(std::string_view status, uint32_t nowMs)
         unencoded.push_back(std::move(*item));
         item = unacked_.erase(item);
     }
+    std::vector<std::string> givenBack;
     for (const Unacked &item : unencoded) {
-        giveBack(item, false, "out of memory on resend, may have gone through", nowMs);
+        givenBack.push_back(giveBack(item, GiveBack::Unconfirmed, "out of memory on resend, may have gone through", nowMs));
     }
+    inform(givenBack, Color::Red);
     const bool voiceOnThread = screen_ == Screen::Voice && voiceFrom_ == Screen::Thread;
     const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request || voiceOnThread) && !threadId_.empty();
     if (!threadOpen) {
@@ -556,7 +568,7 @@ void App::onSendFailed(std::string_view frame, std::string_view why, uint32_t no
     }
     const Unacked item = std::move(*tracked);
     unacked_.erase(tracked);
-    giveBack(item, false, why, nowMs);
+    inform(giveBack(item, GiveBack::NotSent, why, nowMs));
 }
 
 std::string App::threadTitle(std::string_view threadId) const
@@ -584,7 +596,7 @@ void App::onAck(const Ack &ack, uint32_t nowMs)
         if (ack.ok) {
             inform(item.confirmed, Color::Ok);
         } else {
-            giveBack(item, true, why, nowMs);
+            inform(giveBack(item, GiveBack::Refused, why, nowMs));
         }
         return;
     }

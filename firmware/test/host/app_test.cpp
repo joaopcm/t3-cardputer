@@ -1274,7 +1274,24 @@ TEST_CASE("a reply that cannot be encoded again on reconnect says it may have go
         FailingAllocator failing;
         CHECK(app.onLinkStatus("", tick()).send.empty());
     }
-    CHECK(contains(shown(app), "reply to layout engine not sent: out of memory on resend, may have gone through, text back when it opens"));
+    CHECK(contains(shown(app), "reply to layout engine unconfirmed: out of memory on resend, may have gone through, text back when it opens"));
+}
+
+TEST_CASE("every reply that cannot be encoded again on one reconnect shows")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    only(press(app, named(KeyName::Enter)));
+    type(app, "again");
+    only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
+    {
+        FailingAllocator failing;
+        CHECK(app.onLinkStatus("", tick()).send.empty());
+    }
+    const std::string note = "reply to layout engine unconfirmed: out of memory on resend, may have gone through, text back when it opens";
+    CHECK(contains(shown(app), note + "; " + note));
 }
 
 TEST_CASE("unacked replies have a budget that names itself and keeps the text")
@@ -1457,6 +1474,23 @@ TEST_CASE("a saved answer stays while home cannot see approvals")
     push(app, relay(kBounceRequest));
     CHECK(app.screenName() == "approval");
     CHECK(contains(allText(app), "use staging"));
+}
+
+TEST_CASE("an answer given back on reconnect and then dropped by home shows both")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
+    {
+        FailingAllocator failing;
+        CHECK(app.onLinkStatus("", tick()).send.empty());
+    }
+    push(app, relay(R"({"type":"home","rows":[{"threadId":"thr_bounce","kind":"running","project":"resend-api","title":"fix bounce webhook","age":"1m"}],
+ "counts":{"needs":0,"running":1,"done":0},"approvals":{"available":true},"warnings":[],"t3":"ok"})"));
+    CHECK(contains(shown(app), "answer to fix bounce webhook unconfirmed: out of memory on resend, may have gone through, text back when it opens; saved answer to fix bounce webhook dropped: nothing pending there"));
 }
 
 TEST_CASE("4401 drops unconfirmed replies instead of re-sending them under the new device, and keeps their text")
