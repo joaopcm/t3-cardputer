@@ -23,23 +23,33 @@ TDM with only slot 0 active halves the DMA memory against stereo.
 
 ## dma
 
-`kDmaChunks` = 4 (`firmware/main/mic.cpp`): 4 x 3200 = 12800 bytes, allocated once at boot. The driver queues `desc_num - 1` buffers, so 300 ms of audio can wait for the main loop.
+`kMicDmaChunks` = 4 (`firmware/main/mic.h`): 4 x 3200 = 12800 bytes. The driver queues `desc_num - 1` buffers, so `kMicBufferMs` = 300 ms of audio can wait for the main loop.
 
-- The main loop sends one chunk per pass and the I2S receive interrupt wakes it. Worst gap between two sends over every home WiFi run below is 130 ms against the 100 ms chunk period, so the main loop was at most about 30 ms late. 300 ms is 10x that.
-- The only stall that overran it was the debug `\x02SHOT` (the hex dump holds the canvas lock while `draw()` waits): gap 353 to 361 ms, `voice: mic_buffer_ms=300, a stall lost 100 ms of audio` on screen. That is the loud failure path working; release builds have no SHOT.
-- Heap cost: see "heap".
+- The main loop sends one chunk per pass, and the I2S receive interrupt wakes it. The worst gap between two sends over every home WiFi run below is 130 ms against the 100 ms chunk period, so the main loop was at most about 30 ms late. 300 ms is 10x that.
+- The only stall that overran it was the debug `\x02SHOT` (the hex dump holds the canvas lock while `draw()` waits): gaps of 353 to 361 ms, and `voice: mic_buffer_ms=300, a stall lost 100 ms of audio` on screen. That is the loud failure path working; release builds have no SHOT.
+- The channel and its DMA buffers exist only while the clock runs (warm-up and recordings, `i2s_new_channel` / `i2s_del_channel`). The controller allows this exception to allocate-at-boot after the first soak (see "heap").
 
 ## warm-up
 
-`kWarmUpMs` = 2000 (`firmware/main/mic.cpp`).
+`kWarmUpUs` = 2 s (`firmware/main/mic.cpp`).
 
 | what | zero chunks at the start of a recording |
 | --- | --- |
 | codec set up at each talk-down, powered down at each release (M5Unified's disable table) | first recording 0 (one -14 dBFS power-up thump), every later one 9 (0.9 s of zeros) |
 | codec set up once at boot, clock running only for the register writes, never powered down | first recording 10 (1.0 s), later ones 0 |
-| codec set up at boot with the clock running for 2 s, never powered down (shipped) | 0 on every recording, first one included |
+| codec set up with the clock left running for 2 s after power-up (shipped) | 0 (first sound at 116 ms, the first chunk) |
 
-So the ADC needs about 1 s of clock once per power-up. 2000 ms is 2x the measured 1.0 s. It runs after the first draw, while WiFi is already joining (boot to `wifi up` took 8 to 26 s in these runs), so it adds no time to `live`. The analog side stays powered between recordings; its current is not measured (add it to the Task 9 discharge run).
+So the ADC needs about 1 s of clock after each power-up. 2 s is 2x the measured 1.0 s.
+
+Shipped: the codec powers up on the first main-loop pass at boot and on every screen wake, and powers down when the screen goes off (current estimate in `2026-10-21-firmware-power.md` "mic codec"). The warm-up does not block: the channel runs in the background and `mic_tick()` closes it when the 2 s are up. Measured:
+
+| when talk-down came | first sound |
+| --- | --- |
+| first recording after boot | 116 ms (warm) |
+| 0.8 s after a screen wake | 318 ms, so 2 chunks (200 ms) of zeros |
+| 4.0 s after a screen wake | 116 ms (warm) |
+
+The waking key is swallowed, so talk needs a second press. A recording started within about 1 s of a wake loses up to that second's head.
 
 ## gain
 
@@ -93,7 +103,13 @@ Not changed. A build that turned WiFi modem sleep off while recording was a misd
 
 ## send
 
-Audio frames use the text path's `kSendWaitTicks` (5000 ms, `firmware/main/transport.cpp`) and its open-generation check (`sendable()`): a frame for a connection that is no longer the open one is refused, never sent into the next connection. No new timeout: with 16 KB in flight a send only blocks after 0.5 s of unacknowledged audio, past the 300 ms the DMA can hold, so a long block already shows `mic_buffer_ms` on screen, and a failed send ends the recording with `voice: <why>`.
+Audio frames go through the text path's open-generation check (`sendable()`): a frame for a connection that is no longer the open one is refused, never sent into the next connection. Each send waits at most `kMicBufferMs` (300 ms), what the DMA can hold. A send that waits longer means the link stopped carrying audio. The device then closes the socket like a drop (`relay unreachable: audio send stalled 300 ms, 3200 bytes not sent`), and the recording ends with `voice: connection lost`. One send writes up to four 1024-byte websocket fragments, each with that wait, so the worst main-loop block is 1.2 s.
+
+## link lost while talking
+
+- Black hole (debug `\x02NETDOWN`: the WiFi netif swallows every outgoing frame, the association and socket stay up, like an access point that went out of range before the beacon timeout). With the 5000 ms text send timeout, the main loop froze 5.2 s: from 44236 to 49456 ms the REC timer stopped and the DMA overflowed, then `voice: audio send failed, 3200 bytes not sent`. With the 300 ms wait, the recording ended 520 to 530 ms after the cut (the 16 KB send buffer filled, then one 300 ms wait), with `voice: connection lost` on screen (`/tmp/t3-task10-blackhole-held.png`), and nothing more was sent.
+- Leaving the access point (debug `\x02WIFIOFF`, `esp_wifi_disconnect`): `link wifi down` and `voice cancelled` in the same millisecond, 10 ms after the cut. After talk-up, WiFi and the link came back by themselves, and the next hold streamed 20 chunks and got its transcript.
+- Socket drop (debug `\x02DROP`): cancelled in the same pass (Review Focus 1, in the report).
 
 ## streaming on home WiFi
 
@@ -106,7 +122,7 @@ Audio frames use the text path's `kSendWaitTicks` (5000 ms, `firmware/main/trans
 | 3 x 20 s, modem sleep on | 201, 201, 200 | 31969 to 31971 B/s | 19 to 47 ms | 116 to 128 ms | 320000 samples, 20.0 s (one checked) |
 | 30 s | 301 | 31980 B/s | 48 ms | 130 ms | 481600 samples, 30.1 s |
 
-- Every recording arrived whole: samples received = chunks x chunk size.
+- Every recording arrived whole: samples received = chunks x chunk size. Rows above the fix round were taken with the DMA held from boot and the 5000 ms send wait; the streaming path is otherwise the same.
 - Worst gap 130 ms (SHOT runs aside) against the relay's `audio_idle_timeout_ms` = 5000: 38x. The hotspot gap is measured at Checkpoint B, and `audioIdleTimeoutMs` moves in Task 11 (controller ruling). `relay/src/config.ts` is unchanged here.
 - Transcript after `audio_end`: 7.4 to 8.4 s for 4 to 30 s clips, 22.5 s for the 60 s clip. Silence came back as an empty transcript (`voice: nothing heard`), room noise as `(whistling)` or `(muffled speaking)`.
 
@@ -115,12 +131,16 @@ Audio frames use the text path's `kSendWaitTicks` (5000 ms, `firmware/main/trans
 | what | free | largest block |
 | --- | --- | --- |
 | live before this task (`firmware-network.md`, ring build) | 155300 | 90112 |
-| ready | 180068 | 116736 |
-| live | 133120 to 136664 | 67584 to 69632 |
-| while recording | 130588 to 132116 | 63488 to 67584 |
-| live again after a recording and a forced reconnect | 134992 | 65536 |
+| DMA held from boot: live | 133120 to 136664 | 65536 to 69632 |
+| DMA held from boot: 32-cycle soak (16 drops mid-recording) | 130208 at least | 49152 at least (connect and live) |
+| DMA only while the clock runs: ready | 193624 | 131072 |
+| DMA only while the clock runs: live, screen off | 148708 | 79872 |
+| DMA only while the clock runs: 32-cycle soak (16 drops mid-recording), at connect | 145456 at least | 62464 at least, 79872 at most |
+| same soak, at live | 143856 at least | 63488 at least |
+| same soak, at mic on | 128432 at least | 65536 |
 
-The largest block stays above the 60398 TLS line (`firmware-network.md` "soak"), but with less room than before: 1.09x to 1.15x, from 1.49x. The mic's 12800 DMA bytes are most of the drop; the rest was not broken down.
+- First soak: with the DMA held for good, the largest block fell to 49152 at both connect and live, under the 60398 TLS line (`firmware-network.md` "soak"). The ruling fix moved the DMA to "only while the clock runs". Re-soak: connect never went under 62464 (1.03x the line).
+- Connects after a plain drop always had 79872 (1.32x). The low readings (62464, 63488) were all connects after a drop mid-recording. There, the old socket's TLS session and up to 16 KB of unacknowledged audio are still being freed when the 500 ms backoff reconnects, so free heap at connect is about 145 KB instead of about 184 KB.
 
 ## stacks
 

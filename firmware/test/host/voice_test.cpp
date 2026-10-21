@@ -553,3 +553,15 @@ TEST_CASE("a request pushed for the thread while recording waits for Tab")
     CHECK(press(app, KeyName::Tab).send.empty());
     CHECK(app.screenName() == "approval");
 }
+
+TEST_CASE("an audio_start that never left the device ends the recording before any audio")
+{
+    App app = onThread();
+    const App::Out down = press(app, KeyName::TalkDown);
+    REQUIRE(down.audio == Audio::Start);
+    const App::Out out = app.onAudioFailed("not connected, 52 bytes not sent");
+    CHECK(out.audio == Audio::Cancel);
+    CHECK_FALSE(app.recording());
+    CHECK(app.screenName() == "thread");
+    CHECK(rows(app)[0].rfind("voice: not connected", 0) == 0);
+}

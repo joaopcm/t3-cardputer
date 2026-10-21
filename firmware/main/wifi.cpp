@@ -7,9 +7,12 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_net_stack.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "lwip/netif.h"
+#include "lwip/tcpip.h"
 #include "settings.h"
 
 namespace {
@@ -360,4 +363,19 @@ std::optional<WifiEvent> wifi_poll(uint32_t nowMs)
     WifiEvent event = std::move(pending.front());
     pending.pop_front();
     return event;
+}
+
+void wifi_debug_cut(bool blackHole)
+{
+    if (!blackHole) {
+        esp_wifi_disconnect();
+        return;
+    }
+    // why: a netif that swallows every outgoing frame keeps the association and the socket but delivers nothing, like an access point that went out of range before the beacon timeout
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta != nullptr) {
+        tcpip_callback(
+            [](void *netif) { static_cast<struct netif *>(netif)->linkoutput = [](struct netif *, struct pbuf *) -> err_t { return ERR_OK; }; },
+            esp_netif_get_netif_impl(sta));
+    }
 }

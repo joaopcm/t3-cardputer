@@ -4,7 +4,9 @@
 
 #include "driver/i2s_tdm.h"
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "t3/protocol.h"
@@ -18,10 +20,8 @@ constexpr gpio_num_t kPinBck = GPIO_NUM_41;
 constexpr gpio_num_t kPinWs = GPIO_NUM_43;
 constexpr gpio_num_t kPinDin = GPIO_NUM_46;
 constexpr i2s_port_t kPort = I2S_NUM_0;
-// receipt: docs/receipts/2026-10-21-firmware-voice.md "dma"
-constexpr uint32_t kDmaChunks = 4;
-// receipt: docs/receipts/2026-10-21-firmware-voice.md "warm-up", the ADC gave 1.0 s of zeros after its first clock start, 2x; it overlaps the WiFi join
-constexpr uint32_t kWarmUpMs = 2000;
+// receipt: docs/receipts/2026-10-21-firmware-voice.md "warm-up", the ADC gave 1.0 s of zeros after each power-up, 2x
+constexpr int64_t kWarmUpUs = 2000 * 1000;
 
 // receipt: M5Unified 0.2.27 M5Unified.inl es8311_i2c_addr0, written at 100 kHz by in_i2c_bulk_write
 constexpr uint8_t kCodecAddress = 0x18;
@@ -56,13 +56,20 @@ constexpr Reg kCodecOn[] = {
     {kRegAdcScale, kAdcScaleSteps},
     {kRegAdcVolume, kAdcVolume},
 };
+// receipt: M5Unified 0.2.27 M5Unified.inl _microphone_enabled_cb_cardputer_adv disabled_bulk_data
+constexpr Reg kCodecOff[] = {
+    {0x0D, 0xFC},
+    {0x0E, 0x6A},
+    {0x00, 0x00},
+};
 
 i2s_chan_handle_t rx;
 TaskHandle_t reader;
 i2c_master_dev_handle_t codec;
 std::atomic<uint32_t> lostChunks{0};
 uint32_t lostSeen = 0;
-bool ready = false;
+bool codecOn = false;
+int64_t warmUntilUs = 0;
 bool running = false;
 
 bool IRAM_ATTR onRecv(i2s_chan_handle_t, i2s_event_data_t *, void *)
@@ -89,6 +96,54 @@ esp_err_t writeTable(const Reg *table, size_t count)
     return ESP_OK;
 }
 
+bool warming()
+{
+    return esp_timer_get_time() < warmUntilUs;
+}
+
+// why: the DMA buffers exist only while the clock runs; kept for good they left the TLS reconnect a 49152-byte largest block, under its 60398 line (docs/receipts/2026-10-21-firmware-voice.md "heap")
+std::optional<std::string> openChannel()
+{
+    if (rx != nullptr) {
+        return std::nullopt;
+    }
+    i2s_chan_config_t chanConfig = I2S_CHANNEL_DEFAULT_CONFIG(kPort, I2S_ROLE_MASTER);
+    chanConfig.dma_desc_num = kMicDmaChunks;
+    chanConfig.dma_frame_num = kMicChunkSamples;
+    if (i2s_new_channel(&chanConfig, nullptr, &rx) != ESP_OK) {
+        rx = nullptr;
+        return "mic_dma_bytes=" + std::to_string(kMicDmaChunks * kMicChunkSamples * sizeof(int16_t)) + ", alloc failed, largest_block=" +
+               std::to_string(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    }
+    i2s_tdm_config_t tdmConfig = {
+        .clk_cfg = I2S_TDM_CLK_DEFAULT_CONFIG(t3::kAudioSampleRate),
+        .slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_TDM_SLOT0),
+        .gpio_cfg = {.mclk = I2S_GPIO_UNUSED, .bclk = kPinBck, .ws = kPinWs, .dout = I2S_GPIO_UNUSED, .din = kPinDin, .invert_flags = {}},
+    };
+    // why: the ES8311 clocks itself from BCLK as 32 bits per frame (M5Unified's MCLK=BCLK table), so the frame keeps two 16-bit slots; in std mono mode the S3's RX DMA still wrote both (equal sample pairs at twice the rate, docs/receipts/2026-10-21-firmware-voice.md "one slot"), TDM with slot 0 active writes only the mic's
+    tdmConfig.slot_cfg.total_slot = 2;
+    i2s_event_callbacks_t callbacks = {};
+    callbacks.on_recv_q_ovf = onOverflow;
+    callbacks.on_recv = onRecv;
+    if (i2s_channel_init_tdm_mode(rx, &tdmConfig) != ESP_OK || i2s_channel_register_event_callback(rx, &callbacks, nullptr) != ESP_OK ||
+        i2s_channel_enable(rx) != ESP_OK) {
+        i2s_del_channel(rx);
+        rx = nullptr;
+        return std::string("mic: i2s tdm rx init failed");
+    }
+    return std::nullopt;
+}
+
+void closeChannel()
+{
+    if (rx == nullptr) {
+        return;
+    }
+    i2s_channel_disable(rx);
+    i2s_del_channel(rx);
+    rx = nullptr;
+}
+
 }
 
 bool mic_init(i2c_master_bus_handle_t bus)
@@ -103,51 +158,60 @@ bool mic_init(i2c_master_bus_handle_t bus)
     deviceConfig.scl_speed_hz = kCodecBusHz;
     if (i2c_master_bus_add_device(bus, &deviceConfig, &codec) != ESP_OK) {
         ESP_LOGE(TAG, "es8311 0x%02x not added to the bus", kCodecAddress);
+        codec = nullptr;
         return false;
     }
-
     reader = xTaskGetCurrentTaskHandle();
-    i2s_chan_config_t chanConfig = I2S_CHANNEL_DEFAULT_CONFIG(kPort, I2S_ROLE_MASTER);
-    chanConfig.dma_desc_num = kDmaChunks;
-    chanConfig.dma_frame_num = kMicChunkSamples;
-    if (i2s_new_channel(&chanConfig, nullptr, &rx) != ESP_OK) {
-        ESP_LOGE(TAG, "mic_dma_bytes=%u alloc failed", static_cast<unsigned>(kDmaChunks * kMicChunkSamples * sizeof(int16_t)));
-        return false;
-    }
-    i2s_tdm_config_t tdmConfig = {
-        .clk_cfg = I2S_TDM_CLK_DEFAULT_CONFIG(t3::kAudioSampleRate),
-        .slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_TDM_SLOT0),
-        .gpio_cfg = {.mclk = I2S_GPIO_UNUSED, .bclk = kPinBck, .ws = kPinWs, .dout = I2S_GPIO_UNUSED, .din = kPinDin, .invert_flags = {}},
-    };
-    // why: the ES8311 clocks itself from BCLK as 32 bits per frame (M5Unified's MCLK=BCLK table), so the frame keeps two 16-bit slots; in std mono mode the S3's RX DMA still wrote both (equal sample pairs at twice the rate, docs/receipts/2026-10-21-firmware-voice.md "one slot"), TDM with slot 0 active writes only the mic's
-    tdmConfig.slot_cfg.total_slot = 2;
-    i2s_event_callbacks_t callbacks = {};
-    callbacks.on_recv_q_ovf = onOverflow;
-    callbacks.on_recv = onRecv;
-    if (i2s_channel_init_tdm_mode(rx, &tdmConfig) != ESP_OK || i2s_channel_register_event_callback(rx, &callbacks, nullptr) != ESP_OK ||
-        i2s_channel_enable(rx) != ESP_OK) {
-        ESP_LOGE(TAG, "i2s tdm rx init failed");
-        return false;
-    }
-    // why: the ES8311 takes its capture setup only while the I2S clock runs (M5Unified 0.2.27 _microphone_post_start_cb_stopwatch), and its ADC needs a second of clock once per power-up, so it is set up and warmed once here and stays powered
-    const esp_err_t err = writeTable(kCodecOn, std::size(kCodecOn));
-    vTaskDelay(pdMS_TO_TICKS(kWarmUpMs));
-    i2s_channel_disable(rx);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "es8311 setup failed, %s", esp_err_to_name(err));
-        return false;
-    }
-    ready = true;
     return true;
+}
+
+void mic_power_up()
+{
+    if (codec == nullptr || codecOn) {
+        return;
+    }
+    if (std::optional<std::string> error = openChannel()) {
+        ESP_LOGE(TAG, "%s", error->c_str());
+        return;
+    }
+    // why: the ES8311 takes its capture setup only while the I2S clock runs (M5Unified 0.2.27 _microphone_post_start_cb_stopwatch), and its ADC gives about a second of zeros after power-up, so the clock keeps running until it is warm
+    if (const esp_err_t err = writeTable(kCodecOn, std::size(kCodecOn)); err != ESP_OK) {
+        ESP_LOGE(TAG, "es8311 setup failed, %s", esp_err_to_name(err));
+        closeChannel();
+        return;
+    }
+    codecOn = true;
+    warmUntilUs = esp_timer_get_time() + kWarmUpUs;
+}
+
+void mic_power_down()
+{
+    if (!codecOn || running) {
+        return;
+    }
+    closeChannel();
+    warmUntilUs = 0;
+    if (const esp_err_t err = writeTable(kCodecOff, std::size(kCodecOff)); err != ESP_OK) {
+        ESP_LOGW(TAG, "es8311 power down failed, %s", esp_err_to_name(err));
+    }
+    codecOn = false;
+}
+
+void mic_tick()
+{
+    if (!running && !warming()) {
+        closeChannel();
+    }
 }
 
 std::optional<std::string> mic_start()
 {
-    if (!ready) {
-        return std::string("mic: not initialised, see the boot log");
+    if (!codecOn) {
+        return std::string("mic: codec is off, see the boot log");
     }
-    if (i2s_channel_enable(rx) != ESP_OK) {
-        return std::string("mic: i2s enable failed");
+    closeChannel();
+    if (std::optional<std::string> error = openChannel()) {
+        return error;
     }
     lostChunks = 0;
     lostSeen = 0;
@@ -171,7 +235,7 @@ void mic_stop()
         return;
     }
     running = false;
-    i2s_channel_disable(rx);
+    mic_tick();
 }
 
 std::optional<std::string> mic_lost()
@@ -181,7 +245,5 @@ std::optional<std::string> mic_lost()
         return std::nullopt;
     }
     lostSeen = lost;
-    return "mic_buffer_ms=" + std::to_string((kDmaChunks - 1) * kMicChunkMs) + ", a stall lost " + std::to_string(lost * kMicChunkMs) +
-           " ms of audio";
+    return "mic_buffer_ms=" + std::to_string(kMicBufferMs) + ", a stall lost " + std::to_string(lost * kMicChunkMs) + " ms of audio";
 }
-

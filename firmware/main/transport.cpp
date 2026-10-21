@@ -406,15 +406,15 @@ std::optional<std::string> transport_send(std::string_view text)
     return std::nullopt;
 }
 
-std::optional<std::string> transport_send_audio(const int16_t *samples, size_t count)
+std::optional<std::string> transport_send_audio(const int16_t *samples, size_t count, uint32_t waitMs)
 {
     const int bytes = static_cast<int>(count * sizeof(int16_t));
     if (!sendable()) {
         return "not connected, " + std::to_string(bytes) + " audio bytes not sent";
     }
-    const int sent = esp_websocket_client_send_bin(client, reinterpret_cast<const char *>(samples), bytes, kSendWaitTicks);
+    const int sent = esp_websocket_client_send_bin(client, reinterpret_cast<const char *>(samples), bytes, pdMS_TO_TICKS(waitMs));
     if (sent != bytes) {
-        return "audio send failed, " + std::to_string(bytes) + " bytes not sent";
+        return "audio send stalled " + std::to_string(waitMs) + " ms, " + std::to_string(bytes) + " bytes not sent";
     }
     return std::nullopt;
 }

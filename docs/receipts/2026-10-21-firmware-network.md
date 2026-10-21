@@ -175,11 +175,12 @@ T3's approval request ids are 333 chars on the live relay (`runtime-request:prov
 
 A 30-reconnect run straight after the stopped-relay test settled from 154188 to 149752 over the first 18 cycles and then held flat. The 100-reconnect run that followed was flat from the start.
 
-## json parse budget (`kJsonParseBudgetBytes` = 65536)
+## json parse budget (`kJsonParseBudgetBytes` = 49152)
 
 - cJSON already went through the t3core hook on the device (`installJsonHooks` runs on every parse, with plain `malloc` behind it), so an allocation failure already reported `heap: parse needed more`. What was missing was a cap below "all of the heap". A degenerate 8 KiB frame (16.9x, about 138 KB) could take memory that the websocket task and lwIP need, before malloc ever failed.
-- `setJsonParseBudget(65536)` at boot. It counts the bytes cJSON asks for during one `parseRelay` (cJSON frees nothing until the parse ends, so this is the tree peak). A frame that needs more is rejected with `json_parse_budget=65536, frame of N bytes needed more`. Encoders are not counted.
+- `setJsonParseBudget(49152)` at boot (65536 until the voice task, see the last bullet). It counts the bytes cJSON asks for during one `parseRelay` (cJSON frees nothing until the parse ends, so this is the tree peak). A frame that needs more is rejected with `json_parse_budget=49152, frame of N bytes needed more`. Encoders are not counted.
 - Sizing:
-  - 1.95x the ADV's honest worst (4.1 x 8192 = 33.6 KB, synthetic 50-row home).
-  - 1.3x the host's honest bound (6.0 x 8192 = 49.2 KB).
-  - Live free heap with the rx ring is 155300. A parse at the cap uses about 65536 x 1.2 for malloc overhead per node, plus up to 11 KB of typed copy, about 90 KB in all. That leaves about 65 KB free, still above the 60398 TLS line.
+  - 1.46x the ADV's honest worst (4.1 x 8192 = 33.6 KB, synthetic 50-row home).
+  - 1.0x the host's honest bound (6.0 x 8192 = 49152).
+  - Task 8's sizing at 65536: live free heap with the rx ring was 155300. A parse at the cap uses about 65536 x 1.2 for malloc overhead per node, plus up to 11 KB of typed copy, about 90 KB in all. That leaves about 65 KB free, still above the 60398 TLS line.
+- Resized in Task 10 (fix round 1). The mic and the 16 KB TCP send buffer took the live heap to 133120 free, so a parse at 65536 (about 90 KB) would leave about 43 KB, under the 50332-byte TLS need. At 49152 a parse at the cap costs about 49152 x 1.2 + 11 KB = about 70 KB, which leaves about 63 KB of a 133 KB live heap. With the mic's DMA now held only while recording, live free heap is 143856 or more (`2026-10-21-firmware-voice.md` "heap").

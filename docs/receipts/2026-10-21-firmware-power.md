@@ -47,6 +47,19 @@ Why these and not shorter:
 
 `kDimBrightnessDivisor = 4`: M5GFX's default full brightness on the ADV is 127 (`display: full_brightness=127` at boot), so dim is 31. Estimate: a quarter of the backlight duty is still readable indoors and saves up to 15 of the at most 20 mA. The glass was not looked at in a dark room for this; only the sprite was screenshotted.
 
+## mic codec (ES8311)
+
+ESTIMATE, from the datasheet; not measured on the ADV.
+
+| input | value | source |
+| --- | --- | --- |
+| ES8311 normal operation | 8 mA typical at DVDD 1.8 V, PVDD 1.8 V, AVDD 3.3 V, the only operating figure in the datasheet; the front page says "14 mW playback and record". Taken as the upper bound for a powered capture path | ES8311 datasheet rev 7.0 (January 2020), "DC characteristics", https://dl.espressif.com/dl/schematics/Audio_ES8311.pdf |
+| ES8311 power down | 0 uA typical | same table |
+| mic bias | the ES8311 has no bias pin; the ADV's analog MEMS mic is not named in M5's docs. Typical analog MEMS mics draw about 0.1 to 0.25 mA. Assumption, and it does not change with the codec's state | none |
+
+- Codec left powered all day: 8 mA x 24 h = 192 mAh, 16% of the 1200 mAh usable. That is far over the 3% (36 mAh) line.
+- Shipped: the codec is powered down (M5Unified's disable table, then 0 uA) whenever the screen goes off, and powered up again when it wakes, with the I2S clock running 2 s to warm it (`firmware/main/mic.cpp`, `2026-10-21-firmware-voice.md` "warm-up"). While the screen is on, the codec adds at most 8 mA to the 70 to 132 mA of a lit screen. A device that is dark most of the day pays only for its lit minutes: an hour lit is 8 mAh (0.7%).
+
 ## battery level
 
 `power.cpp` logs the battery at boot and on every screen level change: `power: boot battery 100% 4140 mV`. The reading is GPIO10 through a divider of 2.0 and the M5Unified percent formula `(mv - 3300) * 100 / (4150 - 3350)`: a span of 800 mV, so 0% at 3300 mV and 100% at 4100 mV, clamped. On the bench the ADV is on USB, so the voltage is the charger's, not a discharge reading: 4136 to 4140 mV, which the formula clamps to 100%. It becomes a drain figure once the device runs unplugged.

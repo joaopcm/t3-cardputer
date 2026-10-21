@@ -33,6 +33,7 @@ constexpr size_t kMaxRowHexBytes = 2 * 120 + 1;
 
 QueueHandle_t keyQueue;
 std::atomic<bool> dropRequested{false};
+std::atomic<DebugNetCut> netCutRequested{DebugNetCut::None};
 std::atomic<uint64_t> powerRequested{0};
 
 void emit(const char *text, size_t len)
@@ -134,6 +135,12 @@ void handleLine(std::string_view line)
     } else if (line == "DROP") {
         dropRequested = true;
         emitLine("DROP ok");
+    } else if (line == "WIFIOFF") {
+        netCutRequested = DebugNetCut::LeaveAp;
+        emitLine("WIFIOFF ok");
+    } else if (line == "NETDOWN") {
+        netCutRequested = DebugNetCut::BlackHole;
+        emitLine("NETDOWN ok");
     } else if (line.substr(0, kPowerPrefix.size()) == kPowerPrefix) {
         handlePower(line.substr(kPowerPrefix.size()));
     } else if (line.substr(0, kKeyPrefix.size()) == kKeyPrefix) {
@@ -203,6 +210,11 @@ bool debug_serial_poll_key(t3::Key *key)
 bool debug_serial_poll_drop()
 {
     return dropRequested.exchange(false);
+}
+
+DebugNetCut debug_serial_poll_net_cut()
+{
+    return netCutRequested.exchange(DebugNetCut::None);
 }
 
 bool debug_serial_poll_power(uint32_t *dimAfterMs, uint32_t *offAfterMs)

@@ -29,8 +29,8 @@ constexpr char TAG[] = "t3";
 constexpr TickType_t kMainPollTicks = pdMS_TO_TICKS(20);
 // receipt: RFC 6455 section 7.4.1, 1006 is a close with no close frame, which is what a dropped socket looks like to the link
 constexpr int kAbnormalClose = 1006;
-// receipt: docs/receipts/2026-10-21-firmware-network.md "json parse budget", 1.95x the ADV's honest worst parse (4.1 x 8192 = 33.6 KB) and 1.3x the host's honest bound (6 x 8192 = 49.2 KB)
-constexpr size_t kJsonParseBudgetBytes = 65536;
+// receipt: docs/receipts/2026-10-21-firmware-network.md "json parse budget", 1.46x the ADV's honest worst parse (4.1 x 8192 = 33.6 KB), about 70 KB at the cap leaves about 63 KB of the live heap
+constexpr size_t kJsonParseBudgetBytes = 49152;
 
 // receipt: docs/receipts/2026-10-21-firmware-voice.md "tail", the chunk in flight at talk-up finishes within one chunk period, 2x is the tripwire
 constexpr uint32_t kTailWaitMs = 2 * kMicChunkMs;
@@ -153,6 +153,16 @@ public:
             power_set_timeouts(dimAfterMs, offAfterMs, now_ms());
         }
         power_tick(now_ms(), app_.editing(), app_.recording());
+        const bool dark = power_level() == t3::Power::Level::Off;
+        if (dark != dark_) {
+            dark_ = dark;
+            dark ? mic_power_down() : mic_power_up();
+        }
+        mic_tick();
+        if (const DebugNetCut cut = debug_serial_poll_net_cut(); cut != DebugNetCut::None) {
+            ESP_LOGI(TAG, "debug: %s", cut == DebugNetCut::BlackHole ? "dropping every outgoing packet" : "leaving the access point");
+            wifi_debug_cut(cut == DebugNetCut::BlackHole);
+        }
         if (debug_serial_poll_drop()) {
             ESP_LOGI(TAG, "debug: dropping the relay socket");
             transport_close();
@@ -236,10 +246,15 @@ private:
 
     void finishRecording()
     {
-        while (const size_t count = mic_read(chunk_, kMicChunkSamples)) {
-            sendChunk(count);
+        bool sent = true;
+        while (sent) {
+            const size_t count = mic_read(chunk_, kMicChunkSamples);
+            if (count == 0) {
+                break;
+            }
+            sent = sendChunk(count);
         }
-        if (const size_t tail = mic_read(chunk_, kMicChunkSamples, kTailWaitMs)) {
+        if (const size_t tail = sent ? mic_read(chunk_, kMicChunkSamples, kTailWaitMs) : 0) {
             sendChunk(tail);
         }
         endRecording("sent");
@@ -263,9 +278,11 @@ private:
     bool sendChunk(size_t count)
     {
         const uint32_t before = now_ms();
-        if (std::optional<std::string> error = transport_send_audio(chunk_, count)) {
+        // why: a send that waits longer than the mic buffer holds means the link stopped carrying audio; a blocked send also froze the whole main loop for the 5 s text timeout (docs/receipts/2026-10-21-firmware-voice.md "link lost while talking")
+        if (std::optional<std::string> error = transport_send_audio(chunk_, count, kMicBufferMs)) {
             ESP_LOGE(TAG, "%s", error->c_str());
-            feed(app_.onAudioFailed(*error));
+            transport_close();
+            apply(link_.onClose(kAbnormalClose, *error, now_ms()));
             dirty_ = true;
             return false;
         }
@@ -407,14 +424,20 @@ private:
         if (out.reconnect) {
             apply(link_.onUserReconnect(now_ms()));
         }
+        std::optional<std::string> sendError;
         for (const std::string &frame : out.send) {
-            if (const std::optional<std::string> error = transport_send(frame)) {
+            if (std::optional<std::string> error = transport_send(frame)) {
                 ESP_LOGE(TAG, "%s", error->c_str());
                 app_.onTransportError(*error);
+                sendError = std::move(error);
             }
         }
         if (out.audio == t3::App::Out::Audio::Start) {
-            startRecording();
+            if (sendError) {
+                feed(app_.onAudioFailed(*sendError));
+            } else {
+                startRecording();
+            }
         }
     }
 
@@ -425,6 +448,7 @@ private:
     int16_t chunk_[kMicChunkSamples];
     VoiceStats voice_;
     bool micOn_ = false;
+    bool dark_ = true;
     bool dirty_ = true;
 };
 
@@ -489,7 +513,6 @@ extern "C" void app_main(void)
     draw(device.app());
     const bool mic_ok = mic_init(system_i2c_bus());
     ESP_LOGI(TAG, "mic %s", mic_ok ? "ready" : "missing");
-    log_heap("mic");
     debug_serial_start();
     log_heap("ready");
 
