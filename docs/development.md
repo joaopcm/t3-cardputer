@@ -22,6 +22,10 @@ pnpm bundle
 
 `build` writes `dist/cli.js`, which a git checkout runs. `bundle` writes `dist-bundle/t3-cardputer-relay.mjs`, the single file a release ships.
 
+`pair-t3 --mcp` goes through T3's MCP OAuth at `full-access`, because only full-access can launch full-access threads (receipt: `docs/receipts/2026-10-20-approvals-spike.md` (d)). `--internal` is the bearer for the internal WebSocket that answers approvals (same receipt, (c)).
+
+To keep the recordings the relay receives, for checking whisper models on your own voice, set `"stt": {"keepSamples": true}` in `relay.json` and restart the relay. Each finished recording lands in `~/.local/state/t3-cardputer/voice-samples/` (`stt.samplesDir` moves it) as `<timestamp>-<device>.wav`, plus a `.json` with duration, transcript, model, transcribe time and peak level. Files are 0600 in a 0700 directory. It's off by default, and it stops saving at `stt.maxSamples` (50) and logs the limit, it never deletes anything.
+
 To run a second relay next to a real one, point it at other files with `T3_CARDPUTER_RELAY_CONFIG` and `T3_CARDPUTER_RELAY_SECRETS`, and give it another `port` and `stateDir` in that config.
 
 ## Simulator

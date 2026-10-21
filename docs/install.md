@@ -49,7 +49,7 @@ What it does, in order:
 
 1. Checks the machine: Linux or macOS (Windows is refused), not root, Node 22 or newer, Tailscale logged in, and T3 answering at `http://127.0.0.1:3773`. Set `t3BaseUrl` in `~/.config/t3-cardputer/relay.json` if your T3 is elsewhere.
 2. Downloads the relay from the GitHub release the script pins, checks every file against the release's `SHA256SUMS`, installs it in `~/.local/share/t3-cardputer/releases/<version>` and links `~/.local/bin/t3-cardputer-relay` to it.
-3. Builds voice: whisper.cpp in `~/.local/share/t3-cardputer/whisper`, and downloads the `small.en`, `medium.en` and `large-v3-turbo` models next to it. That's 3.4 GB on disk on my machine. CPU by default. On Apple Silicon it asks about Metal, and on Linux with an NVIDIA GPU it asks about CUDA (that needs the CUDA toolkit).
+3. Builds voice: whisper.cpp in `~/.local/share/t3-cardputer/whisper`, and downloads the `small.en`, `medium.en` and `large-v3-turbo` models next to it. On my machine `du -sh` says `models/` is 3.4G and `whisper/` is 70M. On Apple Silicon it asks about Metal, default yes. On Linux with an NVIDIA GPU it asks about CUDA (that needs the CUDA toolkit), default no. On a re-run the default is what you built last time. Everything else builds for the CPU.
 4. Pairs the relay with T3. With the `t3` CLI on PATH it runs `t3 auth pairing create` twice itself. Without it, it prints that command and asks you to paste the two credentials (input is hidden). The tokens land in `~/.config/t3-cardputer/secrets.json`, mode 0600.
 5. Asks about the canary, default no. When T3 updates, the canary runs one short agent turn to check that approvals still work, and that turn uses your T3 usage. If you say yes, it picks a small model (`haiku`, `mini` or `flash` in the id) from the ones your T3 has, or asks you to pick one.
 6. Turns on Tailscale Funnel on port 8443, after asking, and saves the URL as `publicUrl` in `relay.json`. Never 443: on 443 Funnel takes over the tailnet address, and anything else serving https there (a reverse proxy, say) stops working.
@@ -66,7 +66,7 @@ curl -fsSL https://t3-cardputer.jopcmelo.com/setup.sh | sh -s -- --dry-run
 
 - `--dry-run` runs the checks and prints what it would do. It writes nothing.
 - `--yes` takes the default for every question.
-- `--update` updates an installed relay in place and prints no install link.
+- `--update` updates an installed relay in place, takes the default for every question like `--yes`, and prints no install link.
 
 If the machine already runs a self-repairing checkout (`repair.projectId` in `relay.json`), setup refuses to touch it. See [run from a git checkout](#run-from-a-git-checkout).
 
@@ -86,6 +86,8 @@ The pairing code works for 10 minutes. If it runs out, run `t3-cardputer-relay i
 ## 3. The ADV pairs by itself
 
 It restarts, joins the WiFi, trades the code for a device token and opens Home. If it shows something else, look the text up in [troubleshooting.md](troubleshooting.md).
+
+Without a link you can type the relay URL on the ADV instead (Fn+S, then the `relay` row). On the relay's machine, `tailscale funnel status` shows it, and so does `publicUrl` in `~/.config/t3-cardputer/relay.json`. Then pair with a code from `t3-cardputer-relay pair`.
 
 ## Updating
 

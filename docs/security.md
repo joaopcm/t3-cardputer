@@ -26,7 +26,7 @@ Funnel puts `https://<machine>.<tailnet>.ts.net:8443` on the public internet and
 
 Anything else gets a 404. T3 (`127.0.0.1:3773`) and whisper-server (`127.0.0.1:8788`) stay on loopback and aren't exposed.
 
-The hostname isn't secret. Tailscale issues a public TLS certificate for it, and certificates are published in certificate transparency logs. Anyone can learn your machine and tailnet name, so the relay can't count on it being hidden.
+The hostname isn't secret. Tailscale issues a public TLS certificate for it, and certificates are published in certificate transparency logs (https://tailscale.com/kb/1153/enabling-https). Anyone can learn your machine and tailnet name, so the relay can't count on it being hidden.
 
 ## Pairing and the lockout
 

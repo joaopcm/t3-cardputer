@@ -26,6 +26,10 @@ Commands run on the T3 machine, where the relay lives. When a fix says "check th
 | `update firmware` | The relay speaks a newer protocol than the firmware. The ADV stops trying. | `t3-cardputer-relay install-link`, open the link and install with clean install off. Your settings stay. |
 | `update relay` | The firmware is newer than the relay. The ADV stops trying. | `t3-cardputer-relay update`, then restart the ADV. |
 | `wifi: scan failed:` | The WiFi chip couldn't scan. | R scans again. If it repeats, restart the ADV. |
+| `wifi:` … `join did not start:` | The WiFi chip turned the join down before trying. | Restart the ADV. If it repeats, open an issue with the whole line. |
+| `wifi join failed` | Joining from setup failed with no reason. | Fn+S and try again. |
+| `wifi not forgotten` | D couldn't remove the saved network. | Restart the ADV and try again. |
+| `closed ` | The relay closed the link with that code and no message. After `relay unreachable:` it's a network drop and the ADV retries. On its own, the ADV stopped. | For a 44xx code, see [close codes](protocol.md#close-codes), fix that, then restart the ADV. |
 | `relay error` | The relay sent an error with no message. | Check the logs. |
 | `relay failed:` | The relay hit an error of its own, not caused by the ADV. | Check the logs. If it repeats, open an issue with the line. |
 
@@ -33,9 +37,9 @@ Commands run on the T3 machine, where the relay lives. When a fix says "check th
 
 | On screen | What it means | Fix |
 | --- | --- | --- |
-| `relay: not set, type your relay url (setup.sh prints it)` | A fresh ADV with no relay URL. | Open the install link from setup. Or type the URL: it's `publicUrl` in `~/.config/t3-cardputer/relay.json`, also listed by `tailscale funnel status`. |
+| `relay: not set, open the install link from setup.sh or type the relay url` | A fresh ADV with no relay URL. | Open the install link from setup. To type the URL instead, get it on the relay's machine: `tailscale funnel status` shows it, and so does `publicUrl` in `~/.config/t3-cardputer/relay.json`. |
 | `relay url must be https:// or wss://` | The typed URL starts with another scheme. | Start it with `https://`, or leave the scheme out. |
-| `relay url:` | The typed URL is more than a host and a port. | Type `https://<machine>.<tailnet>.ts.net:8443` with nothing after the port. |
+| `relay url:` | The typed URL isn't a valid host and port. The rest of the line says what's wrong. | Type `https://<machine>.<tailnet>.ts.net:8443` with nothing after the port. |
 | `relay changed: token cleared, pair again` | You set a different relay URL. The old token belongs to the old relay, so the ADV dropped it. | On the new relay, `t3-cardputer-relay install-link` and open the link. Or `t3-cardputer-relay pair` and type the code. |
 | `pair: code expired or used, run t3-cardputer-relay install-link and open the new link` | The code from the install link ran out. Codes last 10 minutes and work once. | Do what it says. |
 | `pairing failed (` | The relay turned a typed code down (`401`): wrong, expired or already used. | `t3-cardputer-relay pair` prints a new one. Type it within 10 minutes, case doesn't matter. |
@@ -43,6 +47,7 @@ Commands run on the T3 machine, where the relay lives. When a fix says "check th
 | `pairing refused:` | The ADV already has a token and is using it. | Nothing. Pair only after `re-pair needed`. |
 | `pairing already running` | A pairing request is still out. | Wait for it to finish. |
 | `provisioned pair code not used:` | The install page sent a code, but the ADV is already paired, or you're typing one. | Nothing. |
+| `pair:` | Followed by an `ESP_ERR_` name: the pairing request never reached the relay. | Same as `relay unreachable`. |
 | `token not saved` | Pairing worked but the ADV couldn't store the token. | Restart the ADV and pair again. If it repeats, install with clean install on. |
 | `re-pair needed` | The relay turned the ADV's token down. It was revoked, or the relay's `secrets.json` was reset. | `t3-cardputer-relay pair`, then type the code on the pairing screen. |
 | `device revoked, re-pair this device` | Someone ran `t3-cardputer-relay revoke` for this ADV. | Same as `re-pair needed`. |
@@ -75,6 +80,10 @@ Commands run on the T3 machine, where the relay lives. When a fix says "check th
 | `not confirmed, resending on reconnect` | The link dropped before the relay confirmed. | Nothing. The ADV sends it again when it's back. |
 | `unacked_max` | 8 replies or answers are waiting for the relay to confirm them. | Wait for the link to come back, then send. |
 | `reply_text_max=` | The reply is over 4000 characters. | Send it in two parts. |
+| `launch_text_max=` | The new task prompt is over 4000 characters. | Shorten it. Send the rest as a reply once the task runs. |
+| `refused:` | The relay turned down a reply, an answer or a new task. The rest of the line says why. | Depends on the reason. The ADV keeps your text where it can, so you can send it again. |
+| `saved answer to` | An answer the ADV was holding for a thread that isn't waiting anymore. | Nothing. The thread moved on without it. |
+| `out of memory on resend, may have gone through` | The ADV couldn't resend a reply after reconnecting. | Check the thread before sending it again. |
 | `unacked_bytes_max` | Replies waiting for the relay to confirm them add up to more than 8192 bytes. The oldest unsent ones get dropped (`oldest saved`). | Wait for the link before sending more. |
 | `launch result unknown, check Home` | The link dropped after the ADV asked T3 to start a task. | Look on Home before you start it again, it may be running already. |
 | `denied, but the reason was not sent:` | The deny went through, the reason didn't reach T3. | Open the thread and send the reason as a reply. |
@@ -102,6 +111,29 @@ These say what to do. They're here so a search for the text finds something.
 | `relay_url_max=` | The URL is longer than the ADV keeps. | Type only the host and port. |
 | `request just arrived, press again` | A new request replaced the one on screen as you pressed. | Read it, then press again. |
 
+### Relay frames
+
+The ADV checks every frame from the relay against its budgets. These mean the relay sent something this firmware can't take, usually because one side is older than the other. A line that names a field and what was wrong with it, like `models: expected array`, means the same.
+
+| On screen | What it means | Fix |
+| --- | --- | --- |
+| `max_frame_bytes=` | A frame is bigger than the ADV said it can take. | Update both sides: `t3-cardputer-relay update`, then a new install link with clean install off. If it stays, open an issue with the whole line. |
+| `json_parse_budget=` | A frame needs more memory to parse than the ADV sets aside. | Same as above. |
+| `json_nesting_max=` | A frame nests deeper than the ADV allows. | Same as above. |
+| `heap: parse needed more than available` | The ADV ran out of memory parsing a frame. | Restart the ADV. If it repeats, update both sides and open an issue with the whole line. |
+| `frame: not valid json` | A frame wasn't JSON. | Update both sides, then open an issue with the whole line. |
+| `message: expected object` | A frame wasn't a JSON object. | Same as above. |
+| `truncated: expected object` | A frame's `truncated` field had the wrong shape. | Update both sides, then open an issue with the whole line. |
+| `type: unknown` | The relay sent a message type this firmware doesn't know. | Update the firmware: a new install link, clean install off. |
+| `rx_ring_bytes=` | Frames came in faster than the ADV could read them, and one didn't fit. | Usually passes. If it repeats, open an issue with the whole line. |
+| `rx_inbox_depth=` | Too many frames were waiting, and one was dropped. | Same as above. |
+| `fragmented relay frame dropped` | The relay split a frame, which the ADV doesn't take. | Update both sides. If it stays, open an issue. |
+| `heap: hello needed more than available` | No memory to say hello to the relay. The ADV retries. | Restart the ADV if it keeps showing. |
+| `relay sent a frame before welcome` | The relay didn't follow the handshake. The ADV retries. | Update both sides. If it stays, open an issue. |
+| `pairing returned 200 without a token` | The pairing answer had no token. | Update the relay, then pair again. |
+| `token_max=` | The relay's token is longer than the ADV keeps. | Same as above. |
+| `pair_reply_max=` | The pairing answer is bigger than the ADV reads. | Same as above. |
+
 ### Storage and memory
 
 | On screen | What it means | Fix |
@@ -112,6 +144,8 @@ These say what to do. They're here so a search for the text finds something.
 | `nvs:` | A setting couldn't be written or read. The rest of the line says which. | Restart the ADV. If it repeats, install with clean install on. |
 | `heap: relay frame buffers do not fit` | Not enough memory at boot to start the relay link. | Restart the ADV. If it repeats, open an issue. |
 | `wifi: driver init failed` | The WiFi chip didn't start. | Restart the ADV. If it repeats, open an issue. |
+| `spent pair code still saved` | The ADV paired but couldn't delete the used code. | Nothing right away. If pairing errors show after a restart, install with clean install on. |
+| `pair task stack=` | No memory to start pairing. | Restart the ADV and pair again. |
 | `usb serial: driver or task did not start, usb setup unavailable` | The install page can't send settings to this ADV. | Restart the ADV. Fn+S still works. |
 
 ## On the install page
