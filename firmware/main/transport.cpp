@@ -147,10 +147,10 @@ std::string failureReason(const esp_websocket_event_data_t &event)
 
 void postClose(int code, std::string_view reason)
 {
-    abandonFill();
     if (closePosted.exchange(true)) {
         return;
     }
+    abandonFill();
     const uint32_t largest = startLargest.load();
     std::string lowHeap;
     if (!opened && largest < kTlsHeapBytes) {
