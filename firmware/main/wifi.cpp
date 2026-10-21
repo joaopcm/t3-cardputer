@@ -61,6 +61,7 @@ public:
     std::optional<std::string> startScan() override
     {
         wifi_scan_config_t config = {};
+        config.show_hidden = true;
         if (const esp_err_t err = esp_wifi_scan_start(&config, false); err != ESP_OK) {
             return esp_err_to_name(err);
         }
