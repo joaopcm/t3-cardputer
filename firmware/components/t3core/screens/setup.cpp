@@ -104,7 +104,7 @@ std::string App::dropUnacked()
     if (answers > 0) {
         counts.push_back(std::to_string(answers) + (answers == 1 ? " answer" : " answers"));
     }
-    std::string text = counts.front() + (counts.size() > 1 ? ", " + counts.back() : "") + " dropped: re-pair";
+    std::string text = counts.front() + (counts.size() > 1 ? ", " + counts.back() : "") + " unconfirmed, may have gone through: re-pair";
     if (kept > 0) {
         text += kept == 1 ? ", text back when its thread opens" : ", text back when their threads open";
     }

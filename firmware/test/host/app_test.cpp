@@ -1401,7 +1401,7 @@ TEST_CASE("4401 drops unconfirmed replies instead of re-sending them under the n
     app.onAuthRejected();
     app.onLinkStatus("re-pair needed");
     CHECK(app.screenName() == "setup_pair");
-    CHECK(contains(shown(app), "1 reply dropped: re-pair, text back when its thread opens"));
+    CHECK(contains(shown(app), "1 reply unconfirmed, may have gone through: re-pair, text back when its thread opens"));
     CHECK_FALSE(contains(shown(app), "resending"));
     CHECK(app.onLinkStatus("").send.empty());
     press(app, named(KeyName::Esc));
@@ -1421,7 +1421,7 @@ TEST_CASE("4401 counts replies and answers it drops")
     type(app, "b");
     press(app, named(KeyName::Enter));
     app.onAuthRejected();
-    CHECK(contains(shown(app), "2 replies, 1 answer dropped: re-pair, text back when their threads open"));
+    CHECK(contains(shown(app), "2 replies, 1 answer unconfirmed, may have gone through: re-pair, text back when their threads open"));
 }
 
 TEST_CASE("a link drop mid-recording shows both the lost voice and the unconfirmed reply")
