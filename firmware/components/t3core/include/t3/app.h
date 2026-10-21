@@ -122,6 +122,9 @@ private:
     bool keep(const Unacked &item);
     bool takeReply();
     void inform(std::string text, Color color = Color::Red);
+    void inform(const std::vector<std::string> &notes, Color color);
+    Out dropLink(std::vector<std::string> &notes, Color &color);
+    std::string dropUnacked();
     void type(std::string &text, char c, int max, std::string_view budget, std::string_view what);
     Out refresh();
     std::string health() const;
@@ -178,7 +181,7 @@ private:
     Out voiceKey(Key key, uint32_t nowMs);
     Out onAudioAck(const Ack &ack);
     std::optional<Out> onAudioError(const Error &error);
-    Out onVoiceLinkLost();
+    Out onVoiceLinkLost(std::string &lost);
     void onTranscript(std::string_view text);
     void drawVoice(Grid &grid) const;
 

@@ -235,7 +235,7 @@ std::optional<App::Out> App::onAudioError(const Error &error)
     return std::nullopt;
 }
 
-App::Out App::onVoiceLinkLost()
+App::Out App::onVoiceLinkLost(std::string &lost)
 {
     Out out;
     const bool transcribing = screen_ == Screen::Voice && voice_ == Voice::Transcribing;
@@ -243,10 +243,10 @@ App::Out App::onVoiceLinkLost()
     if (recording()) {
         out.audio = Out::Audio::Cancel;
         leaveVoice();
-        inform("voice: connection lost");
+        lost = "voice: connection lost";
     } else if (transcribing) {
         leaveVoice();
-        inform("voice: connection lost, transcript lost");
+        lost = "voice: connection lost, transcript lost";
     }
     return out;
 }

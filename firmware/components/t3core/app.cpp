@@ -242,6 +242,33 @@ void App::inform(std::string text, Color color)
     noticeColor_ = color;
 }
 
+void App::inform(const std::vector<std::string> &notes, Color color)
+{
+    if (notes.empty()) {
+        return;
+    }
+    std::string text;
+    for (const std::string &note : notes) {
+        text += (text.empty() ? "" : "; ") + note;
+    }
+    inform(std::move(text), color);
+}
+
+App::Out App::dropLink(std::vector<std::string> &notes, Color &color)
+{
+    std::string voiceLost;
+    Out out = onVoiceLinkLost(voiceLost);
+    if (!voiceLost.empty()) {
+        notes.push_back(std::move(voiceLost));
+        color = Color::Red;
+    }
+    if (!launchId_.empty()) {
+        launchId_.clear();
+        notes.push_back("launch result unknown, check Home");
+    }
+    return out;
+}
+
 void App::type(std::string &text, char c, int max, std::string_view budget, std::string_view what)
 {
     if (static_cast<int>(text.size()) >= max) {
@@ -406,18 +433,18 @@ App::Out App::onLinkStatus(std::string_view status)
 {
     const bool wasLive = linkStatus_.empty();
     linkStatus_ = std::string(status);
-    if (!status.empty() && !launchId_.empty()) {
-        launchId_.clear();
-        inform("launch result unknown, check Home", Color::Warn);
-    }
     if (!status.empty()) {
+        std::vector<std::string> notes;
+        Color color = Color::Warn;
+        Out out = dropLink(notes, color);
         if (wasLive && unacked_.size() == 1) {
             const Unacked &item = unacked_.front();
-            inform(std::string(item.request ? "answer" : "reply") + " to " + threadTitle(item.threadId) + " not confirmed, resending on reconnect", Color::Warn);
+            notes.push_back(std::string(item.request ? "answer" : "reply") + " to " + threadTitle(item.threadId) + " not confirmed, resending on reconnect");
         } else if (wasLive && unacked_.size() > 1) {
-            inform(std::to_string(unacked_.size()) + " replies and answers not confirmed, resending on reconnect", Color::Warn);
+            notes.push_back(std::to_string(unacked_.size()) + " replies and answers not confirmed, resending on reconnect");
         }
-        return onVoiceLinkLost();
+        inform(notes, color);
+        return out;
     }
     if (wasLive) {
         return {};

@@ -1319,3 +1319,46 @@ TEST_CASE("text waiting for its thread counts against the unacked budget and say
     CHECK(press(app, named(KeyName::Enter)).send.empty());
     CHECK(contains(shown(app), "unacked_max=" + std::to_string(t3::kUnackedMax) + ", reply needed " + std::to_string(t3::kUnackedMax + 1) + ", 8 unsent wait for their threads"));
 }
+
+TEST_CASE("4401 drops unconfirmed replies instead of re-sending them under the new device, and keeps their text")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    only(press(app, named(KeyName::Enter)));
+    app.onAuthRejected();
+    app.onLinkStatus("re-pair needed");
+    CHECK(app.screenName() == "setup_pair");
+    CHECK(contains(shown(app), "1 reply dropped: re-pair, text back when its thread opens"));
+    CHECK_FALSE(contains(shown(app), "resending"));
+    CHECK(app.onLinkStatus("").send.empty());
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "home");
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "thread");
+    CHECK(contains(allText(app), "> go_"));
+}
+
+TEST_CASE("4401 counts replies and answers it drops")
+{
+    App app = onApproval();
+    press(app, ch('Y'));
+    type(app, "a");
+    press(app, named(KeyName::Enter));
+    type(app, "b");
+    press(app, named(KeyName::Enter));
+    app.onAuthRejected();
+    CHECK(contains(shown(app), "2 replies, 1 answer dropped: re-pair, text back when their threads open"));
+}
+
+TEST_CASE("a link drop mid-recording shows both the lost voice and the unconfirmed reply")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::TalkDown));
+    REQUIRE(app.recording());
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(contains(shown(app), "voice: connection lost"));
+    CHECK(contains(shown(app), "reply to layout engine not confirmed, resending on reconnect"));
+}

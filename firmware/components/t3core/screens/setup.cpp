@@ -71,13 +71,43 @@ App::Out App::onBoot(bool hasWifi, bool hasToken)
 
 App::Out App::onAuthRejected()
 {
-    Out out = onVoiceLinkLost();
+    std::vector<std::string> notes;
+    Color color = Color::Warn;
+    Out out = dropLink(notes, color);
+    if (!unacked_.empty()) {
+        notes.push_back(dropUnacked());
+    }
+    inform(notes, color);
     hasToken_ = false;
     pairing_ = false;
     pairCode_.clear();
     pairNote_ = "re-pair needed: relay rejected token";
     screen_ = Screen::SetupPair;
     return out;
+}
+
+std::string App::dropUnacked()
+{
+    size_t replies = 0;
+    size_t answers = 0;
+    size_t kept = 0;
+    for (const Unacked &item : unacked_) {
+        (item.request ? answers : replies) += 1;
+        kept += keep(item) ? 1 : 0;
+    }
+    unacked_.clear();
+    std::vector<std::string> counts;
+    if (replies > 0) {
+        counts.push_back(std::to_string(replies) + (replies == 1 ? " reply" : " replies"));
+    }
+    if (answers > 0) {
+        counts.push_back(std::to_string(answers) + (answers == 1 ? " answer" : " answers"));
+    }
+    std::string text = counts.front() + (counts.size() > 1 ? ", " + counts.back() : "") + " dropped: re-pair";
+    if (kept > 0) {
+        text += kept == 1 ? ", text back when its thread opens" : ", text back when their threads open";
+    }
+    return text;
 }
 
 App::Out App::openSetup()
