@@ -44,6 +44,9 @@ App::Out App::openThread(std::string threadId)
     threadId_ = std::move(threadId);
     request_.reset();
     screen_ = Screen::Thread;
+    if (takeReply()) {
+        inform("unsent reply back, Enter sends it", Color::Warn);
+    }
     return out;
 }
 
@@ -62,6 +65,9 @@ App::Out App::threadKey(Key key)
         Unacked item{id, threadId_, reply_, "reply sent: " + std::string(modeName(mode)), mode, std::nullopt, std::nullopt};
         if (sendTracked(out, "reply", std::move(item))) {
             reply_.clear();
+            if (takeReply()) {
+                inform("next unsent reply back, Enter sends it", Color::Warn);
+            }
         }
     };
     switch (key.name) {

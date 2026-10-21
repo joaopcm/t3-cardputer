@@ -119,6 +119,15 @@ bool contains(const std::string &haystack, const std::string &needle)
     return haystack.find(needle) != std::string::npos;
 }
 
+std::string shown(const App &app)
+{
+    std::string text;
+    for (const std::string &r : rows(app)) {
+        text += r.substr(0, r.find_last_not_of(' ') + 1) + " ";
+    }
+    return text;
+}
+
 void checkGolden(const App &app, const char *name)
 {
     std::ifstream file(std::string(T3_REPO_ROOT) + "/firmware/test/host/golden/" + name + ".txt");
@@ -873,7 +882,7 @@ TEST_CASE("a failed reply goes back only to its own thread")
     press(app, named(KeyName::Enter));
     push(app, t3::Ack{reply.str("id"), false, std::string("T3 down")});
     CHECK(row(app, 0).rfind("reply to measure arena sizes failed: T3", 0) == 0);
-    CHECK(row(app, 1).rfind("down ", 0) == 0);
+    CHECK(row(app, 1).rfind("down, text back when it opens", 0) == 0);
     CHECK(press(app, named(KeyName::Enter)).send.empty());
 
     App same = onWeaverThread();
@@ -1238,4 +1247,75 @@ TEST_CASE("unacked text has a byte budget that names itself and keeps the text")
     CHECK(press(app, named(KeyName::Enter)).send.empty());
     CHECK(row(app, 0).rfind("unacked_bytes_max=" + std::to_string(t3::kUnackedBytesMax) + ", reply needed ", 0) == 0);
     CHECK(app.editing());
+}
+
+TEST_CASE("a reply given back while another thread is open comes back when its thread opens")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, named(KeyName::Enter));
+    type(app, "hi there");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Down));
+    press(app, named(KeyName::Enter));
+    app.onSendFailed(frame, "send failed, 90 bytes not sent", tick());
+    CHECK(contains(shown(app), "reply to fix bounce webhook not sent: send failed, 90 bytes not sent, text back when it opens"));
+    CHECK_FALSE(contains(allText(app), "> hi there_"));
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Up));
+    press(app, named(KeyName::Enter));
+    CHECK(app.screenName() == "thread");
+    CHECK(contains(allText(app), "> hi there_"));
+}
+
+TEST_CASE("a reply given back while another is being typed on its thread comes back after that one is sent")
+{
+    App app = onWeaverThread();
+    type(app, "one");
+    const std::string first = only(press(app, named(KeyName::Enter)));
+    type(app, "two");
+    app.onSendFailed(first, "send failed, 80 bytes not sent", tick());
+    CHECK(contains(allText(app), "> two_"));
+    CHECK(contains(shown(app), "text back after this reply is sent"));
+    CHECK(Frame(only(press(app, named(KeyName::Enter)))).str("text") == "two");
+    CHECK(contains(allText(app), "> one_"));
+}
+
+TEST_CASE("an answer given back while away comes back when its request shows again")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    CHECK(app.screenName() == "home");
+    app.onSendFailed(frame, "send failed, 120 bytes not sent", tick());
+    CHECK(contains(shown(app), "answer to fix bounce webhook not sent: send failed, 120 bytes not sent, text back when it opens"));
+    press(app, named(KeyName::Enter));
+    push(app, relay(kBouncePage));
+    push(app, relay(kBounceRequest));
+    CHECK(app.screenName() == "approval");
+    CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
+}
+
+TEST_CASE("text waiting for its thread counts against the unacked budget and says so")
+{
+    App app = live();
+    push(app, relay(kHome));
+    press(app, named(KeyName::Enter));
+    std::vector<std::string> frames;
+    for (int i = 0; i < t3::kUnackedMax; ++i) {
+        type(app, "r" + std::to_string(i));
+        frames.push_back(only(press(app, named(KeyName::Enter))));
+    }
+    press(app, named(KeyName::Esc));
+    press(app, named(KeyName::Down));
+    press(app, named(KeyName::Enter));
+    for (const std::string &frame : frames) {
+        app.onSendFailed(frame, "send failed", tick());
+    }
+    type(app, "more");
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+    CHECK(contains(shown(app), "unacked_max=" + std::to_string(t3::kUnackedMax) + ", reply needed " + std::to_string(t3::kUnackedMax + 1) + ", 8 unsent wait for their threads"));
 }

@@ -130,6 +130,12 @@ void App::showRequest(const Request &request)
     if (request.options.empty()) {
         typingFor_ = Option{'T', "Type answer", "text"};
     }
+    const auto kept = std::find_if(unsent_.begin(), unsent_.end(), [&](const Unsent &item) { return item.requestId == request.requestId; });
+    if (kept != unsent_.end()) {
+        typingFor_ = kept->option;
+        answer_ = std::move(kept->text);
+        unsent_.erase(kept);
+    }
     screen_ = Screen::Request;
 }
 

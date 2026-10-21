@@ -98,11 +98,21 @@ bool App::readyToSend(std::string_view what)
         inform(std::string(what) + " not sent: " + linkStatus_);
         return false;
     }
-    if (static_cast<int>(unacked_.size()) >= kUnackedMax) {
-        inform("unacked_max=" + std::to_string(kUnackedMax) + ", " + std::string(what) + " needed " + std::to_string(unacked_.size() + 1));
+    const size_t held = unacked_.size() + unsent_.size();
+    if (static_cast<int>(held) >= kUnackedMax) {
+        inform(heldBudget("unacked_max", kUnackedMax, what, held + 1));
         return false;
     }
     return true;
+}
+
+std::string App::heldBudget(std::string budget, size_t limit, std::string_view what, size_t needed) const
+{
+    std::string text = budget + "=" + std::to_string(limit) + ", " + std::string(what) + " needed " + std::to_string(needed);
+    if (!unsent_.empty()) {
+        text += ", " + std::to_string(unsent_.size()) + " unsent wait for their threads";
+    }
+    return text;
 }
 
 namespace {
@@ -139,12 +149,16 @@ size_t bytesOf(const Request &request)
 
 }
 
-size_t App::unackedBytes() const
+size_t App::heldBytes() const
 {
     size_t bytes = 0;
     for (const Unacked &item : unacked_) {
         bytes += item.id.size() + item.threadId.size() + item.text.size() + item.confirmed.size();
         bytes += item.request ? bytesOf(*item.request) : 0;
+        bytes += item.option ? bytesOf(*item.option) : 0;
+    }
+    for (const Unsent &item : unsent_) {
+        bytes += item.threadId.size() + item.text.size() + item.requestId.value_or("").size();
         bytes += item.option ? bytesOf(*item.option) : 0;
     }
     return bytes;
@@ -153,10 +167,10 @@ size_t App::unackedBytes() const
 bool App::sendTracked(Out &out, std::string_view what, Unacked item)
 {
     unacked_.push_back(std::move(item));
-    const size_t bytes = unackedBytes();
+    const size_t bytes = heldBytes();
     if (bytes > kUnackedBytesMax) {
         unacked_.pop_back();
-        inform("unacked_bytes_max=" + std::to_string(kUnackedBytesMax) + ", " + std::string(what) + " needed " + std::to_string(bytes));
+        inform(heldBudget("unacked_bytes_max", kUnackedBytesMax, what, bytes));
         return false;
     }
     const Unacked &sent = unacked_.back();
@@ -170,29 +184,56 @@ bool App::sendTracked(Out &out, std::string_view what, Unacked item)
 void App::giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs)
 {
     const std::string kind = item.request ? "answer" : "reply";
-    const std::string elsewhere = kind + " to " + threadTitle(item.threadId) + (refused ? " failed: " : " not sent: ") + std::string(why);
     const std::string here = (refused ? std::string("refused: ") : kind + " not sent: ") + std::string(why);
-    if (screen_ != Screen::Thread || threadId_ != item.threadId) {
-        inform(elsewhere);
-        return;
-    }
-    if (item.request) {
-        if (!enterRequest(*item.request, nowMs)) {
+    if (screen_ == Screen::Thread && threadId_ == item.threadId) {
+        if (item.request) {
+            if (enterRequest(*item.request, nowMs)) {
+                if (!item.text.empty()) {
+                    typingFor_ = item.option;
+                    answer_ = item.text;
+                }
+                inform(here);
+                return;
+            }
+            keep(item);
             inform(here + ", Tab reopens it");
             return;
         }
-        if (!item.text.empty()) {
-            typingFor_ = item.option;
-            answer_ = item.text;
-        }
-    } else {
-        if (!reply_.empty()) {
-            inform(elsewhere);
+        if (reply_.empty()) {
+            reply_ = item.text;
+            inform(here);
             return;
         }
-        reply_ = item.text;
+        keep(item);
+        inform(here + ", text back after this reply is sent");
+        return;
     }
-    inform(here);
+    const std::string elsewhere = kind + " to " + threadTitle(item.threadId) + (refused ? " failed: " : " not sent: ") + std::string(why);
+    inform(keep(item) ? elsewhere + ", text back when it opens" : elsewhere);
+}
+
+bool App::keep(const Unacked &item)
+{
+    if (item.text.empty()) {
+        return false;
+    }
+    std::optional<std::string> requestId;
+    if (item.request) {
+        requestId = item.request->requestId;
+    }
+    unsent_.push_back(Unsent{item.threadId, item.text, std::move(requestId), item.option});
+    return true;
+}
+
+bool App::takeReply()
+{
+    const auto kept = std::find_if(unsent_.begin(), unsent_.end(), [&](const Unsent &item) { return item.threadId == threadId_ && !item.requestId; });
+    if (!reply_.empty() || kept == unsent_.end()) {
+        return false;
+    }
+    reply_ = std::move(kept->text);
+    unsent_.erase(kept);
+    return true;
 }
 
 void App::inform(std::string text, Color color)

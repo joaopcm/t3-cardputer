@@ -99,6 +99,13 @@ private:
         std::optional<Option> option;
     };
 
+    struct Unsent {
+        std::string threadId;
+        std::string text;
+        std::optional<std::string> requestId;
+        std::optional<Option> option;
+    };
+
     struct RequestLayout {
         std::vector<Line> scroll;
         std::vector<Line> pinned;
@@ -109,8 +116,11 @@ private:
     bool send(Out &out, std::optional<std::string> frame, std::string_view what);
     bool readyToSend(std::string_view what);
     bool sendTracked(Out &out, std::string_view what, Unacked item);
-    size_t unackedBytes() const;
+    size_t heldBytes() const;
+    std::string heldBudget(std::string budget, size_t limit, std::string_view what, size_t needed) const;
     void giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs);
+    bool keep(const Unacked &item);
+    bool takeReply();
     void inform(std::string text, Color color = Color::Red);
     void type(std::string &text, char c, int max, std::string_view budget, std::string_view what);
     Out refresh();
@@ -188,6 +198,7 @@ private:
     std::string reply_;
     std::string openId_;
     std::vector<Unacked> unacked_;
+    std::vector<Unsent> unsent_;
 
     std::optional<Request> request_;
     std::optional<Request> waiting_;
