@@ -499,8 +499,9 @@ TEST_CASE("an unknown close code reconnects with backoff and keeps the token")
     CHECK(out.statusText == "relay unreachable: closed 1009");
 }
 
-TEST_CASE("the relay's own heartbeat needs no link timer, a quiet live link stays live")
+TEST_CASE("the websocket ping finds a dead link before the relay drops it, so the link needs no timer and a quiet live link stays live")
 {
+    CHECK((t3::kPingIntervalSec + t3::kPongTimeoutSec) * 1000 < t3::kRelaySilentDropMs);
     t3::Link link = live();
     for (uint32_t now = 0; now < 10 * 60 * 1000; now += 1000) {
         const auto out = link.onTick(now);
@@ -508,6 +509,15 @@ TEST_CASE("the relay's own heartbeat needs no link timer, a quiet live link stay
         CHECK_FALSE(out.connect);
     }
     CHECK(link.state() == t3::Link::State::Live);
+}
+
+TEST_CASE("a pong timeout is a network close: keep the token, show it, reconnect")
+{
+    t3::Link link = live();
+    const auto out = link.onClose(1006, "pong_timeout_sec=25, no pong from relay", 0);
+    CHECK_FALSE(out.wipeToken);
+    CHECK(out.reconnectInMs == t3::kBackoffMinMs);
+    CHECK(out.statusText == "relay unreachable: pong_timeout_sec=25, no pong from relay");
 }
 
 TEST_CASE("pairing is allowed only while the link needs a token or has stopped")

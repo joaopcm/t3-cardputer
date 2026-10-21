@@ -77,6 +77,16 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 - `kBackoffMaxMs` = 30000 (`link.h`). A retry while the relay is gone costs one TLS connect (3.8 s, about 50 KB of transient heap). At 30 s apart, retries hold the radio and CPU at most 3.8 / 30 = 13% of an outage, and a relay that comes back is reached within 30 s plus one connect. The relay itself is back 0.24 s after a restart (`kBackoffMinMs` receipt), so a restart never reaches the maximum: Review Focus 2 reconnected 4.8 s after the close.
 - Hotspot timings are not measured here (no hotspot at the homelab); Checkpoint A adds one.
 
+## dead link (`kPingIntervalSec` = 10, `kPongTimeoutSec` = 25)
+
+- Before this, `transport.cpp` left both unset, so `esp_websocket_client` 1.8.0 used its defaults (`WEBSOCKET_PING_INTERVAL_SEC` 10, `WEBSOCKET_PINGPONG_TIMEOUT_SEC` 120). A hotspot that stalls without closing the socket left the device showing "online" for up to about 130 s, while the relay had dropped it at 60 s.
+- The relay terminates a socket that misses `heartbeatMaxMissed` = 2 pings at `heartbeatIntervalMs` = 30000 (`relay/src/config.ts`), so it gives up on a silent device after 60 s (`kRelaySilentDropMs`).
+- The client sends a ping every `ping_interval_sec` and aborts with `WEBSOCKET_ERROR_TYPE_PONG_TIMEOUT` when no pong arrives within `pingpong_timeout_sec` of the first unanswered ping (`esp_websocket_client.c`, `WEBSOCKET_STATE_CONNECTED`). Its task polls once a second. The worst case is a link that dies just after a pong: the next ping goes out 10 s later and times out 25 s after that, so the dead link is found 10 + 25 + 1 = 36 s after it died, inside the relay's 60 s (host test in `link_test.cpp`).
+- `kPongTimeoutSec` = 25 is a tripwire. The honest pong wait is one round trip through the Funnel. The closest measurement is `welcome` 0.5 s after `open`, which is a hello round trip plus the relay's token check, so 25 s is 50x it. While recording, the ping queues behind at most the 16 KB TCP send buffer, which drains in 0.5 s at 32 KB/s (`2026-10-21-firmware-voice.md`). Hotspot round trips are not measured. A false timeout costs one reconnect (about 5 s) and the recording in progress.
+- `kPingIntervalSec` = 10 keeps the library default: a 6-byte masked ping and a 2-byte pong every 10 s.
+- A pong timeout surfaces as close 1006 with the reason `pong_timeout_sec=25, no pong from relay`. The link shows `relay unreachable: ...`, keeps the token and reconnects with backoff (`link_test.cpp`).
+- If the TCP send buffer is full when the link dies (mid-recording), the ping write can block for `kNetworkTimeoutMs` (10 s) first, so the worst case there is 46 s, still inside 60 s.
+
 ## wifi
 
 - `kWifiJoinWaitMs` = 20000: 3.5x the 5.8 s worst join; a join that has no IP by then is aborted and reported as `no ip within kWifiJoinWaitMs=20000`.

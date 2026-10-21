@@ -118,7 +118,7 @@ std::string failureReason(const esp_websocket_event_data_t &event)
 {
     const esp_websocket_error_codes_t &error = event.error_handle;
     if (error.error_type == WEBSOCKET_ERROR_TYPE_PONG_TIMEOUT) {
-        return "no pong from relay";
+        return "pong_timeout_sec=" + std::to_string(t3::kPongTimeoutSec) + ", no pong from relay";
     }
     if (error.esp_ws_handshake_status_code > 0 && error.esp_ws_handshake_status_code != 101) {
         return "upgrade got http " + std::to_string(error.esp_ws_handshake_status_code);
@@ -387,6 +387,8 @@ bool transport_init(const std::string &relayUrl, size_t maxFrameBytes)
     config.buffer_size = kWsChunkBytes;
     config.task_stack = kWsTaskStackBytes;
     config.network_timeout_ms = kNetworkTimeoutMs;
+    config.ping_interval_sec = t3::kPingIntervalSec;
+    config.pingpong_timeout_sec = t3::kPongTimeoutSec;
     client = esp_websocket_client_init(&config);
     if (client == nullptr || esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, onWsEvent, nullptr) != ESP_OK) {
         ESP_LOGE(TAG, "websocket client init failed");
