@@ -21,6 +21,13 @@ test("a port that's still there but won't open is busy", () => {
   assert.match(portOpenMessage(new Error("something else"), true), busy);
 });
 
+test("the busy message tells Linux users a permission problem looks the same, with the docs link", () => {
+  assert.match(
+    portOpenMessage(domError("NetworkError"), true),
+    / On Linux, a permission problem looks the same: see https:\/\/github\.com\/joaopcm\/t3-cardputer\/blob\/main\/docs\/troubleshooting\.md#the-port-is-busy-on-linux$/,
+  );
+});
+
 test("an md5 mismatch after writing names the part and the next step", () => {
   assert.equal(
     flashErrorMessage(new Error("MD5 of file does not match data in flash!"), "t3-cardputer.bin"),

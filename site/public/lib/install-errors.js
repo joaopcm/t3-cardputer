@@ -1,8 +1,9 @@
 export const replug = "Unplug the ADV, plug it back in, then click Connect ADV and install again.";
+const linuxPortHelp = "https://github.com/joaopcm/t3-cardputer/blob/main/docs/troubleshooting.md#the-port-is-busy-on-linux";
 
 export function portOpenMessage(error, connected) {
   if (error.name === "NotFoundError" || connected === false) return "ADV not found. Wait for it to restart, then try again.";
-  return "The ADV's port is busy. Close other apps and tabs that use it (a serial monitor, Arduino IDE, idf.py monitor), then try again.";
+  return `The ADV's port is busy. Close other apps and tabs that use it (a serial monitor, Arduino IDE, idf.py monitor), then try again. On Linux, a permission problem looks the same: see ${linuxPortHelp}`;
 }
 
 export function flashErrorMessage(error, path) {
