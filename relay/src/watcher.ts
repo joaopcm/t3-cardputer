@@ -2,7 +2,7 @@ import { AdapterBrokenError, type ApprovalsAdapter, type PendingApproval } from 
 import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
 import { DONE_WINDOW_MS, RUNNING_STATUSES } from "./views/home.js";
 
-export const T3_AUTH_WARNING = "T3 token rejected: run `t3-cardputer-relay pair-t3` on homelab";
+export const T3_AUTH_WARNING = "T3 token rejected: run t3-cardputer-relay renew";
 
 export type WatcherT3 = Pick<T3Mcp, "listProjects" | "listThreads" | "listRecentlyCompleted" | "listQuestions">;
 

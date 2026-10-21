@@ -68,7 +68,7 @@ describe("startRelay", () => {
     device.hello(token);
     const home = await device.next("home");
     expect(home.approvals.available).toBe(false);
-    expect(home.approvals.reason).toContain("pair-t3");
+    expect(home.approvals.reason).toBe("no T3 internal token: run t3-cardputer-relay renew");
 
     const listed = await adminRequest(env.socketPath, { op: "devices" }, 2000);
     expect(listed).toMatchObject({ ok: true, devices: [expect.objectContaining({ name: "adv" })] });
@@ -265,6 +265,61 @@ describe("startRelay", () => {
     device.hello(token);
     const home = await device.next("home");
     expect(home.warnings).toContain("T3 tokens expire in 3 days: run t3-cardputer-relay renew");
+  });
+
+  async function versionedRelay(patch: Record<string, unknown>) {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const reads = { environment: 0 };
+    const environment = createHttpServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/.well-known/t3/environment") {
+        reads.environment++;
+        return void res.writeHead(200).end(JSON.stringify({ serverVersion: "0.1.1", orchestrationProtocolVersion: 2, capabilities: {} }));
+      }
+      res.writeHead(404).end("{}");
+    });
+    await new Promise<void>((resolve) => environment.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { environment.closeAllConnections(); environment.close(() => resolve()); }));
+    const env = await relayEnvironment();
+    patchConfig(env.configPath, { ...patch, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` });
+    const expiresAt = new Date(Date.now() + 20 * DAY_MS).toISOString();
+    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt }, t3InternalToken: { token: "i", expiresAt } });
+    const canary = vi.fn(async (): Promise<CanaryResult> => ({ ok: true, ms: 1 }));
+    const t3 = Object.assign(new FakeT3(), { waitForRun: async () => ({ status: "completed", timedOut: false }), settleThread: async () => {} });
+    const relay = await startRelay(env, { connect: () => ({ t3, approvals: new FakeApprovals(), close: async () => {} }), canary, onCanaryFailed: () => {} });
+    cleanups.push(() => relay.close());
+    return { env, reads, canary };
+  }
+
+  it("a self-repairing relay with canary unset runs the version canary", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { reads, canary } = await versionedRelay({ repair: { projectId: "repair-project" } });
+    await vi.waitFor(() => expect(canary).toHaveBeenCalled());
+    expect(reads.environment).toBeGreaterThan(0);
+  });
+
+  it("a self-repairing relay with canary.enabled=false runs no canary, logs it once and says on Home that repair is off", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { env, reads, canary } = await versionedRelay({ repair: { projectId: "repair-project" }, canary: { enabled: false } });
+    const { device, token } = await pairedDevice(env);
+    device.hello(token);
+    const home = await device.next("home");
+    expect(home.warnings).toContain("self-repair needs canary.enabled=true in relay.json, repair is off");
+    expect(error.mock.calls.filter(([line]) => line === "self-repair needs canary.enabled=true in relay.json, repair is off")).toHaveLength(1);
+    expect(canary).not.toHaveBeenCalled();
+    expect(reads.environment).toBe(0);
+  });
+
+  it("a relay without repair and canary unset runs no canary and warns nothing about repair", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { env, reads, canary } = await versionedRelay({});
+    const { device, token } = await pairedDevice(env);
+    device.hello(token);
+    const home = await device.next("home");
+    expect(home.warnings.some((w) => w.includes("self-repair"))).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(canary).not.toHaveBeenCalled();
+    expect(reads.environment).toBe(0);
   });
 
   it("with the canary off a T3 version change never runs a canary", async () => {

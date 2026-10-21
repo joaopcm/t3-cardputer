@@ -21,7 +21,8 @@ export type RelayPaths = { configPath: string; secretsPath: string };
 
 export const ADMIN_SOCKET_NAME = "admin.sock";
 export const VERSION_STATE_NAME = "t3-version.json";
-const PAIR_T3_HINT = "run `t3-cardputer-relay pair-t3`";
+const RENEW_HINT = "run t3-cardputer-relay renew";
+export const REPAIR_NEEDS_CANARY_WARNING = "self-repair needs canary.enabled=true in relay.json, repair is off";
 // receipt: docs/receipts/2026-10-20-canary.md, one version check is a single GET of the environment document that took 2.3-21.4 ms over 10 calls, so every pollIntervalMs x 10 (20 s) is negligible
 const VERSION_CHECK_EVERY_POLLS = 10;
 
@@ -39,7 +40,7 @@ export function connectT3(config: RelayConfig, secrets: SecretsStore): { t3: T3M
     config.t3BaseUrl,
     () => {
       const record = secrets.read().t3InternalToken;
-      if (record === undefined) throw new T3AuthError("internal", `no T3 internal token: ${PAIR_T3_HINT}`);
+      if (record === undefined) throw new T3AuthError("internal", `no T3 internal token: ${RENEW_HINT}`);
       return record.token;
     },
     config.limits,
@@ -82,10 +83,13 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
     const { t3, approvals, close: closeT3 } = (hooks.connect ?? connectT3)(config, secrets);
     closers.push(closeT3);
 
+    const repairWithoutCanary = config.repair.projectId !== undefined && !config.canary.enabled;
+    if (repairWithoutCanary) console.error(REPAIR_NEEDS_CANARY_WARNING);
+
     const approvalsState = (): ApprovalsState => {
       const record = secrets.read().t3InternalToken;
-      if (record === undefined) return { available: false, reason: `no T3 internal token: ${PAIR_T3_HINT}` };
-      if (Date.parse(record.expiresAt) <= Date.now()) return { available: false, reason: `T3 internal token expired: ${PAIR_T3_HINT}` };
+      if (record === undefined) return { available: false, reason: `no T3 internal token: ${RENEW_HINT}` };
+      if (Date.parse(record.expiresAt) <= Date.now()) return { available: false, reason: `T3 internal token expired: ${RENEW_HINT}` };
       return { available: true };
     };
 
@@ -97,7 +101,7 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
       defaults: new DefaultsStore(join(stateDir, "defaults.json")),
       stt,
       approvalsState,
-      warnings: () => tokenExpiryWarnings(secrets.read(), new Date()),
+      warnings: () => [...tokenExpiryWarnings(secrets.read(), new Date()), ...(repairWithoutCanary ? [REPAIR_NEEDS_CANARY_WARNING] : [])],
       onAdapterBroken: () => versionLoop?.recheck() ?? "none",
     });
     closers.push(server.close);
@@ -105,8 +109,8 @@ export async function startRelay(paths: RelayPaths, hooks: RelayHooks = {}): Pro
 
     const canaryBlocked = (): string | undefined => {
       const mcp = secrets.read().t3McpToken;
-      if (mcp === undefined) return `no T3 MCP token: ${PAIR_T3_HINT}`;
-      if (Date.parse(mcp.expiresAt) <= Date.now()) return `T3 MCP token expired: ${PAIR_T3_HINT}`;
+      if (mcp === undefined) return `no T3 MCP token: ${RENEW_HINT}`;
+      if (Date.parse(mcp.expiresAt) <= Date.now()) return `T3 MCP token expired: ${RENEW_HINT}`;
       const state = approvalsState();
       return state.available ? undefined : state.reason;
     };

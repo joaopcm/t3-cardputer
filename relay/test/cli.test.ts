@@ -325,6 +325,19 @@ describe("renew", () => {
     for (const secret of ["PAIRCODE", "secret-token"]) expect(out() + err()).not.toContain(secret);
   });
 
+  it("when t3 fails it names the exit and stderr, never the stdout that may hold a credential, and stores nothing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "relay-renew-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "t3"), `#!/bin/sh\necho '{"credential":"LEAKEDCODE"}'\necho 'T3 server not running' >&2\nexit 3\n`);
+    chmodSync(join(bin, "t3"), 0o755);
+    const { env, run, out, err } = await setup({ env: { PATH: `${bin}:${process.env.PATH}` } });
+    expect(await run("renew")).toBe(1);
+    expect(err()).toContain("t3 auth pairing create failed: exit 3: T3 server not running");
+    expect(out() + err()).not.toContain("LEAKEDCODE");
+    expect(existsSync(env.secretsPath)).toBe(false);
+  });
+
   it("without t3 on PATH it prints the two commands to run in T3 and the pair-t3 --stdin step", async () => {
     const empty = mkdtempSync(join(tmpdir(), "relay-renew-"));
     const { run, out } = await setup({ env: { PATH: empty } });
@@ -352,6 +365,7 @@ describe("update", () => {
     const { run } = await setup({ fetch });
     expect(await run("update")).toBe(0);
     expect(fetch.mock.calls[0]![0]).toBe("https://t3-cardputer.jopcmelo.com/setup.sh");
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ redirect: "error" });
     expect(readFileSync(marker, "utf8")).toBe("--update\n");
   });
 

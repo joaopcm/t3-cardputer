@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -11,7 +11,6 @@ import { pairT3Internal } from "./approvals/index.js";
 import { DeviceAuth } from "./auth/devices.js";
 import { runCanary, type CanaryDeps } from "./canary.js";
 import { loadConfig, relayPathsFrom, type RelayConfig } from "./config.js";
-import { execRunner } from "./exec.js";
 import { INSTALL_SITE, installLink } from "./install-link.js";
 import { readSecret, type SecretInput } from "./read-secret.js";
 import { SecretsStore, type TokenRecord } from "./secrets.js";
@@ -212,8 +211,20 @@ function findOnPath(name: string, path: string | undefined): string | undefined 
   return undefined;
 }
 
+const T3_PAIRING_COMMAND = `t3 ${T3_PAIRING_ARGS.join(" ")}`;
+
+function runT3PairingCreate(t3: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(t3, T3_PAIRING_ARGS, { timeout: T3_CLI_TIMEOUT_MS, killSignal: "SIGKILL", encoding: "utf8" }, (error, stdout, stderr) => {
+      if (error === null) return resolve(stdout);
+      const why = error.killed ? `timed out: T3_CLI_TIMEOUT_MS=${T3_CLI_TIMEOUT_MS}` : `exit ${error.code ?? error.signal}`;
+      reject(new Error(`t3 auth pairing create failed: ${why}${stderr.trim() === "" ? "" : `: ${stderr.trim()}`}`));
+    });
+  });
+}
+
 async function createT3PairingCode(t3: string): Promise<string> {
-  const printed = await execRunner(t3, T3_PAIRING_ARGS, { timeoutMs: T3_CLI_TIMEOUT_MS, timeoutName: "T3_CLI_TIMEOUT_MS" });
+  const printed = await runT3PairingCreate(t3);
   let json: unknown;
   try {
     json = JSON.parse(printed);
@@ -221,7 +232,7 @@ async function createT3PairingCode(t3: string): Promise<string> {
     json = undefined;
   }
   const parsed = pairingCreatedSchema.safeParse(json);
-  if (!parsed.success) throw new Error(`renew: \`t3 ${T3_PAIRING_ARGS.join(" ")}\` printed no JSON with a credential, is this the T3 CLI?`);
+  if (!parsed.success) throw new Error(`renew: \`${T3_PAIRING_COMMAND}\` printed no JSON with a credential, is this the T3 CLI?`);
   return parsed.data.credential;
 }
 
@@ -230,7 +241,7 @@ async function renew(ctx: CliContext, args: string[]): Promise<number> {
   const t3 = findOnPath("t3", (ctx.env ?? process.env).PATH);
   if (t3 === undefined) {
     ctx.stdout("t3 is not on PATH here. run these two where T3 runs and take `credential` from each:");
-    for (let i = 0; i < 2; i++) ctx.stdout(`  t3 ${T3_PAIRING_ARGS.join(" ")}`);
+    for (let i = 0; i < 2; i++) ctx.stdout(`  ${T3_PAIRING_COMMAND}`);
     ctx.stdout("then: t3-cardputer-relay pair-t3 --stdin");
     ctx.stdout('and paste {"mcp":"<credential 1>","internal":"<credential 2>"}');
     return 0;
@@ -259,7 +270,7 @@ async function update(ctx: CliContext, args: string[]): Promise<number> {
     ctx.stderr("this relay updates itself from main (self-repair), update skipped");
     return 1;
   }
-  const response = await (ctx.fetch ?? fetch)(SETUP_URL);
+  const response = await (ctx.fetch ?? fetch)(SETUP_URL, { redirect: "error" });
   if (!response.ok) throw new Error(`update: GET ${SETUP_URL} answered HTTP ${response.status}, nothing ran. try again later`);
   const script = await response.text();
   if (!script.startsWith("#!")) throw new Error(`update: ${SETUP_URL} is not a shell script (no #! line), nothing ran. try again later`);

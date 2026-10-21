@@ -85,6 +85,13 @@ describe("loadConfig", () => {
     expect(config.canary).toEqual({ enabled: true, model: "claude-haiku-5-5", providerInstanceId: "claudeAgent" });
   });
 
+  it("turns the canary on by default when repair.projectId is set, since self-repair starts from a failed canary, and an explicit value wins", () => {
+    expect(loadConfig(tmpFile(JSON.stringify({ repair: { projectId: "p1" } }))).canary.enabled).toBe(true);
+    expect(loadConfig(tmpFile(JSON.stringify({ port: 9000 }))).canary.enabled).toBe(false);
+    expect(loadConfig(tmpFile(JSON.stringify({ repair: { projectId: "p1" }, canary: { enabled: false } }))).canary.enabled).toBe(false);
+    expect(loadConfig(tmpFile(JSON.stringify({ canary: { enabled: true } }))).canary.enabled).toBe(true);
+  });
+
   it("rejects canary.enabled that is not a boolean", () => {
     expect(() => loadConfig(tmpFile(JSON.stringify({ canary: { enabled: "yes" } })))).toThrow(/canary\.enabled.*"yes"/);
   });

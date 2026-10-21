@@ -203,7 +203,7 @@ describe("device session", () => {
     const device = await connected();
     t3.authBroken = true;
     const home = await device.next("home", (h) => h.warnings.length > 0);
-    expect(home.warnings).toContain("T3 token rejected: run `t3-cardputer-relay pair-t3` on homelab");
+    expect(home.warnings).toContain("T3 token rejected: run t3-cardputer-relay renew");
   });
 
   it("open_thread sends the page then jumps to the pending approval", async () => {

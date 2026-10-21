@@ -127,7 +127,7 @@ export const DEFAULT_CONFIG: RelayConfig = {
   whisper: { binDir: join(dataDir, "whisper"), model: "medium.en", port: 8788, threads: 8 },
   // receipt: Checkpoint B needs 5 recordings and Task 11 compares models on them, so 50 is a tripwire 10x past that; the longest clip (120 s, audioMaxSeconds) holds 3.84 MB, so 50 caps the dir at 192 MB worst case
   stt: { keepSamples: false, maxSamples: 50 },
-  // a canary launches real T3 turns on the user's account, so only a relay that opts in runs one on a T3 version change
+  // a canary launches real T3 turns on the user's account, so only a relay that opts in runs one on a T3 version change; loadConfig turns it on when repair.projectId is set, because self-repair only starts from a failed canary
   canary: { enabled: false, model: "claude-haiku-5-5" },
   repair: {
     model: "claude-opus-5-5",
@@ -209,9 +209,14 @@ function readConfigFile(path: string): Plain | undefined {
   return parsed;
 }
 
+function withCanaryDefault(fromFile: Plain): Plain {
+  if (valueAt(fromFile, ["canary", "enabled"]) !== undefined || valueAt(fromFile, ["repair", "projectId"]) === undefined) return fromFile;
+  return merge(fromFile, { canary: { enabled: true } });
+}
+
 export function loadConfig(path: string = DEFAULT_CONFIG_PATH): RelayConfig {
   const fromFile = readConfigFile(path);
-  const merged = fromFile ? merge(DEFAULT_CONFIG, fromFile) : DEFAULT_CONFIG;
+  const merged = fromFile ? merge(DEFAULT_CONFIG, withCanaryDefault(fromFile)) : DEFAULT_CONFIG;
   const result = configSchema.safeParse(merged);
   if (!result.success) throw new Error(`invalid config ${path}: ${describeIssues(result.error, merged)}`);
   return result.data;
