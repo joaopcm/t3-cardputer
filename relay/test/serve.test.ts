@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminRequest } from "../src/admin.js";
 import { SecretsStore } from "../src/secrets.js";
-import { startRelay, tokenExpiryWarnings } from "../src/serve.js";
+import { startRelay } from "../src/serve.js";
 import { Device, FakeApprovals, FakeT3, summary } from "./helpers/relay-fixture.js";
 import type { CanaryFailure, CanaryResult } from "../src/canary.js";
 import { relayEnvironment } from "./helpers/relay-env.js";
@@ -41,25 +41,9 @@ async function pairedDevice(env: { socketPath: string; port: number }): Promise<
 
 const DAY_MS = 86_400_000;
 
-describe("tokenExpiryWarnings", () => {
-  const now = Date.parse("2026-10-20T12:00:00.000Z");
-  const at = (ms: number) => new Date(now + ms).toISOString();
-
-  it("names each T3 token inside the warning window, the days left, and the re-pair command", () => {
-    expect(tokenExpiryWarnings({ t3McpToken: { token: "m", expiresAt: at(5 * DAY_MS + 3_600_000) }, t3InternalToken: { token: "i", expiresAt: at(DAY_MS) } }, now, 7 * DAY_MS)).toEqual([
-      "T3 MCP token expires in 5 days: run `t3-cardputer-relay pair-t3` on homelab",
-      "T3 internal token expires in 1 day: run `t3-cardputer-relay pair-t3` on homelab",
-    ]);
-  });
-
-  it("says under a day on the last day, and nothing outside the window, once expired, or for a missing token", () => {
-    expect(tokenExpiryWarnings({ t3McpToken: { token: "m", expiresAt: at(3_600_000) } }, now, 7 * DAY_MS)).toEqual([
-      "T3 MCP token expires in under a day: run `t3-cardputer-relay pair-t3` on homelab",
-    ]);
-    expect(tokenExpiryWarnings({ t3McpToken: { token: "m", expiresAt: at(8 * DAY_MS) }, t3InternalToken: { token: "i", expiresAt: at(-1) } }, now, 7 * DAY_MS)).toEqual([]);
-    expect(tokenExpiryWarnings({}, now, 7 * DAY_MS)).toEqual([]);
-  });
-});
+function patchConfig(configPath: string, patch: Record<string, unknown>) {
+  writeFileSync(configPath, JSON.stringify({ ...(JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>), ...patch }));
+}
 
 describe("startRelay", () => {
   it("serves devices, pairs through the admin socket, and cleans up on close", async () => {
@@ -172,6 +156,7 @@ describe("startRelay", () => {
   it("skips the version-change canary with a logged reason while T3 tokens are missing, and stops cleanly", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const env = await relayEnvironment();
+    patchConfig(env.configPath, { canary: { enabled: true } });
     const relay = await startRelay(env);
     cleanups.push(() => relay.close());
     await vi.waitFor(() => expect(error.mock.calls.some(([line]) => String(line).includes("canary skipped") && String(line).includes("T3 MCP token"))).toBe(true));
@@ -190,7 +175,7 @@ describe("startRelay", () => {
     cleanups.push(() => new Promise<void>((resolve) => { environment.closeAllConnections(); environment.close(() => resolve()); }));
     const env = await relayEnvironment();
     const config = JSON.parse(readFileSync(env.configPath, "utf8")) as Record<string, unknown>;
-    writeFileSync(env.configPath, JSON.stringify({ ...config, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` }));
+    writeFileSync(env.configPath, JSON.stringify({ ...config, canary: { enabled: true }, repair: { projectId: "repair-project" }, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` }));
     const expiresAt = new Date(Date.now() + 86_400_000).toISOString();
     new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt }, t3InternalToken: { token: "i", expiresAt } });
     mkdirSync(env.stateDir, { recursive: true });
@@ -225,7 +210,7 @@ describe("startRelay", () => {
     cleanups.push(() => new Promise<void>((resolve) => { environment.closeAllConnections(); environment.close(() => resolve()); }));
     const env = await relayEnvironment();
     const config = JSON.parse(readFileSync(env.configPath, "utf8")) as Record<string, unknown>;
-    writeFileSync(env.configPath, JSON.stringify({ ...config, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` }));
+    writeFileSync(env.configPath, JSON.stringify({ ...config, canary: { enabled: true }, repair: { projectId: "repair-project" }, t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` }));
     const expiresAt = new Date(Date.now() + 20 * 86_400_000).toISOString();
     new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt }, t3InternalToken: { token: "i", expiresAt } });
     mkdirSync(env.stateDir, { recursive: true });
@@ -270,15 +255,45 @@ describe("startRelay", () => {
     expect(gates).toHaveLength(2);
   });
 
-  it("shows a T3 token close to expiry on Home with the days left", async () => {
+  it("shows T3 tokens close to expiry on Home with the days left and the renew command", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const env = await relayEnvironment();
-    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt: new Date(Date.now() + 3 * DAY_MS + 60_000).toISOString() } });
+    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt: new Date(Date.now() + 3 * DAY_MS - 60_000).toISOString() } });
     const relay = await startRelay(env);
     cleanups.push(() => relay.close());
     const { device, token } = await pairedDevice(env);
     device.hello(token);
     const home = await device.next("home");
-    expect(home.warnings).toContain("T3 MCP token expires in 3 days: run `t3-cardputer-relay pair-t3` on homelab");
+    expect(home.warnings).toContain("T3 tokens expire in 3 days: run t3-cardputer-relay renew");
+  });
+
+  it("with the canary off a T3 version change never runs a canary", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    let environmentReads = 0;
+    const environment = createHttpServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/.well-known/t3/environment") {
+        environmentReads++;
+        return void res.writeHead(200).end(JSON.stringify({ serverVersion: "0.1.1", orchestrationProtocolVersion: 2, capabilities: {} }));
+      }
+      res.writeHead(404).end("{}");
+    });
+    await new Promise<void>((resolve) => environment.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve) => { environment.closeAllConnections(); environment.close(() => resolve()); }));
+    const env = await relayEnvironment();
+    patchConfig(env.configPath, { t3BaseUrl: `http://127.0.0.1:${(environment.address() as { port: number }).port}` });
+    const expiresAt = new Date(Date.now() + 20 * DAY_MS).toISOString();
+    new SecretsStore(env.secretsPath).write({ devices: [], t3McpToken: { token: "m", expiresAt }, t3InternalToken: { token: "i", expiresAt } });
+    mkdirSync(env.stateDir, { recursive: true });
+    writeFileSync(join(env.stateDir, "t3-version.json"), JSON.stringify({ serverVersion: "0.1.0", orchestrationProtocolVersion: 2, verdict: "pass" }));
+    const canary = vi.fn(async (): Promise<CanaryResult> => ({ ok: true, ms: 1 }));
+    const t3 = Object.assign(new FakeT3(), { waitForRun: async () => ({ status: "completed", timedOut: false }), settleThread: async () => {} });
+    const relay = await startRelay(env, { connect: () => ({ t3, approvals: new FakeApprovals(), close: async () => {} }), canary });
+    cleanups.push(() => relay.close());
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(canary).not.toHaveBeenCalled();
+    expect(environmentReads).toBe(0);
+    expect(JSON.parse(readFileSync(join(env.stateDir, "t3-version.json"), "utf8"))).toMatchObject({ serverVersion: "0.1.0", verdict: "pass" });
   });
 });

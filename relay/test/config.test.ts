@@ -74,6 +74,29 @@ describe("loadConfig", () => {
     expect(() => loadConfig(path)).toThrow(/prot/);
   });
 
+  it("leaves the canary off and publicUrl unset by default", () => {
+    const config = loadConfig(join(tmpdir(), "missing-relay.json"));
+    expect(config.canary).toEqual({ enabled: false, model: "claude-haiku-5-5" });
+    expect(config.publicUrl).toBeUndefined();
+  });
+
+  it("takes canary.enabled and canary.providerInstanceId", () => {
+    const config = loadConfig(tmpFile(JSON.stringify({ canary: { enabled: true, providerInstanceId: "claudeAgent" } })));
+    expect(config.canary).toEqual({ enabled: true, model: "claude-haiku-5-5", providerInstanceId: "claudeAgent" });
+  });
+
+  it("rejects canary.enabled that is not a boolean", () => {
+    expect(() => loadConfig(tmpFile(JSON.stringify({ canary: { enabled: "yes" } })))).toThrow(/canary\.enabled.*"yes"/);
+  });
+
+  it("takes publicUrl as https://host[:port] and rejects anything else naming it", () => {
+    expect(loadConfig(tmpFile(JSON.stringify({ publicUrl: "https://relay.example.com:8443" }))).publicUrl).toBe("https://relay.example.com:8443");
+    expect(loadConfig(tmpFile(JSON.stringify({ publicUrl: "https://relay.example.com" }))).publicUrl).toBe("https://relay.example.com");
+    for (const bad of ["http://relay.example.com", "https://relay.example.com/", "https://relay.example.com:8443/v1", "relay.example.com"]) {
+      expect(() => loadConfig(tmpFile(JSON.stringify({ publicUrl: bad })))).toThrow(/publicUrl.*https:\/\/host\[:port\]/);
+    }
+  });
+
   it("names the file when JSON is malformed", () => {
     const path = tmpFile("{nope");
     expect(() => loadConfig(path)).toThrow(path);

@@ -1,8 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adminRequest, startAdminServer } from "../src/admin.js";
 import { DeviceAuth } from "../src/auth/devices.js";
@@ -10,6 +13,7 @@ import { runCli, type CliContext } from "../src/cli.js";
 import type { CanaryDeps } from "../src/canary.js";
 import { loadConfig } from "../src/config.js";
 import { SecretsStore } from "../src/secrets.js";
+import { T3Mcp } from "../src/t3/mcp.js";
 import { relayEnvironment } from "./helpers/relay-env.js";
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -57,12 +61,13 @@ async function listen(handler: Parameters<typeof createServer>[1]): Promise<stri
   return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 }
 
-function t3Stub(opts: { mcpRefuses?: boolean } = {}) {
+function t3Stub(opts: { mcpRefuses?: boolean; bodies?: string[] } = {}) {
   return listen((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
+      opts.bodies?.push(`${req.url} ${body}`);
       res.setHeader("content-type", "application/json");
       if (req.url === "/oauth/mcp/register") return void res.writeHead(201).end(JSON.stringify({ client_id: "cid" }));
       if (req.url === "/oauth/mcp/decision") {
@@ -81,7 +86,7 @@ describe("usage", () => {
   it("--help lists the commands and exits 0", async () => {
     const { run, out } = await setup();
     expect(await run("--help")).toBe(0);
-    for (const command of ["serve", "pair", "devices", "revoke", "pair-t3", "secrets set github", "canary", "sim"]) expect(out()).toContain(command);
+    for (const command of ["serve", "pair", "install-link", "devices", "revoke", "pair-t3", "renew", "update", "models", "secrets set github", "canary", "sim"]) expect(out()).toContain(command);
   });
 
   it("--version prints the package version and exits 0", async () => {
@@ -241,6 +246,159 @@ describe("pair-t3", () => {
     expect(await run("pair-t3", "--mcp", "X", "--internal", "Y")).toBe(1);
     expect(err()).toContain("T3 unreachable");
   });
+
+  it("--stdin reads both codes as JSON and stores both tokens without printing a code or a token", async () => {
+    const stdin = new PassThrough();
+    const bodies: string[] = [];
+    const { env, run, out, err } = await setup({ stdin });
+    withConfig(env, { t3BaseUrl: await t3Stub({ bodies }) });
+    stdin.end(JSON.stringify({ mcp: "MCPCODE1", internal: "BOOTSTRAP2" }) + "\n");
+    expect(await run("pair-t3", "--stdin")).toBe(0);
+    const secrets = new SecretsStore(env.secretsPath).read();
+    expect(secrets.t3McpToken?.token).toBe("mcp-secret-token");
+    expect(secrets.t3InternalToken?.token).toBe("internal-secret-token");
+    expect(bodies.find((b) => b.startsWith("/oauth/mcp/decision"))).toContain("MCPCODE1");
+    expect(bodies.find((b) => b.startsWith("/oauth/token"))).toContain("BOOTSTRAP2");
+    for (const secret of ["secret-token", "MCPCODE1", "BOOTSTRAP2"]) expect(out() + err()).not.toContain(secret);
+  });
+
+  it("--stdin that is not the expected JSON exits 2 naming the shape without echoing the input", async () => {
+    const stdin = new PassThrough();
+    const { run, err } = await setup({ stdin });
+    stdin.end('{"mcp":"LEAKYCODE"}');
+    expect(await run("pair-t3", "--stdin")).toBe(2);
+    expect(err()).toContain('{"mcp":"<code>","internal":"<code>"}');
+    expect(err()).not.toContain("LEAKYCODE");
+  });
+
+  it("--stdin refuses --mcp or --internal beside it", async () => {
+    const { run, err } = await setup();
+    expect(await run("pair-t3", "--stdin", "--mcp", "X")).toBe(2);
+    expect(err()).toContain("--stdin");
+  });
+});
+
+describe("install-link", () => {
+  it("prints the install link for a fresh pairing code and when it expires", async () => {
+    const { env, run, out } = await setup();
+    withConfig(env, { publicUrl: "https://relay.example.com:8443" });
+    await startAdmin(env);
+    expect(await run("install-link")).toBe(0);
+    expect(out()).toMatch(/^https:\/\/t3-cardputer\.jopcmelo\.com\/install#r=https%3A%2F%2Frelay\.example\.com%3A8443&c=[2-9A-HJKMNP-Z]{8}$/m);
+    expect(out()).toContain("code expires in 10 min");
+  });
+
+  it("exits 1 naming publicUrl when relay.json has none", async () => {
+    const { env, run, err } = await setup();
+    await startAdmin(env);
+    expect(await run("install-link")).toBe(1);
+    expect(err()).toContain("install-link needs publicUrl in relay.json (setup.sh sets it)");
+  });
+});
+
+describe("renew", () => {
+  function fakeT3Cli(root: string) {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const log = join(root, "t3-calls.log");
+    writeFileSync(
+      join(bin, "t3"),
+      `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nn=$(wc -l < ${JSON.stringify(log)} | tr -d ' ')\nprintf '{"id":"p%s","credential":"PAIRCODE%s","scopes":["full-access"],"expiresAt":"2026-10-21T00:05:00.000Z"}\\n' "$n" "$n"\n`,
+    );
+    chmodSync(join(bin, "t3"), 0o755);
+    return { bin, log };
+  }
+
+  it("with t3 on PATH it makes two pairing codes and pairs both, printing neither", async () => {
+    const root = mkdtempSync(join(tmpdir(), "relay-renew-"));
+    const { bin, log } = fakeT3Cli(root);
+    const bodies: string[] = [];
+    const { env, run, out, err } = await setup({ env: { PATH: `${bin}:${process.env.PATH}` } });
+    withConfig(env, { t3BaseUrl: await t3Stub({ bodies }) });
+    expect(await run("renew")).toBe(0);
+    expect(readFileSync(log, "utf8")).toBe("auth pairing create --json --ttl 5m --label t3-cardputer-relay\n".repeat(2));
+    expect(bodies.find((b) => b.startsWith("/oauth/mcp/decision"))).toContain("PAIRCODE1");
+    expect(bodies.find((b) => b.startsWith("/oauth/token"))).toContain("PAIRCODE2");
+    const secrets = new SecretsStore(env.secretsPath).read();
+    expect(secrets.t3McpToken?.token).toBe("mcp-secret-token");
+    expect(secrets.t3InternalToken?.token).toBe("internal-secret-token");
+    for (const secret of ["PAIRCODE", "secret-token"]) expect(out() + err()).not.toContain(secret);
+  });
+
+  it("without t3 on PATH it prints the two commands to run in T3 and the pair-t3 --stdin step", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "relay-renew-"));
+    const { run, out } = await setup({ env: { PATH: empty } });
+    expect(await run("renew")).toBe(0);
+    const lines = out().split("\n");
+    expect(lines.filter((line) => line.trim() === "t3 auth pairing create --json --ttl 5m --label t3-cardputer-relay")).toHaveLength(2);
+    expect(lines).toContain("then: t3-cardputer-relay pair-t3 --stdin");
+  });
+});
+
+describe("update", () => {
+  it("refuses on a self-repairing relay", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const { env, run, err } = await setup({ fetch });
+    withConfig(env, { repair: { projectId: "p1" } });
+    expect(await run("update")).toBe(1);
+    expect(err()).toContain("this relay updates itself from main (self-repair), update skipped");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("downloads setup.sh from the site and runs it with --update", async () => {
+    const root = mkdtempSync(join(tmpdir(), "relay-update-"));
+    const marker = join(root, "ran");
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(`#!/bin/sh\necho "$@" > ${JSON.stringify(marker)}\n`));
+    const { run } = await setup({ fetch });
+    expect(await run("update")).toBe(0);
+    expect(fetch.mock.calls[0]![0]).toBe("https://t3-cardputer.jopcmelo.com/setup.sh");
+    expect(readFileSync(marker, "utf8")).toBe("--update\n");
+  });
+
+  it("exits 1 naming the HTTP status when the download fails, and runs nothing", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response("nope", { status: 503 }));
+    const { run, err } = await setup({ fetch });
+    expect(await run("update")).toBe(1);
+    expect(err()).toContain("HTTP 503");
+  });
+
+  it("exits 1 when the download is not a shell script, and runs nothing", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response("<html>hi</html>"));
+    const { run, err } = await setup({ fetch });
+    expect(await run("update")).toBe(1);
+    expect(err()).toContain("not a shell script");
+  });
+});
+
+describe("models", () => {
+  function catalogMcp(config: { t3BaseUrl: string }, secrets: SecretsStore) {
+    const capture = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "t3", "mcp-orchestrator-capabilities.json"), "utf8")) as Record<string, unknown>;
+    const createTransport = async () => {
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+      const server = new McpServer({ name: "fake-t3", version: "0.0.0" }, { capabilities: { tools: {} } });
+      server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
+      server.setRequestHandler(CallToolRequestSchema, async (request) =>
+        request.params.name === "orchestrator_capabilities" ? { content: [{ type: "text", text: JSON.stringify(capture) }], structuredContent: capture } : { isError: true, content: [{ type: "text", text: "unknown tool" }] },
+      );
+      await server.connect(serverSide);
+      return clientSide;
+    };
+    return new T3Mcp({ baseUrl: config.t3BaseUrl, secrets, createTransport });
+  }
+
+  it("--json prints only usable models with their provider instance", async () => {
+    const { run, out } = await setup({ openMcp: catalogMcp });
+    expect(await run("models", "--json")).toBe(0);
+    const models = JSON.parse(out()) as { id: string; label: string; providerInstanceId: string }[];
+    expect(models.map((m) => m.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-5-5"]);
+    expect(models.every((m) => m.providerInstanceId === "claudeAgent" && Object.keys(m).join() === "id,label,providerInstanceId")).toBe(true);
+  });
+
+  it("exits 1 saying how to pair when no MCP token is stored", async () => {
+    const { run, err } = await setup();
+    expect(await run("models", "--json")).toBe(1);
+    expect(err()).toContain("t3 auth pairing create");
+  });
 });
 
 describe("secrets set github", () => {
@@ -299,7 +457,7 @@ describe("serve", () => {
     let shutdown!: () => void;
     const { env, run, out } = await setup({ waitForShutdown: () => new Promise<void>((resolve) => (shutdown = resolve)) });
     const done = run("serve");
-    await vi.waitFor(() => expect(out()).toContain(String(env.port)));
+    await vi.waitFor(() => expect(out()).toBe(`relay ready on 127.0.0.1:${env.port}`));
     expect(statSync(env.socketPath).isSocket()).toBe(true);
     shutdown();
     expect(await done).toBe(0);

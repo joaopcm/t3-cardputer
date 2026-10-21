@@ -33,6 +33,15 @@ function fakes(overrides: { listPending?: CanaryDeps["approvals"]["listPending"]
 const OPTS = { model: "claude-haiku-5-5", timeoutMs: 2000, pollIntervalMs: 1 };
 
 describe("runCanary", () => {
+  it("launches on the configured provider instance when one is set, and leaves it to T3's default otherwise", async () => {
+    const pinned = fakes();
+    expect(await runCanary(pinned.deps, { ...OPTS, providerInstanceId: "claudeAgent2" })).toMatchObject({ ok: true });
+    expect(pinned.t3.launch.mock.calls[0]![0].providerInstanceId).toBe("claudeAgent2");
+    const unpinned = fakes();
+    expect(await runCanary(unpinned.deps, OPTS)).toMatchObject({ ok: true });
+    expect(unpinned.t3.launch.mock.calls[0]![0]).not.toHaveProperty("providerInstanceId");
+  });
+
   it("canary passes end-to-end with fakes", async () => {
     const { deps, t3, approvals } = fakes();
     const result = await runCanary(deps, OPTS);

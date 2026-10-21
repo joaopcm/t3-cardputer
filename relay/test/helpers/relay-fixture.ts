@@ -203,7 +203,7 @@ export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeSt
   const brokenReasons: string[] = [];
   const brokenHook: { phase: ApprovalsDownPhase } = { phase: "checking" };
   const server = await startServer({
-    config: { ...DEFAULT_CONFIG, port: 0, stateDir: dir, limits: allLimits, ...config },
+    config: { ...DEFAULT_CONFIG, repair: { ...DEFAULT_CONFIG.repair, projectId: "repair-project" }, port: 0, stateDir: dir, limits: allLimits, ...config },
     t3,
     approvals,
     auth,
