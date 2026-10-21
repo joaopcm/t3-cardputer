@@ -436,11 +436,11 @@ No code. Ordered steps; each is an outward action, so each one waits for João.
    - `T3INFO` reports `paired: true`;
    - the update keeps the token, because the relay URL goes from empty to set;
    - Home comes up with no re-pair.
-5. **Stranger dry run:** run `setup.sh` on a second T3 machine if João has one (see open question 1). Otherwise run it with `--dry-run` on the homelab, then the harness from Task 8.
+5. **Stranger dry run:** `setup.sh --dry-run` on the homelab (it must refuse the self-repair checkout by name), then a run in a temp `HOME` with `--dry-run`, then the Task 8 harness. There's no second T3 machine.
 
 ---
 
-## Unresolved questions
+## Resolved questions
 
-1. Is there a second machine with T3 (your Mac?) to run `setup.sh` end to end for Checkpoint D? Without one we only get `--dry-run` plus the stubbed harness.
-2. Should `auto-release` cut a patch release on every relay, firmware or site change to `main`, or only when you push a tag? Auto is what the spec says; it means many small versions.
+1. No second T3 machine (João). Checkpoint D's stranger run is `setup.sh --dry-run` on the homelab plus the Task 8 stubbed harness in CI, which covers fresh Linux, fresh macOS, re-run, refusal and paste paths.
+2. Automatic patch releases on every relay, firmware or site change to `main` (João).
