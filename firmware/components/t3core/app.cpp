@@ -204,6 +204,10 @@ std::string App::dropOldestUnsent(size_t excess)
 
 void App::dropAnswersNoLongerPending()
 {
+    // why: the relay lists no approvals while its adapter is broken, unreachable or unauthorized (readApprovals in relay/src/watcher.ts), so a thread still waiting on an answer shows as running
+    if (!home_ || !home_->approvals.available || home_->t3 != T3Status::Ok) {
+        return;
+    }
     for (auto item = unsent_.begin(); item != unsent_.end();) {
         const HomeRow *row = item->requestId ? homeRow(item->threadId) : nullptr;
         const bool settled = row && (row->kind == HomeKind::Running || row->kind == HomeKind::Done || row->kind == HomeKind::Failed);

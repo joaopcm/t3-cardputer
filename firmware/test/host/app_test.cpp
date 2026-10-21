@@ -1438,6 +1438,27 @@ TEST_CASE("a saved answer is dropped once home shows its thread with nothing pen
     CHECK_FALSE(contains(allText(app), "use staging"));
 }
 
+TEST_CASE("a saved answer stays while home cannot see approvals")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    app.onSendFailed(frame, "send failed, 120 bytes not sent", tick());
+    push(app, relay(R"({"type":"home","rows":[{"threadId":"thr_bounce","kind":"running","project":"resend-api","title":"fix bounce webhook","age":"1m"}],
+ "counts":{"needs":0,"running":1,"done":0},"approvals":{"available":false,"reason":"adapter broken"},"warnings":[],"t3":"ok"})"));
+    push(app, relay(R"({"type":"home","rows":[{"threadId":"thr_bounce","kind":"running","project":"resend-api","title":"fix bounce webhook","age":"1m"}],
+ "counts":{"needs":0,"running":1,"done":0},"approvals":{"available":true},"warnings":[],"t3":"unreachable"})"));
+    CHECK_FALSE(contains(shown(app), "dropped"));
+    push(app, relay(kHome));
+    press(app, named(KeyName::Enter));
+    push(app, relay(kBouncePage));
+    push(app, relay(kBounceRequest));
+    CHECK(app.screenName() == "approval");
+    CHECK(contains(allText(app), "use staging"));
+}
+
 TEST_CASE("4401 drops unconfirmed replies instead of re-sending them under the new device, and keeps their text")
 {
     App app = onWeaverThread();
