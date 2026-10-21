@@ -8,3 +8,4 @@ firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/test/host/build/
+firmware/build-release/
