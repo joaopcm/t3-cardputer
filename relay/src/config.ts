@@ -69,7 +69,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxHomeRows: 50,
   // receipt: docs/receipts/2026-10-20-whisper-cpu.md, the spec's 5-30 s prompts x4; a full 120 s clip transcribed in 61-65 s on medium.en and holds 3.84 MB
   audioMaxSeconds: 120,
-  // receipt: pending plan 2, the measured hotspot jitter decides it
+  // receipt: home WiFi worst gap 130 ms (docs/receipts/2026-10-21-firmware-voice.md); hotspot unmeasured
   audioIdleTimeoutMs: 5000,
   // receipt: docs/receipts/2026-10-20-whisper-cpu.md, whisper-server died 0 times in 59 requests over 17 starts, so 3 restarts in the window only trips a crash loop
   whisperRestartsPerWindow: 3,
