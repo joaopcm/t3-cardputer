@@ -1101,3 +1101,127 @@ TEST_CASE("editing is true only while a text line holds or awaits typing")
     type(prompt, "x");
     CHECK(prompt.editing());
 }
+
+TEST_CASE("a reply with the link down is kept, not sent, and says why")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+    CHECK(row(app, 0).rfind("reply not sent: relay unreachable:", 0) == 0);
+    CHECK(row(app, 8).rfind("> go_", 0) == 0);
+}
+
+TEST_CASE("reply sent shows only on its ack")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    const Frame reply(only(press(app, named(KeyName::Enter))));
+    CHECK(reply.str("type") == "reply");
+    CHECK_FALSE(contains(row(app, 0), "reply sent"));
+    push(app, t3::Ack{reply.str("id"), true, std::nullopt});
+    CHECK(row(app, 0).rfind("reply sent: queue", 0) == 0);
+}
+
+TEST_CASE("a reply whose send fails comes back with a named notice")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    app.onSendFailed(frame, "send failed, 80 bytes not sent", tick());
+    CHECK(row(app, 0).rfind("reply not sent: send failed, 80 bytes", 0) == 0);
+    CHECK(row(app, 1).rfind("not sent", 0) == 0);
+    CHECK(row(app, 8).rfind("> go_", 0) == 0);
+    push(app, t3::Ack{Frame(frame).str("id"), true, std::nullopt});
+    CHECK_FALSE(contains(row(app, 0), "reply sent"));
+}
+
+TEST_CASE("an answer with the link down keeps the typed reason and the request")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    app.onLinkStatus("wifi down");
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+    CHECK(app.screenName() == "approval");
+    CHECK(row(app, 0).rfind("answer not sent: wifi down", 0) == 0);
+    CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
+}
+
+TEST_CASE("an answer whose send fails goes back to the request with its typed reason")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    CHECK(app.screenName() == "thread");
+    app.onSendFailed(frame, "send failed, 120 bytes not sent", tick());
+    CHECK(app.screenName() == "approval");
+    CHECK(row(app, 0).rfind("answer not sent: send failed, 120 bytes", 0) == 0);
+    CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
+    const Frame again(only(press(app, named(KeyName::Enter))));
+    CHECK(again.str("text") == "use staging");
+}
+
+TEST_CASE("an answer shows sent only on its ack")
+{
+    App app = onApproval();
+    const Frame sent(only(press(app, ch('Y'))));
+    CHECK_FALSE(contains(row(app, 0), "sent: Allow once"));
+    push(app, t3::Ack{sent.str("id"), true, std::nullopt});
+    CHECK(row(app, 0).rfind("sent: Allow once", 0) == 0);
+}
+
+TEST_CASE("a send failure for a frame nobody tracks is still shown")
+{
+    App app = onWeaverThread();
+    app.onSendFailed(R"({"type":"page","id":"x"})", "not connected, 30 bytes not sent", tick());
+    CHECK(row(app, 0).rfind("not connected, 30 bytes not sent", 0) == 0);
+}
+
+TEST_CASE("a reply the link lost before its ack is re-sent with the same id after welcome")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(row(app, 0).rfind("reply to layout engine not confirmed,", 0) == 0);
+    CHECK(app.onLinkStatus("connecting").send.empty());
+    const App::Out back = app.onLinkStatus("");
+    REQUIRE(back.send.size() == 2);
+    CHECK(back.send[0] == frame);
+    CHECK(Frame(back.send[1]).str("type") == "open_thread");
+    push(app, t3::Ack{Frame(frame).str("id"), true, std::nullopt});
+    CHECK(row(app, 0).rfind("reply sent: queue", 0) == 0);
+    CHECK(app.onLinkStatus("relay unreachable: closed 1006").send.empty());
+    CHECK(app.onLinkStatus("").send.size() == 1);
+}
+
+TEST_CASE("an answer the link lost before its ack is re-sent, and a re-send that fails restores it")
+{
+    App app = onApproval();
+    press(app, ch('T'));
+    type(app, "use staging");
+    const std::string frame = only(press(app, named(KeyName::Enter)));
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(row(app, 0).rfind("answer to fix bounce webhook not", 0) == 0);
+    const App::Out back = app.onLinkStatus("");
+    REQUIRE_FALSE(back.send.empty());
+    CHECK(back.send[0] == frame);
+    app.onSendFailed(frame, "send failed, 120 bytes not sent", tick());
+    CHECK(app.screenName() == "approval");
+    CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
+}
+
+TEST_CASE("unacked replies have a budget that names itself and keeps the text")
+{
+    App app = onWeaverThread();
+    for (int i = 0; i < t3::kUnackedMax; ++i) {
+        type(app, "r" + std::to_string(i));
+        CHECK(only(press(app, named(KeyName::Enter))).find("\"reply\"") != std::string::npos);
+    }
+    type(app, "more");
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+    CHECK(row(app, 0).rfind("unacked_max=" + std::to_string(t3::kUnackedMax) + ", reply needed " + std::to_string(t3::kUnackedMax + 1), 0) == 0);
+    CHECK(row(app, 8).rfind("> more_", 0) == 0);
+}

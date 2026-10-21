@@ -15,6 +15,9 @@ namespace t3 {
 // why: simple visual reaction time is about 200-250 ms, so a key already on its way when an unasked-for request replaces the screen lands inside 400 ms; option keys act only after 400 ms with no typed key
 inline constexpr uint32_t kRequestGuardMs = 400;
 
+// receipt: docs/receipts/2026-10-21-firmware-network.md "unacked replies and answers"
+inline constexpr int kUnackedMax = 8;
+
 std::vector<std::string> wrapWords(std::string_view text, int width);
 
 // why: 16-bit PCM spans 96 dB, so -96 dBFS is below any chunk that is not all zeros
@@ -63,6 +66,7 @@ public:
     Out onBoot(bool hasWifi, bool hasToken);
     Out onAuthRejected();
     void onTransportError(std::string_view why);
+    void onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs);
     void onWifiScan(std::vector<WifiNet> nets);
     Out onWifiResult(bool ok, std::string_view why);
     Out onPairResult(std::optional<std::string> token, std::string_view why);
@@ -84,6 +88,16 @@ private:
         int row = -1;
     };
 
+    struct Unacked {
+        std::string id;
+        std::string frame;
+        std::string threadId;
+        std::string text;
+        std::string confirmed;
+        std::optional<Request> request;
+        std::optional<Option> option;
+    };
+
     struct RequestLayout {
         std::vector<Line> scroll;
         std::vector<Line> pinned;
@@ -92,6 +106,9 @@ private:
 
     std::string nextId() { return ids_.next(); }
     bool send(Out &out, std::optional<std::string> frame, std::string_view what);
+    bool readyToSend(std::string_view what);
+    bool sendTracked(Out &out, std::optional<std::string> frame, std::string_view what, Unacked item);
+    void giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs);
     void inform(std::string text, Color color = Color::Red);
     void type(std::string &text, char c, int max, std::string_view budget, std::string_view what);
     Out refresh();
@@ -165,10 +182,8 @@ private:
     std::string threadId_;
     std::optional<ThreadPage> page_;
     std::string reply_;
-    std::string replyId_;
-    std::string replySent_;
-    std::string replyThreadId_;
     std::string openId_;
+    std::vector<Unacked> unacked_;
 
     std::optional<Request> request_;
     std::optional<Request> waiting_;
@@ -176,8 +191,6 @@ private:
     int requestTop_ = 0;
     std::optional<Option> typingFor_;
     std::string answer_;
-    std::string respondId_;
-    std::optional<Request> responded_;
 
     std::optional<Projects> projects_;
     int projectSelected_ = 0;

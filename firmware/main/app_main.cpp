@@ -451,7 +451,7 @@ private:
         for (const std::string &frame : out.send) {
             if (std::optional<std::string> error = transport_send(frame)) {
                 ESP_LOGE(TAG, "%s", error->c_str());
-                app_.onTransportError(*error);
+                app_.onSendFailed(frame, *error, now_ms());
                 sendError = std::move(error);
             }
         }

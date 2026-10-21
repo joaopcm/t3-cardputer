@@ -146,24 +146,25 @@ App::Out App::showWaiting()
 App::Out App::respond(Option option, std::optional<std::string> text)
 {
     Out out;
+    if (!readyToSend("answer")) {
+        return out;
+    }
     const Request &request = *request_;
     const std::string id = nextId();
     std::optional<std::string_view> textView;
     if (text) {
         textView = *text;
     }
-    if (!send(out, encodeRespond(id, request.threadId, request.requestId, option.value, textView), "respond")) {
+    Unacked item{id, {}, request.threadId, text.value_or(""), "sent: " + option.label, request, option};
+    if (!sendTracked(out, encodeRespond(id, request.threadId, request.requestId, option.value, textView), "respond", std::move(item))) {
         return out;
     }
-    respondId_ = id;
-    responded_ = request_;
     if (waiting_ && waiting_->requestId == request.requestId) {
         waiting_.reset();
     }
     typingFor_.reset();
     answer_.clear();
     screen_ = Screen::Thread;
-    inform("sent: " + option.label, Color::Ok);
     return out;
 }
 

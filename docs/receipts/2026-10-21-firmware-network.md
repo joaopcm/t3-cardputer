@@ -87,6 +87,12 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 - A pong timeout surfaces as close 1006 with the reason `pong_timeout_sec=25, no pong from relay`. The link shows `relay unreachable: ...`, keeps the token and reconnects with backoff (`link_test.cpp`).
 - If the TCP send buffer is full when the link dies (mid-recording), the ping write can block for `kNetworkTimeoutMs` (10 s) first, so the worst case there is 46 s, still inside 60 s.
 
+## unacked replies and answers (`kUnackedMax` = 8)
+
+- A `reply` or `respond` stays in `App::unacked_` from the key press until its `ack`. It is re-sent with the same `id` after the next `welcome` if the link drops first. The relay answers a repeated id from its idempotency cache (`AckCache` in `relay/src/session.ts`, keyed by device and id, kept `idempotencyTtlMs` = 24 h across connections), so a re-send never runs the action twice unless the relay restarted in between.
+- Sends are refused while the link is not live (`reply not sent: <status>`), so entries pile up only while it is live. Each one needs its own key press: an option press on a request that arrived at least `kRequestGuardMs` = 400 ms earlier, or a typed reply and Enter. The relay acks after T3 takes the action, which took 7 to 17 ms for an approval (`2026-10-20-approvals-spike.md`), plus one round trip through the Funnel (`welcome` 0.5 s after `open`, "connect" above). So a live link holds at most about 2 entries in one ack round trip, and 8 is 4x that.
+- An entry outlives its round trip only when its `ack` frame is dropped, which already shows the rx budget on screen. The next reconnect re-sends it and the cached ack clears it. A full list shows `unacked_max=8, reply needed 9` and keeps the typed text.
+
 ## wifi
 
 - `kWifiJoinWaitMs` = 20000: 3.5x the 5.8 s worst join; a join that has no IP by then is aborted and reported as `no ip within kWifiJoinWaitMs=20000`.

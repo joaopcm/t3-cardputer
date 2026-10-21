@@ -55,18 +55,14 @@ App::Out App::threadKey(Key key)
         send(out, encodePage(nextId(), threadId_, page), "page");
     };
     auto sendReply = [&](Mode mode) {
-        if (reply_.empty()) {
+        if (reply_.empty() || !readyToSend("reply")) {
             return;
         }
         const std::string id = nextId();
-        if (!send(out, encodeReply(id, threadId_, reply_, mode), "reply")) {
-            return;
+        Unacked item{id, {}, threadId_, reply_, "reply sent: " + std::string(modeName(mode)), std::nullopt, std::nullopt};
+        if (sendTracked(out, encodeReply(id, threadId_, reply_, mode), "reply", std::move(item))) {
+            reply_.clear();
         }
-        replyId_ = id;
-        replyThreadId_ = threadId_;
-        replySent_ = std::move(reply_);
-        reply_.clear();
-        inform(std::string("reply sent: ") + std::string(modeName(mode)), Color::Ok);
     };
     switch (key.name) {
     case KeyName::Up:
