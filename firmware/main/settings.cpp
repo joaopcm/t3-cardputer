@@ -109,6 +109,7 @@ std::string budget(const char *name, size_t limit, const char *what, size_t need
 struct Records {
     std::vector<WifiRecord> list;
     std::optional<std::string> error;
+    bool replaceable = false;
 };
 
 Records unreadable(esp_err_t err)
@@ -130,7 +131,10 @@ Records readRecords()
     if (size % sizeof(WifiRecord) != 0 || size > kMaxWifi * sizeof(WifiRecord)) {
         ESP_LOGE(TAG, "wifi blob is %u bytes, records are %u bytes and at most %u fit: ignoring it", static_cast<unsigned>(size),
                  static_cast<unsigned>(sizeof(WifiRecord)), static_cast<unsigned>(kMaxWifi));
-        return {};
+        const std::string what = size % sizeof(WifiRecord) == 0
+                                     ? budget("wifi_max", kMaxWifi, "saved networks", size / sizeof(WifiRecord))
+                                     : "nvs: saved networks are " + std::to_string(size) + " bytes, not whole " + std::to_string(sizeof(WifiRecord)) + "-byte records";
+        return {{}, what + ", ignored; adding a network replaces them", true};
     }
     std::vector<WifiRecord> records(size / sizeof(WifiRecord));
     if (const esp_err_t err = nvs_get_blob(nvs.get(), kWifiKey, records.data(), &size); err != ESP_OK) {
@@ -176,13 +180,14 @@ Init init()
     return result;
 }
 
-std::vector<WifiCred> wifi()
+SavedWifi wifi()
 {
-    std::vector<WifiCred> creds;
-    for (const WifiRecord &record : readRecords().list) {
-        creds.push_back({record.ssid, record.password});
+    Records read = readRecords();
+    SavedWifi saved{{}, std::move(read.error)};
+    for (const WifiRecord &record : read.list) {
+        saved.list.push_back({record.ssid, record.password});
     }
-    return creds;
+    return saved;
 }
 
 std::optional<std::string> addWifi(const WifiCred &cred)
@@ -194,7 +199,7 @@ std::optional<std::string> addWifi(const WifiCred &cred)
         return budget("wifi_password_max", kPasswordMax, "password", cred.password.size());
     }
     Records read = readRecords();
-    if (read.error) {
+    if (read.error && !read.replaceable) {
         return *read.error + ", saved networks not overwritten";
     }
     std::vector<WifiRecord> &records = read.list;

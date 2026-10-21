@@ -532,11 +532,16 @@ extern "C" void app_main(void)
     t3::setJsonParseBudget(kJsonParseBudgetBytes);
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
-    device.boot(!settings::wifi().empty(), token.has_value());
-    for (const std::optional<std::string> &fault : {nvs.erased, keyboardError}) {
+    const settings::SavedWifi saved = settings::wifi();
+    device.boot(!saved.list.empty(), token.has_value());
+    std::string faults;
+    for (const std::optional<std::string> &fault : {nvs.erased, saved.error, keyboardError}) {
         if (fault) {
-            device.app().onDeviceError(*fault);
+            faults += (faults.empty() ? "" : "; ") + *fault;
         }
+    }
+    if (!faults.empty()) {
+        device.app().onDeviceError(faults);
     }
     power_init(now_ms());
     draw(device.app());

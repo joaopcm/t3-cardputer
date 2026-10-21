@@ -90,8 +90,9 @@ public:
 
     t3::SavedWifi saved() override
     {
-        t3::SavedWifi saved;
-        for (settings::WifiCred &cred : settings::wifi()) {
+        settings::SavedWifi read = settings::wifi();
+        t3::SavedWifi saved{{}, std::move(read.error)};
+        for (settings::WifiCred &cred : read.list) {
             saved.creds.push_back(t3::WifiJoin{std::move(cred.ssid), std::move(cred.password)});
         }
         return saved;

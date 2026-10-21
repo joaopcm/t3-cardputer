@@ -101,3 +101,16 @@ TEST_CASE("a typed join during a timed-out join's disconnect joins the typed net
     drain(station, t3::kWifiJoinWaitMs + 50);
     CHECK(driver.joins == std::vector<std::string>{"home", "attic"});
 }
+
+TEST_CASE("an unreadable saved list names its error instead of saying none are saved")
+{
+    FakeDriver driver;
+    driver.saved_ = {{}, std::string("nvs: saved networks unreadable: ESP_ERR_NVS_INVALID_LENGTH")};
+    WifiStation station(driver);
+    station.start(0);
+    drain(station, 0);
+    station.onScanDone(kInRange, false, 0);
+    const std::vector<WifiEvent> events = drain(station, 0);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].text == "wifi: nvs: saved networks unreadable: ESP_ERR_NVS_INVALID_LENGTH");
+}

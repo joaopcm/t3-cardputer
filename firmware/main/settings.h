@@ -28,7 +28,12 @@ struct Init {
 
 Init init();
 
-std::vector<WifiCred> wifi();
+struct SavedWifi {
+    std::vector<WifiCred> list;
+    std::optional<std::string> error;
+};
+
+SavedWifi wifi();
 std::optional<std::string> addWifi(const WifiCred &cred);
 std::optional<std::string> removeWifi(std::string_view ssid);
 
