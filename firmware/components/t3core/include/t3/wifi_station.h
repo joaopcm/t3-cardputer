@@ -73,6 +73,7 @@ private:
     WifiJoin target_;
     bool authRetried_ = false;
     std::string dropWhy_;
+    std::string leftFailure_;
     std::optional<WifiJoin> join_;
     bool joining_ = false;
     WifiPicker picker_;

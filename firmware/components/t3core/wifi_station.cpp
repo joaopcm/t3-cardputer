@@ -81,7 +81,9 @@ void WifiStation::startJoin(uint32_t nowMs)
     join_.reset();
     joining_ = true;
     authRetried_ = false;
-    connect(cred, nowMs);
+    const std::string lastFailure = std::move(leftFailure_);
+    leftFailure_.clear();
+    connect(cred, nowMs, lastFailure);
 }
 
 void WifiStation::failed(std::string_view why, uint32_t nowMs)
@@ -137,6 +139,7 @@ void WifiStation::join(WifiJoin cred, uint32_t nowMs)
         return;
     case State::Dropping:
         picker_.failed(target_.ssid);
+        leftFailure_ = "wifi: " + target_.ssid + " failed, " + dropWhy_;
         state_ = State::Leaving;
         deadlineMs_ = nowMs + kWifiJoinWaitMs;
         return;

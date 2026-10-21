@@ -102,8 +102,10 @@ TEST_CASE("a typed join during a timed-out join's disconnect joins the typed net
     station.join(WifiJoin{"attic", "password3"}, t3::kWifiJoinWaitMs + 10);
     CHECK(driver.disconnects == 1);
     station.onDisconnected(8, "reason 8", t3::kWifiJoinWaitMs + 50);
-    drain(station, t3::kWifiJoinWaitMs + 50);
+    const std::vector<WifiEvent> events = drain(station, t3::kWifiJoinWaitMs + 50);
     CHECK(driver.joins == std::vector<std::string>{"home", "attic"});
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].text == "wifi: home failed, no ip within kWifiJoinWaitMs=20000, joining attic");
 }
 
 TEST_CASE("an unreadable saved list names its error instead of saying none are saved")
