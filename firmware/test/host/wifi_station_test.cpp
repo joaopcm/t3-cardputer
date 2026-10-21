@@ -18,6 +18,9 @@ struct FakeDriver : t3::WifiDriver {
     std::optional<std::string> connect(const WifiJoin &cred) override
     {
         joins.push_back(cred.ssid);
+        if (static_cast<int>(joins.size()) - 1 == refusedJoin) {
+            return std::string("ESP_ERR_WIFI_CONN");
+        }
         return std::nullopt;
     }
     void disconnect() override { ++disconnects; }
@@ -26,6 +29,7 @@ struct FakeDriver : t3::WifiDriver {
     t3::SavedWifi saved_{{{"home", "password1"}, {"phone", "password2"}}, std::nullopt};
     int scans = 0;
     int disconnects = 0;
+    int refusedJoin = -1;
     std::vector<std::string> joins;
 };
 
@@ -146,4 +150,20 @@ TEST_CASE("a reason 2 retry that then times out still waits for its disconnect")
     station.onDisconnected(8, "reason 8", 200 + t3::kWifiJoinWaitMs);
     drain(station, 200 + t3::kWifiJoinWaitMs);
     CHECK(driver.joins == std::vector<std::string>{"home", "home", "phone"});
+}
+
+TEST_CASE("a reason 2 retry the driver refuses leaves the next network its own reason 2 retry")
+{
+    FakeDriver driver;
+    driver.refusedJoin = 1;
+    WifiStation station(driver);
+    joiningHome(station, driver);
+
+    station.onDisconnected(t3::kWifiReasonAuthExpire, "reason 2", 100);
+    drain(station, 100);
+    CHECK(driver.joins == std::vector<std::string>{"home", "home", "phone"});
+
+    station.onDisconnected(t3::kWifiReasonAuthExpire, "reason 2", 200);
+    drain(station, 200);
+    CHECK(driver.joins == std::vector<std::string>{"home", "home", "phone", "phone"});
 }

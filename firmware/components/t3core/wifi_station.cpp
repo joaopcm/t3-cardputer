@@ -43,7 +43,6 @@ void WifiStation::startScan()
 void WifiStation::connect(const WifiJoin &cred, uint32_t nowMs, std::string_view lastFailure)
 {
     target_ = cred;
-    authRetried_ = false;
     if (const std::optional<std::string> error = driver_.connect(cred)) {
         failed("join did not start: " + *error, nowMs);
         return;
@@ -59,6 +58,7 @@ void WifiStation::connectNextSaved(uint32_t nowMs, std::string_view lastFailure)
     if (const std::optional<std::string> ssid = picker_.next()) {
         for (const WifiJoin &cred : saved.creds) {
             if (cred.ssid == *ssid) {
+                authRetried_ = false;
                 connect(cred, nowMs, lastFailure);
                 return;
             }
@@ -80,6 +80,7 @@ void WifiStation::startJoin(uint32_t nowMs)
     const WifiJoin cred = *join_;
     join_.reset();
     joining_ = true;
+    authRetried_ = false;
     connect(cred, nowMs);
 }
 
@@ -201,8 +202,8 @@ void WifiStation::onDisconnected(int reason, std::string_view why, uint32_t nowM
         if (reason == kWifiReasonAuthExpire && !authRetried_) {
             // why: after a sudden reset the access point still holds the old association and answers the first join with reason 2; the device check of 2026-10-21 at a4f6842 saw it on 2 of 3 reboots after a typed join, and the next join went through
             const WifiJoin cred = target_;
-            connect(cred, nowMs, "wifi: " + cred.ssid + " auth expired (reason 2)");
             authRetried_ = true;
+            connect(cred, nowMs, "wifi: " + cred.ssid + " auth expired (reason 2)");
             return;
         }
         failed(why, nowMs);
