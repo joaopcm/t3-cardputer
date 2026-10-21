@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$*" in
+  -u) echo "$STUB_UID" ;;
+  -un) echo tester ;;
+  *) echo "stub id: unexpected $*" >&2; exit 2 ;;
+esac

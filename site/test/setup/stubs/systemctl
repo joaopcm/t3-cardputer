@@ -1,0 +1,7 @@
+#!/bin/sh
+printf 'systemctl %s\n' "$*" >>"$STUB_STATE/calls.log"
+case "$*" in
+  "--user daemon-reload" | "--user -q enable t3-cardputer-relay") ;;
+  "--user restart t3-cardputer-relay") touch "$STUB_STATE/service-up" ;;
+  *) echo "stub systemctl: unexpected $*" >&2; exit 2 ;;
+esac

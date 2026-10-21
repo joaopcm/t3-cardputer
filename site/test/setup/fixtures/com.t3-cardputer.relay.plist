@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.t3-cardputer.relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__BUNDLE__</string>
+    <string>serve</string>
+  </array>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/relay.log</string>
+</dict>
+</plist>
