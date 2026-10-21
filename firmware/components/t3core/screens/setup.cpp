@@ -35,6 +35,7 @@ constexpr std::string_view kTypeSsidRow = "+ type a network name";
 constexpr size_t kPairCodeLen = 8;
 constexpr std::string_view kPairName = "cardputer";
 constexpr std::string_view kAutoPairCodeRefused = "pair: code expired or used, run t3-cardputer-relay install-link and open the new link";
+constexpr std::string_view kAutoPairWaysOn = ", run t3-cardputer-relay install-link or pair";
 constexpr std::string_view kHttps = "https://";
 
 Key typed(Key key)
@@ -211,10 +212,13 @@ App::Out App::onPairResult(std::optional<std::string> token, std::string_view wh
     const bool automatic = std::exchange(autoPairing_, false);
     if (!token || token->empty()) {
         pairing_ = false;
-        if (automatic && codeRefused(httpStatus)) {
+        const std::string failed = why.empty() ? "pairing failed" : std::string(why);
+        if (!automatic) {
+            inform(failed);
+        } else if (codeRefused(httpStatus)) {
             inform(std::string(kAutoPairCodeRefused));
         } else {
-            inform(why.empty() ? "pairing failed" : std::string(why));
+            inform(failed + std::string(kAutoPairWaysOn));
         }
         return out;
     }

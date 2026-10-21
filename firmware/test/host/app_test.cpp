@@ -1631,7 +1631,7 @@ TEST_CASE("a provisioned code the relay refuses says how to get a new link and n
     }
 }
 
-TEST_CASE("a provisioned code lost to the network names the error and is not retried")
+TEST_CASE("a provisioned code lost to the network names the error and both ways on, and is not retried")
 {
     App app = provisionedBoot(false);
     app.startAutoPair("7KQ2M9XA");
@@ -1639,10 +1639,29 @@ TEST_CASE("a provisioned code lost to the network names the error and is not ret
     CHECK(out.pairCodeSpent);
     CHECK_FALSE(out.pair.has_value());
     CHECK(app.screenName() == "setup_pair");
-    CHECK(row(app, 0).rfind("pair: ESP_ERR_HTTP_CONNECT", 0) == 0);
+    const std::string first = row(app, 0);
+    const std::string second = row(app, 1);
+    CHECK(first.substr(0, first.find_last_not_of(' ') + 1) == "pair: ESP_ERR_HTTP_CONNECT, run");
+    CHECK(second.substr(0, second.find_last_not_of(' ') + 1) == "t3-cardputer-relay install-link or pair");
+    CHECK(row(app, 2).rfind("run t3-cardputer-relay pair on the relay", 0) == 0);
     CHECK_FALSE(app.onLinkStatus("re-pair needed", tick()).pair.has_value());
     CHECK_FALSE(app.onWake().pair.has_value());
     CHECK_FALSE(press(app, named(KeyName::Enter)).pair.has_value());
+}
+
+TEST_CASE("a provisioned code the relay can't take right now names the status and both ways on")
+{
+    for (const int status : {429, 500, 503}) {
+        CAPTURE(status);
+        App app = provisionedBoot(false);
+        app.startAutoPair("7KQ2M9XA");
+        const std::string why = "pairing failed (" + std::to_string(status) + "): busy";
+        const App::Out out = app.onPairResult(std::nullopt, why, status);
+        CHECK(out.pairCodeSpent);
+        CHECK_FALSE(out.pair.has_value());
+        CHECK(contains(shown(app), why + ", run t3-cardputer-relay install-link or pair"));
+        CHECK_FALSE(press(app, named(KeyName::Enter)).pair.has_value());
+    }
 }
 
 TEST_CASE("a provisioned code on a paired device is spent without pairing")

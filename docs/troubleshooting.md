@@ -47,7 +47,8 @@ Commands run on the T3 machine, where the relay lives. When a fix says "check th
 | `pairing refused:` | The ADV already has a token and is using it. | Nothing. Pair only after `re-pair needed`. |
 | `pairing already running` | A pairing request is still out. | Wait for it to finish. |
 | `provisioned pair code not used:` | The install page sent a code, but the ADV is already paired, or you're typing one. | Nothing. |
-| `pair:` | Followed by an `ESP_ERR_` name: the pairing request never reached the relay. | Same as `relay unreachable`. |
+| `pair:` | Followed by an `ESP_ERR_` name: the pairing request never reached the relay. Nothing tries it again. | Check that `curl -s http://127.0.0.1:8787/healthz` prints `ok` on the relay's machine and that `tailscale funnel status` lists port 8443. Then pair again. |
+| ends in `, run t3-cardputer-relay install-link or pair` | The code from the install link didn't go through: a network error, or the relay answered `429` or `5xx`. The ADV doesn't try again and the code is spent. | Fix what the start of the line says. Then run `t3-cardputer-relay install-link` and open the new link, or run `t3-cardputer-relay pair` and type the code. |
 | `token not saved` | Pairing worked but the ADV couldn't store the token. | Restart the ADV and pair again. If it repeats, install with clean install on. |
 | `re-pair needed` | The relay turned the ADV's token down. It was revoked, or the relay's `secrets.json` was reset. | `t3-cardputer-relay pair`, then type the code on the pairing screen. |
 | `device revoked, re-pair this device` | Someone ran `t3-cardputer-relay revoke` for this ADV. | Same as `re-pair needed`. |
