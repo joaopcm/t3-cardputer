@@ -98,7 +98,7 @@ async function pair(ctx: CliContext): Promise<number> {
 async function printInstallLink(ctx: CliContext, args: string[]): Promise<number> {
   parse(args, {}, 0);
   const { publicUrl } = loadConfig(ctx.configPath);
-  if (publicUrl === undefined) throw new Error("install-link needs publicUrl in relay.json (setup.sh sets it)");
+  if (publicUrl === undefined) throw new Error("install-link needs publicUrl in relay.json (setup.sh sets it), or set publicUrl to the URL `tailscale funnel status` shows");
   const { code, minutes } = await createPairingCode(ctx);
   ctx.stdout(installLink(publicUrl, code));
   ctx.stdout(`code expires in ${minutes} min`);
@@ -270,9 +270,16 @@ async function update(ctx: CliContext, args: string[]): Promise<number> {
     ctx.stderr("this relay updates itself from main (self-repair), update skipped");
     return 1;
   }
-  const response = await (ctx.fetch ?? fetch)(SETUP_URL, { redirect: "error" });
+  let response: Response;
+  let script: string;
+  try {
+    response = await (ctx.fetch ?? fetch)(SETUP_URL, { redirect: "error" });
+    script = response.ok ? await response.text() : "";
+  } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+    throw new Error(`update: GET ${SETUP_URL} failed (${cause instanceof Error ? cause.message : String(cause)}), nothing ran. check your connection and try again`);
+  }
   if (!response.ok) throw new Error(`update: GET ${SETUP_URL} answered HTTP ${response.status}, nothing ran. try again later`);
-  const script = await response.text();
   if (!script.startsWith("#!")) throw new Error(`update: ${SETUP_URL} is not a shell script (no #! line), nothing ran. try again later`);
   const dir = mkdtempSync(join(tmpdir(), "t3-cardputer-update-"));
   try {

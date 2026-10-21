@@ -292,7 +292,7 @@ describe("install-link", () => {
     const { env, run, err } = await setup();
     await startAdmin(env);
     expect(await run("install-link")).toBe(1);
-    expect(err()).toContain("install-link needs publicUrl in relay.json (setup.sh sets it)");
+    expect(err()).toContain("install-link needs publicUrl in relay.json (setup.sh sets it), or set publicUrl to the URL `tailscale funnel status` shows");
   });
 });
 
@@ -374,6 +374,17 @@ describe("update", () => {
     const { run, err } = await setup({ fetch });
     expect(await run("update")).toBe(1);
     expect(err()).toContain("HTTP 503");
+  });
+
+  it("exits 1 naming the cause when fetch throws, and runs nothing", async () => {
+    for (const cause of [Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), { code: "ECONNREFUSED" }), new Error("unexpected redirect")]) {
+      const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+        throw new TypeError("fetch failed", { cause });
+      });
+      const { run, err } = await setup({ fetch });
+      expect(await run("update")).toBe(1);
+      expect(err()).toContain(`update: GET https://t3-cardputer.jopcmelo.com/setup.sh failed (${cause.message}), nothing ran. check your connection and try again`);
+    }
   });
 
   it("exits 1 when the download is not a shell script, and runs nothing", async () => {
