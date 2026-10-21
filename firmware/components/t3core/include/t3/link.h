@@ -65,6 +65,7 @@ private:
     uint32_t backoffMs_ = kBackoffMinMs;
     uint32_t deadlineMs_ = 0;
     std::string lastError_;
+    std::string lastDown_;
 };
 
 }

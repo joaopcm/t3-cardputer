@@ -558,3 +558,23 @@ TEST_CASE("pairing is allowed only while the link needs a token or has stopped")
     stopped.onClose(4402, "hello.cols: must be at most 255", 0);
     CHECK_FALSE(stopped.pairRefused().has_value());
 }
+
+TEST_CASE("a retry keeps the last link-down reason on screen until the link is live")
+{
+    t3::Link link = live();
+    link.onClose(1006, "pong_timeout_sec=25, no pong from relay", 0);
+    const auto retry = link.onTick(t3::kBackoffMinMs);
+    CHECK(retry.connect);
+    CHECK(retry.statusText == "connecting, last: pong_timeout_sec=25, no pong from relay");
+
+    const auto failed = link.onClose(1006, "ESP_ERR_ESP_TLS_TCP_CLOSED_FIN", t3::kBackoffMinMs);
+    CHECK(failed.statusText == "relay unreachable: ESP_ERR_ESP_TLS_TCP_CLOSED_FIN");
+    CHECK(link.onTick(4 * t3::kBackoffMinMs).statusText == "connecting, last: ESP_ERR_ESP_TLS_TCP_CLOSED_FIN");
+
+    link.onOpen(4 * t3::kBackoffMinMs);
+    CHECK(link.onText(kWelcome, 4 * t3::kBackoffMinMs).statusText == "");
+    link.onClose(1006, "", 5 * t3::kBackoffMinMs);
+    CHECK(link.onTick(6 * t3::kBackoffMinMs).statusText == "connecting, last: closed 1006");
+    link.onWifi(false, 7 * t3::kBackoffMinMs);
+    CHECK(link.onWifi(true, 7 * t3::kBackoffMinMs).statusText == "connecting");
+}
