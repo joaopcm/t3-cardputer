@@ -241,7 +241,7 @@ private:
                 log_heap("live");
                 ESP_LOGI(TAG, "main_task_stack_free_min=%u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
             }
-            feed(app_.onLinkStatus(*out.statusText));
+            feed(app_.onLinkStatus(*out.statusText, now_ms()));
             dirty_ = true;
         }
     }
@@ -387,7 +387,7 @@ private:
             return;
         case WifiEvent::Kind::Status:
             if (link_.state() == t3::Link::State::NoWifi) {
-                feed(app_.onLinkStatus(event.text));
+                feed(app_.onLinkStatus(event.text, now_ms()));
             }
             return;
         }

@@ -490,7 +490,7 @@ App::Out App::onRelay(const RelayMsg &msg, uint32_t nowMs)
     return {};
 }
 
-App::Out App::onLinkStatus(std::string_view status)
+App::Out App::onLinkStatus(std::string_view status, uint32_t nowMs)
 {
     const bool wasLive = linkStatus_.empty();
     linkStatus_ = std::string(status);
@@ -511,8 +511,18 @@ App::Out App::onLinkStatus(std::string_view status)
         return {};
     }
     Out out;
-    for (const Unacked &item : unacked_) {
-        send(out, encodeUnacked(item.id, item.threadId, item.text, item.mode, item.request, item.option), item.request ? "answer" : "reply");
+    std::vector<Unacked> unencoded;
+    for (auto item = unacked_.begin(); item != unacked_.end();) {
+        if (std::optional<std::string> frame = encodeUnacked(item->id, item->threadId, item->text, item->mode, item->request, item->option)) {
+            out.send.push_back(std::move(*frame));
+            ++item;
+            continue;
+        }
+        unencoded.push_back(std::move(*item));
+        item = unacked_.erase(item);
+    }
+    for (const Unacked &item : unencoded) {
+        giveBack(item, false, "out of memory on resend, may have gone through", nowMs);
     }
     const bool voiceOnThread = screen_ == Screen::Voice && voiceFrom_ == Screen::Thread;
     const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request || voiceOnThread) && !threadId_.empty();

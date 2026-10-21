@@ -63,7 +63,7 @@ public:
     Out onAudioFailed(std::string_view why);
     Out onRelay(const RelayMsg &msg, uint32_t nowMs);
     Out onFrame(std::string_view json, uint32_t nowMs);
-    Out onLinkStatus(std::string_view status);
+    Out onLinkStatus(std::string_view status, uint32_t nowMs);
     Out onBoot(bool hasWifi, bool hasToken);
     Out onAuthRejected();
     void onDeviceError(std::string_view why);

@@ -110,7 +110,7 @@ App live()
 {
     App app(kCaps, 7);
     app.onBoot(true, true);
-    app.onLinkStatus("");
+    app.onLinkStatus("", tick());
     app.onFrame(kHome, tick());
     return app;
 }
@@ -632,7 +632,7 @@ TEST_CASE("a link status never hides the setup bar")
 {
     App app(kCaps, 7);
     app.onBoot(false, false);
-    app.onLinkStatus("starting");
+    app.onLinkStatus("starting", tick());
     CHECK(rows(app)[0].rfind("setup", 0) == 0);
 }
 

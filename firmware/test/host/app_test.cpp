@@ -192,7 +192,7 @@ const std::string &only(const App::Out &out)
 App live()
 {
     App app(kCaps, 7);
-    app.onLinkStatus("");
+    app.onLinkStatus("", tick());
     return app;
 }
 
@@ -472,7 +472,7 @@ TEST_CASE("a home update keeps the selection on the same thread")
 TEST_CASE("home counts that exceed the rows name maxHomeRows")
 {
     App app(t3::HelloCaps{40, 8, 65536, 8}, 7);
-    app.onLinkStatus("");
+    app.onLinkStatus("", tick());
     push(app, relay(homeJson(2, 3, 3, 2, 3, 5)));
     std::string seen;
     for (int i = 0; i < 10; ++i) {
@@ -524,9 +524,9 @@ TEST_CASE("wake with the link down sends nothing and the reconnect brings the st
 {
     App app = live();
     push(app, relay(kHome));
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(app.onWake().send.empty());
-    CHECK(app.onLinkStatus("").send.empty());
+    CHECK(app.onLinkStatus("", tick()).send.empty());
     CHECK(app.screenName() == "home");
 }
 
@@ -578,8 +578,8 @@ TEST_CASE("a request pushed again while its answer is unconfirmed does not reope
 {
     App app = onApproval();
     only(press(app, ch('Y')));
-    app.onLinkStatus("relay unreachable: closed 1006");
-    CHECK(app.onLinkStatus("").send.size() == 2);
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
+    CHECK(app.onLinkStatus("", tick()).send.size() == 2);
     push(app, relay(kBouncePage));
     push(app, relay(kBounceRequest));
     CHECK(app.screenName() == "thread");
@@ -737,14 +737,14 @@ TEST_CASE("row 0 shows the link status until welcome and when the link drops")
 {
     App app(kCaps, 7);
     CHECK(app.screenName() == "connecting");
-    app.onLinkStatus("connecting");
+    app.onLinkStatus("connecting", tick());
     CHECK(row(app, 0).rfind("connecting", 0) == 0);
-    app.onLinkStatus("");
+    app.onLinkStatus("", tick());
     CHECK(app.screenName() == "connecting");
     CHECK(contains(allText(app), "waiting for home"));
     push(app, relay(kHome));
     CHECK(row(app, 0).rfind("T3", 0) == 0);
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(row(app, 0).rfind("relay unreachable: closed 1006", 0) == 0);
     CHECK(app.screenName() == "home");
 }
@@ -752,8 +752,8 @@ TEST_CASE("row 0 shows the link status until welcome and when the link drops")
 TEST_CASE("coming back online with a thread open reopens it")
 {
     App app = onWeaverThread();
-    CHECK(app.onLinkStatus("relay unreachable: closed 1006").send.empty());
-    const Frame open(only(app.onLinkStatus("")));
+    CHECK(app.onLinkStatus("relay unreachable: closed 1006", tick()).send.empty());
+    const Frame open(only(app.onLinkStatus("", tick())));
     CHECK(open.str("type") == "open_thread");
     CHECK(open.str("threadId") == "thr_weaver");
 }
@@ -1075,9 +1075,9 @@ TEST_CASE("probe F: a launch whose ack is lost does not lock new task")
     press(app, named(KeyName::Enter));
     type(app, "go");
     const std::string first = idOf(press(app, named(KeyName::Enter)));
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(row(app, 0).rfind("launch result unknown, check Home", 0) == 0);
-    app.onLinkStatus("");
+    app.onLinkStatus("", tick());
     CHECK(idOf(press(app, named(KeyName::Enter))) != first);
 
     press(app, named(KeyName::Esc));
@@ -1141,7 +1141,7 @@ TEST_CASE("a reply with the link down is kept, not sent, and says why")
 {
     App app = onWeaverThread();
     type(app, "go");
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(press(app, named(KeyName::Enter)).send.empty());
     CHECK(row(app, 0).rfind("reply not sent: relay unreachable:", 0) == 0);
     CHECK(row(app, 8).rfind("> go_", 0) == 0);
@@ -1176,7 +1176,7 @@ TEST_CASE("an answer with the link down keeps the typed reason and the request")
     App app = onApproval();
     press(app, ch('T'));
     type(app, "use staging");
-    app.onLinkStatus("wifi down");
+    app.onLinkStatus("wifi down", tick());
     CHECK(press(app, named(KeyName::Enter)).send.empty());
     CHECK(app.screenName() == "approval");
     CHECK(row(app, 0).rfind("answer not sent: wifi down", 0) == 0);
@@ -1219,17 +1219,17 @@ TEST_CASE("a reply the link lost before its ack is re-sent with the same id afte
     App app = onWeaverThread();
     type(app, "go");
     const std::string frame = only(press(app, named(KeyName::Enter)));
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(row(app, 0).rfind("reply to layout engine not confirmed,", 0) == 0);
-    CHECK(app.onLinkStatus("connecting").send.empty());
-    const App::Out back = app.onLinkStatus("");
+    CHECK(app.onLinkStatus("connecting", tick()).send.empty());
+    const App::Out back = app.onLinkStatus("", tick());
     REQUIRE(back.send.size() == 2);
     CHECK(back.send[0] == frame);
     CHECK(Frame(back.send[1]).str("type") == "open_thread");
     push(app, t3::Ack{Frame(frame).str("id"), true, std::nullopt});
     CHECK(row(app, 0).rfind("reply sent: queue", 0) == 0);
-    CHECK(app.onLinkStatus("relay unreachable: closed 1006").send.empty());
-    CHECK(app.onLinkStatus("").send.size() == 1);
+    CHECK(app.onLinkStatus("relay unreachable: closed 1006", tick()).send.empty());
+    CHECK(app.onLinkStatus("", tick()).send.size() == 1);
 }
 
 TEST_CASE("an answer the link lost before its ack is re-sent, and a re-send that fails restores it")
@@ -1238,14 +1238,43 @@ TEST_CASE("an answer the link lost before its ack is re-sent, and a re-send that
     press(app, ch('T'));
     type(app, "use staging");
     const std::string frame = only(press(app, named(KeyName::Enter)));
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(row(app, 0).rfind("answer to fix bounce webhook not", 0) == 0);
-    const App::Out back = app.onLinkStatus("");
+    const App::Out back = app.onLinkStatus("", tick());
     REQUIRE_FALSE(back.send.empty());
     CHECK(back.send[0] == frame);
     app.onSendFailed(frame, "send failed, 120 bytes not sent", tick());
     CHECK(app.screenName() == "approval");
     CHECK(row(app, 9).rfind("> use staging_", 0) == 0);
+}
+
+TEST_CASE("a reply that cannot be encoded again on reconnect comes back instead of staying unsent")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    only(press(app, named(KeyName::Enter)));
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
+    {
+        FailingAllocator failing;
+        CHECK(app.onLinkStatus("", tick()).send.empty());
+    }
+    CHECK(row(app, 8).rfind("> go_", 0) == 0);
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
+    CHECK(Frame(only(app.onLinkStatus("", tick()))).str("type") == "open_thread");
+}
+
+TEST_CASE("a reply that cannot be encoded again on reconnect says it may have gone through")
+{
+    App app = onWeaverThread();
+    type(app, "go");
+    only(press(app, named(KeyName::Enter)));
+    press(app, named(KeyName::Esc));
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
+    {
+        FailingAllocator failing;
+        CHECK(app.onLinkStatus("", tick()).send.empty());
+    }
+    CHECK(contains(shown(app), "reply to layout engine not sent: out of memory on resend, may have gone through, text back when it opens"));
 }
 
 TEST_CASE("unacked replies have a budget that names itself and keeps the text")
@@ -1399,11 +1428,11 @@ TEST_CASE("4401 drops unconfirmed replies instead of re-sending them under the n
     type(app, "go");
     only(press(app, named(KeyName::Enter)));
     app.onAuthRejected();
-    app.onLinkStatus("re-pair needed");
+    app.onLinkStatus("re-pair needed", tick());
     CHECK(app.screenName() == "setup_pair");
     CHECK(contains(shown(app), "1 reply unconfirmed, may have gone through: re-pair, text back when its thread opens"));
     CHECK_FALSE(contains(shown(app), "resending"));
-    CHECK(app.onLinkStatus("").send.empty());
+    CHECK(app.onLinkStatus("", tick()).send.empty());
     press(app, named(KeyName::Esc));
     press(app, named(KeyName::Esc));
     CHECK(app.screenName() == "home");
@@ -1431,7 +1460,7 @@ TEST_CASE("a link drop mid-recording shows both the lost voice and the unconfirm
     only(press(app, named(KeyName::Enter)));
     press(app, named(KeyName::TalkDown));
     REQUIRE(app.recording());
-    app.onLinkStatus("relay unreachable: closed 1006");
+    app.onLinkStatus("relay unreachable: closed 1006", tick());
     CHECK(contains(shown(app), "voice: connection lost"));
     CHECK(contains(shown(app), "reply to layout engine not confirmed, resending on reconnect"));
 }
