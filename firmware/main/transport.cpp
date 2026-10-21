@@ -5,24 +5,34 @@
 #include <cstring>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "t3/link.h"
 
 namespace {
 
-constexpr char TAG[] = "transport";
+constexpr char TAG[] = "t3_transport";
 
-// receipts: docs/receipts/2026-10-21-firmware-network.md sections "transport", "connect" and "stacks"
+// receipts: docs/receipts/2026-10-21-firmware-network.md sections "transport", "connect", "stacks" and "fix round 1"
 constexpr int kWsChunkBytes = 1024;
 constexpr int kWsTaskStackBytes = 6144;
 constexpr int kNetworkTimeoutMs = 10000;
 constexpr TickType_t kSendWaitTicks = pdMS_TO_TICKS(5000);
-constexpr int kSlots = 2;
-constexpr UBaseType_t kInboxDepth = 8;
+constexpr size_t kRingFrames = 3;
+constexpr UBaseType_t kInboxDepth = 16;
+constexpr uint32_t kControlTaskStackBytes = 4096;
+// why: above the main task (priority 1) so a queued stop or start is never starved by the UI loop, below the websocket task (5) it waits on
+constexpr UBaseType_t kControlTaskPriority = 4;
+// receipt: docs/receipts/2026-10-21-firmware-network.md "soak", one TLS handshake needs 50332 bytes, x1.2 for fragmentation
+constexpr size_t kTlsHeapBytes = 60398;
+// receipt: docs/receipts/2026-10-21-firmware-voice.md "heap", waits at most the link's first backoff step and checks 10 times in it; in 12 reconnects after a stalled recording it never had to wait
+constexpr uint32_t kTlsHeapWaitMs = t3::kBackoffMinMs;
+constexpr TickType_t kTlsHeapPollTicks = pdMS_TO_TICKS(kTlsHeapWaitMs / 10);
 constexpr int kPairTimeoutMs = 10000;
 constexpr uint32_t kPairTaskStackBytes = 6144;
 constexpr size_t kPairReplyMax = 1024;
@@ -35,27 +45,40 @@ struct Item {
     TransportEvent::Kind kind;
     uint32_t gen;
     int32_t code;
-    int8_t slot;
+    uint64_t start;
+    uint64_t end;
     uint32_t bytes;
     char reason[kReasonMax];
 };
 
-enum class Drop : uint8_t { None, Oversize, NoSlot, InboxFull, Fragmented };
+enum class Drop : uint8_t { None, Oversize, RingFull, InboxFull, Fragmented };
 
 esp_websocket_client_handle_t client;
 QueueHandle_t inbox;
 TaskHandle_t mainTask;
 size_t maxFrame = 0;
-char *slots[kSlots];
-std::atomic<bool> slotBusy[kSlots];
-int mainSlot = -1;
+char *ring;
+size_t ringBytes = 0;
+std::atomic<uint64_t> ringHead{0};
+std::atomic<uint64_t> ringTail{0};
+uint64_t mainEnd = 0;
+bool mainHolds = false;
 std::atomic<uint32_t> generation{0};
+std::atomic<uint32_t> wantedGen{0};
+uint32_t openGen = 0;
+TaskHandle_t controlTask;
+uint32_t startGen = 0;
 
 uint32_t taskGen = 0;
 bool closePosted = false;
-int filling = -1;
+bool opened = false;
+std::atomic<uint32_t> startLargest{UINT32_MAX};
+std::string errorReason;
+bool filling = false;
+uint64_t fillStart = 0;
 bool skipping = false;
 size_t filled = 0;
+uint64_t frameStart = 0;
 
 std::atomic<uint32_t> droppedFrames{0};
 std::atomic<uint32_t> droppedBytes{0};
@@ -72,9 +95,9 @@ void drop(Drop why, int bytes)
     droppedFrames.fetch_add(1);
 }
 
-bool post(Item &item)
+bool post(Item &item, uint32_t gen)
 {
-    item.gen = taskGen;
+    item.gen = gen;
     if (xQueueSend(inbox, &item, 0) != pdTRUE) {
         return false;
     }
@@ -84,9 +107,9 @@ bool post(Item &item)
 
 void abandonFill()
 {
-    if (filling >= 0) {
-        slotBusy[filling] = false;
-        filling = -1;
+    if (filling) {
+        ringHead = fillStart;
+        filling = false;
     }
     skipping = false;
 }
@@ -116,11 +139,17 @@ void postClose(int code, std::string_view reason)
         return;
     }
     closePosted = true;
-    Item item{TransportEvent::Kind::Close, 0, code, -1, 0, {}};
+    const uint32_t largest = startLargest.load();
+    std::string lowHeap;
+    if (!opened && largest < kTlsHeapBytes) {
+        lowHeap = "tls_heap=" + std::to_string(kTlsHeapBytes) + ", largest block " + std::to_string(largest);
+        reason = lowHeap;
+    }
+    Item item{TransportEvent::Kind::Close, 0, code, 0, 0, 0, {}};
     const size_t bytes = std::min(reason.size(), kReasonMax);
     std::memcpy(item.reason, reason.data(), bytes);
     item.bytes = static_cast<uint32_t>(bytes);
-    if (!post(item)) {
+    if (!post(item, taskGen)) {
         ESP_LOGE(TAG, "rx_inbox_depth=%u, close %d dropped, queue full", static_cast<unsigned>(kInboxDepth), code);
     }
 }
@@ -136,33 +165,35 @@ void onText(const esp_websocket_event_data_t &event)
             drop(Drop::Oversize, event.payload_len);
             skipping = true;
         } else {
-            for (int i = 0; i < kSlots && filling < 0; ++i) {
-                bool expected = false;
-                if (slotBusy[i].compare_exchange_strong(expected, true)) {
-                    filling = i;
-                }
-            }
-            if (filling < 0) {
-                drop(Drop::NoSlot, event.payload_len);
+            const uint64_t head = ringHead.load();
+            const uint64_t at = head % ringBytes;
+            const uint64_t start = at + static_cast<uint64_t>(event.payload_len) > ringBytes ? head + (ringBytes - at) : head;
+            if (start + static_cast<uint64_t>(event.payload_len) - ringTail.load() > ringBytes) {
+                drop(Drop::RingFull, event.payload_len);
                 skipping = true;
+            } else {
+                fillStart = head;
+                ringHead = start + static_cast<uint64_t>(event.payload_len);
+                filling = true;
+                filled = 0;
+                frameStart = start;
             }
-            filled = 0;
         }
     }
-    if (skipping || filling < 0) {
+    if (skipping || !filling) {
         return;
     }
-    std::memcpy(slots[filling] + filled, event.data_ptr, static_cast<size_t>(event.data_len));
+    std::memcpy(ring + frameStart % ringBytes + filled, event.data_ptr, static_cast<size_t>(event.data_len));
     filled += static_cast<size_t>(event.data_len);
     if (filled < static_cast<size_t>(event.payload_len)) {
         return;
     }
-    Item item{TransportEvent::Kind::Text, 0, 0, static_cast<int8_t>(filling), static_cast<uint32_t>(filled), {}};
-    if (!post(item)) {
+    Item item{TransportEvent::Kind::Text, 0, 0, frameStart, frameStart + filled, static_cast<uint32_t>(filled), {}};
+    filling = false;
+    if (!post(item, taskGen)) {
         drop(Drop::InboxFull, static_cast<int>(filled));
-        slotBusy[filling] = false;
+        ringHead = fillStart;
     }
-    filling = -1;
 }
 
 void onWsEvent(void *, esp_event_base_t, int32_t id, void *data)
@@ -170,13 +201,16 @@ void onWsEvent(void *, esp_event_base_t, int32_t id, void *data)
     const auto &event = *static_cast<const esp_websocket_event_data_t *>(data);
     switch (id) {
     case WEBSOCKET_EVENT_BEGIN:
-        taskGen = generation.load();
+        taskGen = startGen;
         closePosted = false;
+        opened = false;
+        errorReason.clear();
         abandonFill();
         return;
     case WEBSOCKET_EVENT_CONNECTED: {
-        Item item{TransportEvent::Kind::Open, 0, 0, -1, 0, {}};
-        if (!post(item)) {
+        opened = true;
+        Item item{TransportEvent::Kind::Open, 0, 0, 0, 0, 0, {}};
+        if (!post(item, taskGen)) {
             ESP_LOGE(TAG, "rx_inbox_depth=%u, open dropped, queue full", static_cast<unsigned>(kInboxDepth));
         }
         return;
@@ -186,9 +220,16 @@ void onWsEvent(void *, esp_event_base_t, int32_t id, void *data)
             onText(event);
         }
         return;
-    case WEBSOCKET_EVENT_DISCONNECTED:
-        postClose(kAbnormalClose, failureReason(event));
+    case WEBSOCKET_EVENT_ERROR:
+        if (std::string reason = failureReason(event); !reason.empty()) {
+            errorReason = std::move(reason);
+        }
         return;
+    case WEBSOCKET_EVENT_DISCONNECTED: {
+        const std::string reason = failureReason(event);
+        postClose(kAbnormalClose, reason.empty() ? errorReason : reason);
+        return;
+    }
     case WEBSOCKET_EVENT_CLOSED:
         postClose(event.close_status_code == 0 ? kNoStatusClose : event.close_status_code, {});
         return;
@@ -199,6 +240,55 @@ void onWsEvent(void *, esp_event_base_t, int32_t id, void *data)
         return;
     default:
         return;
+    }
+}
+
+void controlLoop(void *)
+{
+    uint32_t started = 0;
+    UBaseType_t stackFreeMin = kControlTaskStackBytes;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        for (uint32_t wanted = wantedGen.load();; wanted = wantedGen.load()) {
+            if (started != 0 && started != wanted) {
+                esp_websocket_client_stop(client);
+                started = 0;
+            }
+            if (wanted != 0 && started != wanted) {
+                size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+                uint32_t waitedMs = 0;
+                for (; largest < kTlsHeapBytes && waitedMs < kTlsHeapWaitMs && wantedGen.load() == wanted;
+                     waitedMs += pdTICKS_TO_MS(kTlsHeapPollTicks)) {
+                    vTaskDelay(kTlsHeapPollTicks);
+                    largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+                }
+                if (wantedGen.load() != wanted) {
+                    continue;
+                }
+                ESP_LOGI(TAG, "tls start after %u ms heap wait, largest block %u", static_cast<unsigned>(waitedMs), static_cast<unsigned>(largest));
+                if (largest < kTlsHeapBytes) {
+                    ESP_LOGW(TAG, "tls_heap=%u, largest block %u, connecting anyway", static_cast<unsigned>(kTlsHeapBytes), static_cast<unsigned>(largest));
+                }
+                startLargest = static_cast<uint32_t>(std::min<size_t>(largest, UINT32_MAX));
+                started = wanted;
+                startGen = wanted;
+                if (esp_websocket_client_start(client) != ESP_OK) {
+                    Item item{TransportEvent::Kind::Close, 0, kAbnormalClose, 0, 0, 0, {}};
+                    constexpr std::string_view kWhy = "websocket start failed";
+                    std::memcpy(item.reason, kWhy.data(), kWhy.size());
+                    item.bytes = kWhy.size();
+                    post(item, wanted);
+                }
+            }
+            const UBaseType_t stackFree = uxTaskGetStackHighWaterMark(nullptr);
+            if (stackFree < stackFreeMin) {
+                stackFreeMin = stackFree;
+                ESP_LOGI(TAG, "ws_control_stack_free_min=%u of %u", static_cast<unsigned>(stackFree), static_cast<unsigned>(kControlTaskStackBytes));
+            }
+            if (wantedGen.load() == wanted) {
+                break;
+            }
+        }
     }
 }
 
@@ -281,13 +371,11 @@ bool transport_init(const std::string &relayUrl, size_t maxFrameBytes)
     mainTask = xTaskGetCurrentTaskHandle();
     inbox = xQueueCreate(kInboxDepth, sizeof(Item));
     bool ok = inbox != nullptr;
-    for (int i = 0; i < kSlots; ++i) {
-        slots[i] = static_cast<char *>(malloc(maxFrameBytes));
-        slotBusy[i] = false;
-        ok = ok && slots[i] != nullptr;
-    }
+    ringBytes = kRingFrames * maxFrameBytes;
+    ring = static_cast<char *>(malloc(ringBytes));
+    ok = ok && ring != nullptr;
     if (!ok) {
-        ESP_LOGE(TAG, "rx_slots=%d x max_frame_bytes=%u alloc failed", kSlots, static_cast<unsigned>(maxFrameBytes));
+        ESP_LOGE(TAG, "rx_ring_bytes=%u alloc failed", static_cast<unsigned>(kRingFrames * maxFrameBytes));
         return false;
     }
     pairUrl = httpsBase(relayUrl) + "/v1/pair";
@@ -304,30 +392,43 @@ bool transport_init(const std::string &relayUrl, size_t maxFrameBytes)
         ESP_LOGE(TAG, "websocket client init failed");
         return false;
     }
-    esp_log_level_set("websocket_client", ESP_LOG_ERROR);
-    return true;
-}
-
-bool transport_connect()
-{
-    esp_websocket_client_stop(client);
-    generation.fetch_add(1);
-    if (esp_websocket_client_start(client) != ESP_OK) {
-        ESP_LOGE(TAG, "websocket start failed");
+    // why: these IDF tags print the relay host or the whole upgrade request on a failed connect (transport_ws.c "Error connecting to host %s:%d", esp_tls.c "couldn't get hostname for :%s:"); the close reason on screen carries the cause instead
+    for (const char *tag : {"websocket_client", "transport_ws", "transport_base", "transport", "esp-tls", "esp-tls-mbedtls", "HTTP_CLIENT"}) {
+        esp_log_level_set(tag, ESP_LOG_NONE);
+    }
+    if (xTaskCreate(controlLoop, "ws_control", kControlTaskStackBytes, nullptr, kControlTaskPriority, &controlTask) != pdPASS) {
+        ESP_LOGE(TAG, "ws_control stack=%u alloc failed", static_cast<unsigned>(kControlTaskStackBytes));
         return false;
     }
     return true;
 }
 
+bool transport_connect()
+{
+    wantedGen = generation.fetch_add(1) + 1;
+    xTaskNotifyGive(controlTask);
+    return true;
+}
+
 void transport_close()
 {
-    esp_websocket_client_stop(client);
     generation.fetch_add(1);
+    wantedGen = 0;
+    xTaskNotifyGive(controlTask);
+}
+
+namespace {
+
+bool sendable()
+{
+    return openGen == generation.load() && wantedGen.load() != 0 && esp_websocket_client_is_connected(client);
+}
+
 }
 
 std::optional<std::string> transport_send(std::string_view text)
 {
-    if (!esp_websocket_client_is_connected(client)) {
+    if (!sendable()) {
         return std::string("not connected, ") + std::to_string(text.size()) + " bytes not sent";
     }
     const int sent = esp_websocket_client_send_text(client, text.data(), static_cast<int>(text.size()), kSendWaitTicks);
@@ -337,26 +438,44 @@ std::optional<std::string> transport_send(std::string_view text)
     return std::nullopt;
 }
 
+std::optional<AudioSendError> transport_send_audio(const int16_t *samples, size_t count, uint32_t waitMs)
+{
+    const int bytes = static_cast<int>(count * sizeof(int16_t));
+    if (!sendable()) {
+        return AudioSendError{AudioSendError::Kind::NotConnected, "not connected, " + std::to_string(bytes) + " audio bytes not sent"};
+    }
+    const int sent = esp_websocket_client_send_bin(client, reinterpret_cast<const char *>(samples), bytes, pdMS_TO_TICKS(waitMs));
+    if (sent == bytes) {
+        return std::nullopt;
+    }
+    if (!esp_websocket_client_is_connected(client)) {
+        return AudioSendError{AudioSendError::Kind::NotConnected, "connection closed, " + std::to_string(bytes) + " audio bytes not sent"};
+    }
+    return AudioSendError{AudioSendError::Kind::Stalled, "audio send stalled " + std::to_string(waitMs) + " ms, " + std::to_string(bytes) + " bytes not sent"};
+}
+
 std::optional<TransportEvent> transport_poll()
 {
-    if (mainSlot >= 0) {
-        slotBusy[mainSlot] = false;
-        mainSlot = -1;
+    if (mainHolds) {
+        ringTail = mainEnd;
+        mainHolds = false;
     }
     Item item;
     while (xQueueReceive(inbox, &item, 0) == pdTRUE) {
         if (item.gen != generation.load()) {
-            if (item.slot >= 0) {
-                slotBusy[item.slot] = false;
+            if (item.kind == TransportEvent::Kind::Text) {
+                ringTail = item.end;
             }
             continue;
         }
         switch (item.kind) {
         case TransportEvent::Kind::Open:
+            openGen = item.gen;
             return TransportEvent{TransportEvent::Kind::Open, 0, {}};
         case TransportEvent::Kind::Text:
-            mainSlot = item.slot;
-            return TransportEvent{TransportEvent::Kind::Text, 0, std::string_view(slots[item.slot], item.bytes)};
+            mainEnd = item.end;
+            mainHolds = true;
+            return TransportEvent{TransportEvent::Kind::Text, 0, std::string_view(ring + item.start % ringBytes, item.bytes)};
         case TransportEvent::Kind::Close:
             closeReason = std::string(item.reason, item.bytes);
             return TransportEvent{TransportEvent::Kind::Close, item.code, closeReason};
@@ -376,8 +495,8 @@ std::optional<std::string> transport_dropped()
     switch (dropWhy.load()) {
     case Drop::Oversize:
         return "max_frame_bytes=" + std::to_string(maxFrame) + ", relay frame needed " + needed;
-    case Drop::NoSlot:
-        return "rx_slots=" + std::to_string(kSlots) + ", a " + needed + " byte frame needed one more";
+    case Drop::RingFull:
+        return "rx_ring_bytes=" + std::to_string(ringBytes) + ", a " + needed + " byte frame did not fit behind the waiting ones";
     case Drop::InboxFull:
         return "rx_inbox_depth=" + std::to_string(kInboxDepth) + ", a " + needed + " byte frame needed one more";
     case Drop::Fragmented:

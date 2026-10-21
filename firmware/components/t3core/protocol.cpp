@@ -502,6 +502,10 @@ private:
 struct JsonHeap {
     JsonAllocator allocator{std::malloc, std::free};
     bool exhausted = false;
+    size_t budget = 0;
+    size_t parsed = 0;
+    bool parsing = false;
+    bool overBudget = false;
 };
 
 JsonHeap &jsonHeap()
@@ -512,6 +516,14 @@ JsonHeap &jsonHeap()
 
 void *hookedAllocate(size_t size)
 {
+    JsonHeap &heap = jsonHeap();
+    if (heap.parsing && heap.budget != 0) {
+        if (size > heap.budget - heap.parsed) {
+            heap.overBudget = true;
+            return nullptr;
+        }
+        heap.parsed += size;
+    }
     void *block = jsonHeap().allocator.allocate(size);
     if (block == nullptr) {
         jsonHeap().exhausted = true;
@@ -573,6 +585,11 @@ void setJsonAllocator(const JsonAllocator &allocator)
     jsonHeap().allocator = allocator;
 }
 
+void setJsonParseBudget(size_t bytes)
+{
+    jsonHeap().budget = bytes;
+}
+
 std::string_view modeName(Mode value)
 {
     return value == Mode::Steer ? "steer" : "queue";
@@ -586,10 +603,19 @@ std::optional<RelayMsg> parseRelay(std::string_view json, const HelloCaps &caps,
         return std::nullopt;
     }
     installJsonHooks();
-    jsonHeap().exhausted = false;
+    JsonHeap &heap = jsonHeap();
+    heap.exhausted = false;
+    heap.overBudget = false;
+    heap.parsed = 0;
+    heap.parsing = true;
     const char *parseEnd = nullptr;
     const JsonPtr root(cJSON_ParseWithLengthOpts(json.data(), json.size(), &parseEnd, false));
-    if (!root && jsonHeap().exhausted) {
+    heap.parsing = false;
+    if (!root && heap.overBudget) {
+        p.fail("json_parse_budget=" + std::to_string(heap.budget) + ", frame of " + std::to_string(json.size()) + " bytes needed more");
+        return std::nullopt;
+    }
+    if (!root && heap.exhausted) {
         p.fail("heap: parse needed more than available, frame was " + std::to_string(json.size()) + " bytes");
         return std::nullopt;
     }

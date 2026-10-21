@@ -42,6 +42,7 @@ export const configSchema = z.strictObject({
   t3BaseUrl: z.url(),
   stateDir: z.string().min(1),
   whisper: z.strictObject({ binDir: z.string().min(1), model: z.string().min(1), port: positiveInt.max(65535), threads: positiveInt }),
+  stt: z.strictObject({ keepSamples: z.boolean(), samplesDir: z.string().min(1).optional(), maxSamples: positiveInt }),
   canary: z.strictObject({ model: z.string().min(1) }),
   repair: z.strictObject({
     model: z.string().min(1),
@@ -126,6 +127,8 @@ export const DEFAULT_CONFIG: RelayConfig = {
   stateDir: join(homedir(), ".local", "state", "t3-cardputer"),
   // receipt: docs/receipts/2026-10-20-whisper-cpu.md, threads=8 matches the 8 physical cores and beat 4 (1.7x slower) and 16 (1.07x slower)
   whisper: { binDir: join(dataDir, "whisper"), model: "medium.en", port: 8788, threads: 8 },
+  // receipt: Checkpoint B needs 5 recordings and Task 11 compares models on them, so 50 is a tripwire 10x past that; the longest clip (120 s, audioMaxSeconds) holds 3.84 MB, so 50 caps the dir at 192 MB worst case
+  stt: { keepSamples: false, maxSamples: 50 },
   canary: { model: "claude-haiku-5-5" },
   repair: {
     model: "claude-opus-5-5",
@@ -137,6 +140,10 @@ export const DEFAULT_CONFIG: RelayConfig = {
   },
   limits: DEFAULT_LIMITS,
 };
+
+export function samplesDirOf(config: Pick<RelayConfig, "stateDir" | "stt">): string {
+  return config.stt.samplesDir ?? join(config.stateDir, "voice-samples");
+}
 
 const configDir = join(homedir(), ".config", "t3-cardputer");
 

@@ -509,3 +509,26 @@ TEST_CASE("the relay's own heartbeat needs no link timer, a quiet live link stay
     }
     CHECK(link.state() == t3::Link::State::Live);
 }
+
+TEST_CASE("pairing is allowed only while the link needs a token or has stopped")
+{
+    CHECK_FALSE(makeLink().canPair());
+    CHECK_FALSE(connecting().canPair());
+    CHECK_FALSE(live().canPair());
+    t3::Link backingOff = live();
+    backingOff.onClose(1006, "", 0);
+    CHECK_FALSE(backingOff.canPair());
+
+    t3::Link unpaired(kCaps, "", "0.1.0");
+    unpaired.onWifi(true, 0);
+    CHECK(unpaired.canPair());
+
+    t3::Link rejected = live();
+    rejected.onClose(4401, "", 0);
+    CHECK(rejected.canPair());
+
+    t3::Link stopped = connecting();
+    stopped.onOpen(0);
+    stopped.onClose(4402, "hello.cols: must be at most 255", 0);
+    CHECK(stopped.canPair());
+}

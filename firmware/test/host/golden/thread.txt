@@ -8,4 +8,4 @@ PR #41 is open against main.
                                         
 > _                                     
                                         
-type to reply  ^v page  Bksp back       
+type or hold ` talk  ^v page  Bksp back 

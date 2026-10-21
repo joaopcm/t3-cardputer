@@ -11,3 +11,5 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # receipt: docs/receipts/2026-10-21-firmware-network.md "stacks", main task used 3504 bytes once it sends over TLS, the 3584-byte default would leave 80, 8192 is 2.3x
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# receipt: docs/receipts/2026-10-21-firmware-voice.md "tcp send buffer", the 5760-byte default held 1600-byte audio sends up to 121 ms and lost audio; 16384 keeps 0.5 s of audio in flight
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=16384

@@ -38,6 +38,8 @@ optional. defaults are in `~/.local/share/t3-cardputer/deploy/relay/src/config.t
 
 unknown keys and bad values fail at start with the key name.
 
+to keep the voice recordings the relay receives (for checking whisper models on your own voice), set `"stt": {"keepSamples": true}` in `~/.config/t3-cardputer/relay.json` and restart the relay. each finished recording lands in `~/.local/state/t3-cardputer/voice-samples/` (`stt.samplesDir` moves it) as `<timestamp>-<device>.wav` plus a `.json` with duration, transcript, model, transcribe time and peak level. files are 0600 in a 0700 dir. it is off by default, and stops saving at `stt.maxSamples` (50), logging the limit rather than deleting anything.
+
 ## 3. pair T3
 
 the relay needs two T3 tokens, an MCP one and an internal one. both come from one-time pairing codes, so make two.

@@ -199,7 +199,7 @@ void App::drawPrompt(Grid &grid) const
     for (int i = first; i < static_cast<int>(wrapped.size()); ++i) {
         grid.put(kPromptTop + i - first, 0, std::string(i == 0 ? kPrompt : kContinue) + wrapped[i]);
     }
-    drawHint(grid, field_ == Field::None ? "Enter start  Tab options  Esc back" : "<> change  Tab next  Enter start");
+    drawHint(grid, field_ == Field::None ? "Enter start  Tab opts  ` talk  Esc back" : "<> change  Tab next  Enter start");
     drawBar(grid, "new task", "2/2");
 }
 

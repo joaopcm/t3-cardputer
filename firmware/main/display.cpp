@@ -25,6 +25,9 @@ constexpr int kBottomBarY = kHeight - kCellH;
 static_assert(kCellW * t3::Grid::Cols == kWidth);
 static_assert(kCellH * t3::Grid::Rows <= kHeight);
 
+// estimate, retune from a real measurement: docs/receipts/2026-10-21-firmware-power.md "timeouts"; a quarter of the backlight duty is still readable indoors and saves up to 15 of the at most 20 mA the backlight draws
+constexpr int kDimBrightnessDivisor = 4;
+
 constexpr uint8_t kBlack = static_cast<uint8_t>(t3::Color::BarBg) + 1;
 
 struct PaletteEntry {
@@ -47,6 +50,8 @@ constexpr PaletteEntry kPalette[] = {
 
 M5GFX panel;
 M5Canvas canvas(&panel);
+uint8_t fullBrightness;
+bool asleep;
 StaticSemaphore_t canvasLockStorage;
 SemaphoreHandle_t canvasLock;
 
@@ -68,6 +73,8 @@ bool display_init()
     panel.init();
     panel.setRotation(1);
     panel.fillScreen(TFT_BLACK);
+    fullBrightness = panel.getBrightness();
+    ESP_LOGI(TAG, "full_brightness=%u", static_cast<unsigned>(fullBrightness));
 
     canvas.setColorDepth(kBpp);
     if (canvas.createSprite(kWidth, kHeight) == nullptr) {
@@ -81,6 +88,25 @@ bool display_init()
     canvas.setFont(&fonts::Font0);
     canvas.setTextSize(1);
     return true;
+}
+
+void display_set_level(DisplayLevel level)
+{
+    xSemaphoreTake(canvasLock, portMAX_DELAY);
+    if (level == DisplayLevel::Off) {
+        if (!asleep) {
+            panel.sleep();
+            asleep = true;
+        }
+    } else {
+        if (asleep) {
+            panel.wakeup();
+            canvas.pushSprite(0, 0);
+            asleep = false;
+        }
+        panel.setBrightness(level == DisplayLevel::Dim ? fullBrightness / kDimBrightnessDivisor : fullBrightness);
+    }
+    xSemaphoreGive(canvasLock);
 }
 
 void display_draw(const t3::Grid &grid)
@@ -102,7 +128,9 @@ void display_draw(const t3::Grid &grid)
             }
         }
     }
-    canvas.pushSprite(0, 0);
+    if (!asleep) {
+        canvas.pushSprite(0, 0);
+    }
     xSemaphoreGive(canvasLock);
 }
 

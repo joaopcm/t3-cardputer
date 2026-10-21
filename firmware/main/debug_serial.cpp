@@ -33,6 +33,8 @@ constexpr size_t kMaxRowHexBytes = 2 * 120 + 1;
 
 QueueHandle_t keyQueue;
 std::atomic<bool> dropRequested{false};
+std::atomic<DebugNetCut> netCutRequested{DebugNetCut::None};
+std::atomic<uint64_t> powerRequested{0};
 
 void emit(const char *text, size_t len)
 {
@@ -106,9 +108,24 @@ void handleKey(std::string_view name)
     emitLine("KEY ok");
 }
 
+void handlePower(std::string_view args)
+{
+    char text[kMaxLineBytes];
+    std::snprintf(text, sizeof(text), "%.*s", static_cast<int>(args.size()), args.data());
+    unsigned dimAfterMs = 0;
+    unsigned offAfterMs = 0;
+    if (std::sscanf(text, "%u %u", &dimAfterMs, &offAfterMs) != 2 || dimAfterMs == 0 || offAfterMs <= dimAfterMs) {
+        emitLine("ERR POWER <dim_ms> <off_ms>, 0 < dim < off");
+        return;
+    }
+    powerRequested = (static_cast<uint64_t>(dimAfterMs) << 32) | offAfterMs;
+    emitLine("POWER ok");
+}
+
 void handleLine(std::string_view line)
 {
     constexpr std::string_view kKeyPrefix = "KEY ";
+    constexpr std::string_view kPowerPrefix = "POWER ";
     if (line == "SHOT") {
         sendShot();
         ESP_LOGI(TAG, "task_stack_free_min=%u of %u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
@@ -118,6 +135,17 @@ void handleLine(std::string_view line)
     } else if (line == "DROP") {
         dropRequested = true;
         emitLine("DROP ok");
+    } else if (line == "WIFIOFF") {
+        netCutRequested = DebugNetCut::LeaveAp;
+        emitLine("WIFIOFF ok");
+    } else if (line == "NETDOWN") {
+        netCutRequested = DebugNetCut::BlackHole;
+        emitLine("NETDOWN ok");
+    } else if (line == "NETUP") {
+        netCutRequested = DebugNetCut::Restore;
+        emitLine("NETUP ok");
+    } else if (line.substr(0, kPowerPrefix.size()) == kPowerPrefix) {
+        handlePower(line.substr(kPowerPrefix.size()));
     } else if (line.substr(0, kKeyPrefix.size()) == kKeyPrefix) {
         handleKey(line.substr(kKeyPrefix.size()));
     } else {
@@ -185,4 +213,20 @@ bool debug_serial_poll_key(t3::Key *key)
 bool debug_serial_poll_drop()
 {
     return dropRequested.exchange(false);
+}
+
+DebugNetCut debug_serial_poll_net_cut()
+{
+    return netCutRequested.exchange(DebugNetCut::None);
+}
+
+bool debug_serial_poll_power(uint32_t *dimAfterMs, uint32_t *offAfterMs)
+{
+    const uint64_t request = powerRequested.exchange(0);
+    if (request == 0) {
+        return false;
+    }
+    *dimAfterMs = static_cast<uint32_t>(request >> 32);
+    *offAfterMs = static_cast<uint32_t>(request);
+    return true;
 }

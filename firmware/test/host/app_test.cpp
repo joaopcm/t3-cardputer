@@ -485,6 +485,42 @@ TEST_CASE("R sends refresh")
     CHECK(lower.str("id") != upper.str("id"));
 }
 
+TEST_CASE("wake sends refresh and redraws home")
+{
+    App app = live();
+    push(app, relay(kHome));
+    const std::string before = allText(app);
+    const Frame refresh(only(app.onWake()));
+    CHECK(refresh.str("type") == "refresh");
+    CHECK(refresh.str("id") != "");
+    CHECK(app.screenName() == "home");
+    CHECK(allText(app) == before);
+    push(app, relay(kWeaverHome));
+    CHECK(app.screenName() == "home");
+    CHECK(contains(allText(app), "layout engine"));
+    CHECK_FALSE(contains(allText(app), "fix bounce webhook"));
+}
+
+TEST_CASE("wake keeps the open screen and a half-typed reply")
+{
+    App app = onWeaverThread();
+    type(app, "go ");
+    const Frame refresh(only(app.onWake()));
+    CHECK(refresh.str("type") == "refresh");
+    CHECK(app.screenName() == "thread");
+    CHECK(row(app, 8).rfind("> go _", 0) == 0);
+}
+
+TEST_CASE("wake with the link down sends nothing and the reconnect brings the state")
+{
+    App app = live();
+    push(app, relay(kHome));
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(app.onWake().send.empty());
+    CHECK(app.onLinkStatus("").send.empty());
+    CHECK(app.screenName() == "home");
+}
+
 TEST_CASE("T on approval sends respond with text")
 {
     App app = onApproval();
@@ -1031,4 +1067,37 @@ TEST_CASE("probe I: answering a request drops its waiting copy, so Tab cannot an
     CHECK(Frame(only(app.onKey(named(KeyName::Enter), t += 500))).str("requestId") == "r1");
     CHECK(app.onKey(named(KeyName::Tab), t += 500).send.empty());
     CHECK(app.screenName() == "thread");
+}
+
+TEST_CASE("editing is true only while a text line holds or awaits typing")
+{
+    App home = live();
+    push(home, relay(kHome));
+    CHECK_FALSE(home.editing());
+
+    App thread = onWeaverThread();
+    CHECK_FALSE(thread.editing());
+    type(thread, "g");
+    CHECK(thread.editing());
+    press(thread, named(KeyName::Backspace));
+    CHECK_FALSE(thread.editing());
+
+    App approval = onApproval();
+    CHECK_FALSE(approval.editing());
+    press(approval, ch('T'));
+    CHECK(approval.editing());
+    press(approval, named(KeyName::Esc));
+    CHECK_FALSE(approval.editing());
+
+    App prompt = live();
+    push(prompt, relay(kHome));
+    press(prompt, ch('N'));
+    push(prompt, relay(kProjects));
+    CHECK(prompt.screenName() == "projects");
+    CHECK_FALSE(prompt.editing());
+    press(prompt, named(KeyName::Enter));
+    CHECK(prompt.screenName() == "new_task");
+    CHECK_FALSE(prompt.editing());
+    type(prompt, "x");
+    CHECK(prompt.editing());
 }

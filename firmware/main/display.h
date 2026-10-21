@@ -5,7 +5,10 @@
 
 #include "t3/grid.h"
 
+enum class DisplayLevel { Full, Dim, Off };
+
 bool display_init();
+void display_set_level(DisplayLevel level);
 void display_draw(const t3::Grid &grid);
 
 struct DisplayBuffer {

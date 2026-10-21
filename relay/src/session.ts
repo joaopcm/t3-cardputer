@@ -20,6 +20,7 @@ import {
   type RelayMessage,
 } from "./protocol/messages.js";
 import { AudioBuffer, BudgetError } from "./stt/audio-buffer.js";
+import type { SampleKeeper } from "./stt/samples.js";
 import type { Stt } from "./stt/types.js";
 import { T3AuthError, T3UnavailableError, type T3Mcp, type T3Model, type T3Project, type T3Question, type T3ThreadSummary } from "./t3/mcp.js";
 import { toDeviceAscii } from "./text/device-text.js";
@@ -42,6 +43,8 @@ export type HubDeps = {
   auth: Pick<DeviceAuth, "verify">;
   defaults: Pick<DefaultsStore, "get" | "remember">;
   stt: Stt;
+  sttModel: string;
+  samples?: SampleKeeper | undefined;
   approvalsState: () => ApprovalsState;
   warnings?: () => string[];
   onAdapterBroken?: (reason: string) => ApprovalsDownPhase;
@@ -573,8 +576,20 @@ export class Session {
     }
     this.send(ok(id));
     try {
-      const text = await this.hub.deps.stt.transcribe(audio.buffer.toWav());
+      const wav = audio.buffer.toWav();
+      const startedAt = Date.now();
+      const text = await this.hub.deps.stt.transcribe(wav);
+      const transcribeMs = Date.now() - startedAt;
       this.send({ type: "transcript_final", text: toDeviceAscii(text).replace(/\s+/g, " ").trim() });
+      await this.hub.deps.samples?.save({
+        wav,
+        deviceId: this.deviceId ?? "unknown",
+        durationSec: audio.buffer.durationSec,
+        peakDbfs: audio.buffer.peakDbfs,
+        transcript: text,
+        model: this.hub.deps.sttModel,
+        transcribeMs,
+      });
     } catch (error) {
       console.error(`device ${this.deviceId}: transcription failed`, error);
       this.send({ type: "error", code: "internal", message: clipText((error as Error).message) });

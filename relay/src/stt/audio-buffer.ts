@@ -21,6 +21,14 @@ export class AudioBuffer {
     return this.bytes / BYTES_PER_SAMPLE / this.sampleRate;
   }
 
+  get peakDbfs(): number | null {
+    let peak = 0;
+    for (const chunk of this.chunks) {
+      for (let i = 0; i < chunk.length; i += BYTES_PER_SAMPLE) peak = Math.max(peak, Math.abs(chunk.readInt16LE(i)));
+    }
+    return peak === 0 ? null : 20 * Math.log10(peak / 32768);
+  }
+
   push(chunk: Buffer): void {
     if (chunk.length === 0 || chunk.length % BYTES_PER_SAMPLE !== 0) {
       throw new RangeError(`audio frame must be a non-empty even number of bytes, got ${chunk.length}`);

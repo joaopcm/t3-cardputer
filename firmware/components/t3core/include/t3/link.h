@@ -45,6 +45,7 @@ public:
     Out onUserReconnect(uint32_t nowMs);
 
     State state() const { return state_; }
+    bool canPair() const { return state_ == State::NeedsPair || state_ == State::Stopped; }
 
 private:
     Out connectNow(uint32_t nowMs);

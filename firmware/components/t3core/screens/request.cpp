@@ -87,6 +87,11 @@ App::RequestLayout App::requestLayout() const
 
 void App::onRequest(const Request &request, uint32_t nowMs)
 {
+    if (request.threadId == threadId_ && screen_ == Screen::Voice && voiceFrom_ == Screen::Thread) {
+        waiting_ = request;
+        inform("request waiting: Tab opens it", Color::Warn);
+        return;
+    }
     if (request.threadId != threadId_ || (screen_ != Screen::Thread && screen_ != Screen::Request)) {
         inform("request waiting: " + (request.lines.empty() ? request.requestId : request.lines.front()), Color::Warn);
         return;

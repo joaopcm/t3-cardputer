@@ -264,7 +264,7 @@ Close the audio window and throw the audio away. No transcript follows.
 
 ### Audio
 
-Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty, an even number of bytes, and at most 65536 bytes (`DEVICE_FRAME_BYTES_MAX`, 2.05 s of audio; a larger frame closes the socket with 1009). Chunk size within that is the device's choice; the simulator sends 100 ms (3200 byte) chunks in real time.
+Binary frames carry raw PCM: signed 16-bit little-endian, mono, 16000 Hz, no header. A frame must be non-empty, an even number of bytes, and at most 65536 bytes (`DEVICE_FRAME_BYTES_MAX`, 2.05 s of audio; a larger frame closes the socket with 1009). Chunk size within that is the device's choice; the simulator sends 100 ms (3200 byte) chunks in real time. A binary message may arrive split into WebSocket continuation frames (the ADV's websocket client sends 1024-byte fragments); the relay reassembles it, and every limit here applies to the whole message.
 
 Binary frames are only accepted between `audio_start` and `audio_end` or `audio_cancel`. The relay handles frames in the order they arrive and opens the window as soon as it reads `audio_start`, so the device may stream audio right after `audio_start` without waiting for its `ack`. If that `ack` comes back `ok:false` (a window was already open), send `audio_cancel` and drop the recording; audio sent in the meantime went to the window that was already open. Any other binary frame gets `error {code:"audio_not_started"}` and is dropped. An empty or odd-length frame gets `error {code:"bad_audio"}` and is dropped; the window stays open.
 

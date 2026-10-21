@@ -1,0 +1,150 @@
+#include "doctest.h"
+
+#include <cstdint>
+
+#include "t3/power.h"
+
+namespace {
+
+using t3::Power;
+
+constexpr uint32_t kDim = 1000;
+constexpr uint32_t kOff = 3000;
+
+Power power(uint32_t now = 0)
+{
+    return Power(kDim, kOff, now);
+}
+
+}
+
+TEST_CASE("the screen stays full until the dim timeout, dims there and goes off at the off timeout")
+{
+    Power p = power();
+    CHECK(p.level() == Power::Level::Full);
+    CHECK_FALSE(p.onTick(kDim - 1));
+    CHECK(p.level() == Power::Level::Full);
+    CHECK(p.onTick(kDim));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK_FALSE(p.onTick(kOff - 1));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK(p.onTick(kOff));
+    CHECK(p.level() == Power::Level::Off);
+    CHECK_FALSE(p.onTick(kOff * 10));
+}
+
+TEST_CASE("a late tick goes straight from full to off")
+{
+    Power p = power();
+    CHECK(p.onTick(kOff + 500));
+    CHECK(p.level() == Power::Level::Off);
+}
+
+TEST_CASE("a key on a dimmed screen acts and restarts the idle clock")
+{
+    Power p = power();
+    p.onTick(kDim);
+    CHECK(p.onKey(t3::KeyName::Char, kDim + 10) == Power::KeyEffect::Deliver);
+    CHECK(p.level() == Power::Level::Full);
+    CHECK_FALSE(p.onTick(kDim + 10 + kDim - 1));
+    CHECK(p.onTick(kDim + 10 + kDim));
+    CHECK(p.level() == Power::Level::Dim);
+}
+
+TEST_CASE("a key on a full screen restarts the idle clock")
+{
+    Power p = power();
+    CHECK(p.onKey(t3::KeyName::Char, kDim - 1) == Power::KeyEffect::Deliver);
+    CHECK_FALSE(p.onTick(kDim));
+    CHECK(p.level() == Power::Level::Full);
+    CHECK(p.onTick(kDim - 1 + kDim));
+}
+
+TEST_CASE("a key on a dark screen only wakes it")
+{
+    Power p = power();
+    p.onTick(kOff);
+    REQUIRE(p.level() == Power::Level::Off);
+    CHECK(p.onKey(t3::KeyName::Char, kOff + 5) == Power::KeyEffect::Woke);
+    CHECK(p.level() == Power::Level::Full);
+    CHECK(p.onKey(t3::KeyName::Char, kOff + 6) == Power::KeyEffect::Deliver);
+}
+
+TEST_CASE("after a wake the idle clock restarts from the waking key")
+{
+    Power p = power();
+    p.onTick(kOff);
+    p.onKey(t3::KeyName::Char, kOff + 5);
+    CHECK_FALSE(p.onTick(kOff + 5 + kDim - 1));
+    CHECK(p.onTick(kOff + 5 + kDim));
+    CHECK(p.level() == Power::Level::Dim);
+}
+
+TEST_CASE("timeouts survive the 32-bit millisecond clock wrapping")
+{
+    const uint32_t start = UINT32_MAX - 500;
+    Power p = power(start);
+    CHECK_FALSE(p.onTick(start + kDim - 1));
+    CHECK(p.onTick(start + kDim));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK(p.onTick(start + kOff));
+    CHECK(p.level() == Power::Level::Off);
+    CHECK(p.onKey(t3::KeyName::Char, start + kOff + 1) == Power::KeyEffect::Woke);
+}
+
+TEST_CASE("new timeouts restart the idle clock and wake the screen")
+{
+    Power p = power();
+    p.onTick(kOff);
+    p.setTimeouts(200, 400, kOff + 1);
+    CHECK(p.level() == Power::Level::Full);
+    CHECK_FALSE(p.onTick(kOff + 1 + 199));
+    CHECK(p.onTick(kOff + 1 + 200));
+    CHECK(p.onTick(kOff + 1 + 400));
+    CHECK(p.level() == Power::Level::Off);
+}
+
+TEST_CASE("while editing the screen dims at the dim timeout and stays dim past the off timeout")
+{
+    Power p = power();
+    p.setEditing(true);
+    CHECK(p.onTick(kDim));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK_FALSE(p.onTick(kOff));
+    CHECK_FALSE(p.onTick(kOff * 100));
+    CHECK(p.level() == Power::Level::Dim);
+}
+
+TEST_CASE("a late tick while editing stops at dim, and the next key acts")
+{
+    Power p = power();
+    p.setEditing(true);
+    CHECK(p.onTick(kOff + 500));
+    CHECK(p.level() == Power::Level::Dim);
+    CHECK(p.onKey(t3::KeyName::Char, kOff + 501) == Power::KeyEffect::Deliver);
+    CHECK(p.level() == Power::Level::Full);
+}
+
+TEST_CASE("when editing ends a dim screen goes off at the normal timeout")
+{
+    Power p = power();
+    p.setEditing(true);
+    p.onTick(kOff + 10);
+    REQUIRE(p.level() == Power::Level::Dim);
+    p.setEditing(false);
+    CHECK(p.onTick(kOff + 11));
+    CHECK(p.level() == Power::Level::Off);
+}
+
+TEST_CASE("editing set again after the clock restarts keeps the normal timeout from the last key")
+{
+    Power p = power();
+    p.onKey(t3::KeyName::Char, 500);
+    p.setEditing(true);
+    CHECK_FALSE(p.onTick(500 + kDim - 1));
+    CHECK(p.onTick(500 + kDim));
+    p.setEditing(false);
+    CHECK_FALSE(p.onTick(500 + kOff - 1));
+    CHECK(p.onTick(500 + kOff));
+    CHECK(p.level() == Power::Level::Off);
+}

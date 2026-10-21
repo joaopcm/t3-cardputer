@@ -7,9 +7,12 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_net_stack.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "lwip/netif.h"
+#include "lwip/tcpip.h"
 #include "settings.h"
 
 namespace {
@@ -360,4 +363,45 @@ std::optional<WifiEvent> wifi_poll(uint32_t nowMs)
     WifiEvent event = std::move(pending.front());
     pending.pop_front();
     return event;
+}
+
+namespace {
+
+netif_linkoutput_fn realOutput = nullptr;
+
+err_t swallowFrame(struct netif *, struct pbuf *)
+{
+    return ERR_OK;
+}
+
+void startBlackHole(void *netif)
+{
+    struct netif *sta = static_cast<struct netif *>(netif);
+    if (realOutput == nullptr) {
+        realOutput = sta->linkoutput;
+        sta->linkoutput = swallowFrame;
+    }
+}
+
+void endBlackHole(void *netif)
+{
+    if (realOutput != nullptr) {
+        static_cast<struct netif *>(netif)->linkoutput = realOutput;
+        realOutput = nullptr;
+    }
+}
+
+}
+
+void wifi_debug_leave_ap()
+{
+    esp_wifi_disconnect();
+}
+
+void wifi_debug_black_hole(bool on)
+{
+    // why: a netif that swallows every outgoing frame keeps the association and the socket but delivers nothing, like an access point that went out of range before the beacon timeout
+    if (esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) {
+        tcpip_callback(on ? startBlackHole : endBlackHole, esp_netif_get_netif_impl(sta));
+    }
 }

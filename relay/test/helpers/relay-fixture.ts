@@ -5,7 +5,7 @@ import { afterEach } from "vitest";
 import WebSocket from "ws";
 import { AdapterBrokenError, type ApprovalDecision, type ApprovalsAdapter, type PendingApproval } from "../../src/approvals/index.js";
 import { DeviceAuth } from "../../src/auth/devices.js";
-import { DEFAULT_CONFIG, DEFAULT_LIMITS, type Limits } from "../../src/config.js";
+import { DEFAULT_CONFIG, DEFAULT_LIMITS, type Limits, type RelayConfig } from "../../src/config.js";
 import { DefaultsStore } from "../../src/defaults-store.js";
 import { relayMessageSchema, type RelayMessage } from "../../src/protocol/messages.js";
 import { SecretsStore } from "../../src/secrets.js";
@@ -193,7 +193,7 @@ export function cleanupAfterEach(): void {
   });
 }
 
-export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeStt) {
+export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeStt, config: Partial<RelayConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "relay-session-"));
   const allLimits: Limits = { ...DEFAULT_LIMITS, pollIntervalMs: POLL_MS, helloTimeoutMs: 150, ...limits };
   const auth = new DeviceAuth(new SecretsStore(join(dir, "secrets.json")), allLimits);
@@ -203,7 +203,7 @@ export async function startRelay(limits: Partial<Limits> = {}, stt: Stt = fakeSt
   const brokenReasons: string[] = [];
   const brokenHook: { phase: ApprovalsDownPhase } = { phase: "checking" };
   const server = await startServer({
-    config: { ...DEFAULT_CONFIG, port: 0, stateDir: dir, limits: allLimits },
+    config: { ...DEFAULT_CONFIG, port: 0, stateDir: dir, limits: allLimits, ...config },
     t3,
     approvals,
     auth,
