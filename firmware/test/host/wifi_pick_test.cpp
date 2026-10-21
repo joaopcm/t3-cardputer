@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "doctest.h"
 
 #include "t3/wifi_pick.h"
@@ -76,6 +78,36 @@ TEST_CASE("saved networks the scan did not list are tried last, only when a hidd
     CHECK(hidden.next() == "phone");
     hidden.failed("phone");
     CHECK(hidden.next() == "attic");
+}
+
+TEST_CASE("one unlisted saved network per round, a different one each round")
+{
+    WifiPicker picker;
+    const std::vector<std::string> saved = {"attic", "barn", "cellar"};
+    std::vector<std::string> reached;
+    for (int round = 0; round < 3; ++round) {
+        picker.scanned(kNets, saved, true);
+        const std::optional<std::string> ssid = picker.next();
+        REQUIRE(ssid.has_value());
+        reached.push_back(*ssid);
+        picker.failed(*ssid);
+        CHECK_FALSE(picker.next().has_value());
+    }
+    std::sort(reached.begin(), reached.end());
+    CHECK(reached == saved);
+}
+
+TEST_CASE("the same scan keeps the round's unlisted saved network")
+{
+    WifiPicker picker;
+    picker.scanned(kNets, {"attic", "barn", "phone"}, true);
+    picker.failed("phone");
+    picker.scanned(kNets, {"attic", "barn", "phone"}, true);
+    const std::optional<std::string> unlisted = picker.next();
+    REQUIRE(unlisted.has_value());
+    picker.failed(*unlisted);
+    picker.scanned(kNets, {"attic", "barn", "phone"}, true);
+    CHECK(picker.next() == "phone");
 }
 
 TEST_CASE("no saved network in range has nothing to try")

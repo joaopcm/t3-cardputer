@@ -12,26 +12,33 @@ void WifiPicker::scanned(const std::vector<WifiNet> &nets, const std::vector<std
     auto listed = [&](const std::string &ssid) {
         return std::any_of(nets.begin(), nets.end(), [&](const WifiNet &net) { return net.ssid == ssid; });
     };
-    std::vector<std::string> candidates;
+    std::vector<std::string> inRange;
     for (const WifiNet &net : strongest) {
-        if (isSaved(net.ssid) && std::find(candidates.begin(), candidates.end(), net.ssid) == candidates.end()) {
-            candidates.push_back(net.ssid);
+        if (isSaved(net.ssid) && std::find(inRange.begin(), inRange.end(), net.ssid) == inRange.end()) {
+            inRange.push_back(net.ssid);
         }
     }
+    std::vector<std::string> unlisted;
     if (hiddenInRange) {
         for (const std::string &ssid : saved) {
             if (!listed(ssid)) {
-                candidates.push_back(ssid);
+                unlisted.push_back(ssid);
             }
         }
     }
-    std::vector<std::string> before = candidates_;
-    std::vector<std::string> after = candidates;
-    std::sort(before.begin(), before.end());
-    std::sort(after.begin(), after.end());
-    candidates_ = std::move(candidates);
-    if (before != after || !next()) {
-        failed_.clear();
+    std::vector<std::string> pool = inRange;
+    pool.insert(pool.end(), unlisted.begin(), unlisted.end());
+    std::sort(pool.begin(), pool.end());
+    candidates_ = std::move(inRange);
+    if (pool == pool_ && next()) {
+        return;
+    }
+    pool_ = std::move(pool);
+    failed_.clear();
+    hidden_.reset();
+    if (!unlisted.empty()) {
+        hidden_ = unlisted[hiddenNext_ % unlisted.size()];
+        hiddenNext_ += 1;
     }
 }
 
@@ -41,6 +48,9 @@ std::optional<std::string> WifiPicker::next() const
         if (!tried(ssid)) {
             return ssid;
         }
+    }
+    if (hidden_ && !tried(*hidden_)) {
+        return hidden_;
     }
     return std::nullopt;
 }

@@ -19,7 +19,10 @@ public:
 private:
     bool tried(std::string_view ssid) const;
 
+    std::vector<std::string> pool_;
     std::vector<std::string> candidates_;
+    std::optional<std::string> hidden_;
+    size_t hiddenNext_ = 0;
     std::vector<std::string> failed_;
 };
 
