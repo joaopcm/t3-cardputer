@@ -226,6 +226,7 @@ private:
     int netSelected_ = 0;
     int netTop_ = 0;
     WifiNet joinTarget_;
+    bool joinTyped_ = false;
     std::string typedSsid_;
     std::string wifiPassword_;
     bool joining_ = false;

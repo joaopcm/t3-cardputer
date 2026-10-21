@@ -243,6 +243,28 @@ TEST_CASE("the list ends with a row to type a hidden network's name, then its pa
     CHECK(out.joinWifi->password == "hunter22");
 }
 
+TEST_CASE("a typed network joins open with no password, a short one is still refused")
+{
+    App app = onList();
+    for (int i = 0; i < 3; ++i) {
+        press(app, named(KeyName::Down));
+    }
+    press(app, named(KeyName::Enter));
+    type(app, "cafe");
+    press(app, named(KeyName::Enter));
+    CHECK(contains(allText(app), "empty joins an open network"));
+    type(app, "abc");
+    CHECK_FALSE(press(app, named(KeyName::Enter)).joinWifi.has_value());
+    CHECK(rows(app)[0].rfind("wifi_password_min=8, password has 3", 0) == 0);
+    for (int i = 0; i < 3; ++i) {
+        press(app, named(KeyName::Backspace));
+    }
+    const App::Out out = press(app, named(KeyName::Enter));
+    REQUIRE(out.joinWifi.has_value());
+    CHECK(out.joinWifi->ssid == "cafe");
+    CHECK(out.joinWifi->password.empty());
+}
+
 TEST_CASE("an empty scan still offers to type a name")
 {
     App app(kCaps, 7);

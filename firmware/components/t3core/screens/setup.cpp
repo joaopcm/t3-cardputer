@@ -15,6 +15,7 @@ constexpr int kListRows = kBodyBottom - kListTop + 1;
 constexpr int kSsidCols = 29;
 constexpr int kTagCols = 5;
 constexpr int kRssiCols = 4;
+constexpr int kOpenHintRow = 5;
 constexpr int kStatusRow = 6;
 constexpr int kInputLabelRow = 6;
 constexpr int kInputRow = 7;
@@ -227,6 +228,7 @@ App::Out App::wifiListKey(Key key)
     case KeyName::Enter:
         if (onNet) {
             joinTarget_ = nets_[netSelected_];
+            joinTyped_ = false;
             wifiPassword_.clear();
             screen_ = Screen::SetupWifiPassword;
         } else {
@@ -280,6 +282,7 @@ App::Out App::wifiSsidKey(Key key)
             break;
         }
         joinTarget_ = WifiNet{typedSsid_, 0, true, false};
+        joinTyped_ = true;
         wifiPassword_.clear();
         screen_ = Screen::SetupWifiPassword;
         break;
@@ -310,7 +313,7 @@ App::Out App::wifiPasswordKey(Key key)
     case KeyName::Enter:
         if (joining_) {
             inform("joining...", Color::Ok);
-        } else if (joinTarget_.secure && wifiPassword_.size() < kWifiPasswordMin) {
+        } else if (joinTarget_.secure && !(joinTyped_ && wifiPassword_.empty()) && wifiPassword_.size() < kWifiPasswordMin) {
             inform("wifi_password_min=" + std::to_string(kWifiPasswordMin) + ", password has " + std::to_string(wifiPassword_.size()), Color::Warn);
         } else {
             joining_ = true;
@@ -410,6 +413,9 @@ void App::drawWifiPassword(Grid &grid) const
         grid.put(2, 0, "password", Color::Dim);
         grid.put(3, 0, inputLine(std::string(wifiPassword_.size(), '*')));
         grid.put(4, 0, charCount(wifiPassword_.size()), Color::Dim);
+        if (joinTyped_) {
+            grid.put(kOpenHintRow, 0, "empty joins an open network", Color::Dim);
+        }
     } else {
         grid.put(2, 0, "open network, no password needed", Color::Dim);
     }
