@@ -150,13 +150,8 @@ App::Out App::respond(Option option, std::optional<std::string> text)
         return out;
     }
     const Request &request = *request_;
-    const std::string id = nextId();
-    std::optional<std::string_view> textView;
-    if (text) {
-        textView = *text;
-    }
-    Unacked item{id, {}, request.threadId, text.value_or(""), "sent: " + option.label, request, option};
-    if (!sendTracked(out, encodeRespond(id, request.threadId, request.requestId, option.value, textView), "respond", std::move(item))) {
+    Unacked item{nextId(), request.threadId, text.value_or(""), "sent: " + option.label, Mode::Queue, request, option};
+    if (!sendTracked(out, "respond", std::move(item))) {
         return out;
     }
     if (waiting_ && waiting_->requestId == request.requestId) {

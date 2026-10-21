@@ -17,6 +17,7 @@ inline constexpr uint32_t kRequestGuardMs = 400;
 
 // receipt: docs/receipts/2026-10-21-firmware-network.md "unacked replies and answers"
 inline constexpr int kUnackedMax = 8;
+inline constexpr size_t kUnackedBytesMax = 8192;
 
 std::vector<std::string> wrapWords(std::string_view text, int width);
 
@@ -90,10 +91,10 @@ private:
 
     struct Unacked {
         std::string id;
-        std::string frame;
         std::string threadId;
         std::string text;
         std::string confirmed;
+        Mode mode = Mode::Queue;
         std::optional<Request> request;
         std::optional<Option> option;
     };
@@ -107,7 +108,8 @@ private:
     std::string nextId() { return ids_.next(); }
     bool send(Out &out, std::optional<std::string> frame, std::string_view what);
     bool readyToSend(std::string_view what);
-    bool sendTracked(Out &out, std::optional<std::string> frame, std::string_view what, Unacked item);
+    bool sendTracked(Out &out, std::string_view what, Unacked item);
+    size_t unackedBytes() const;
     void giveBack(const Unacked &item, bool refused, std::string_view why, uint32_t nowMs);
     void inform(std::string text, Color color = Color::Red);
     void type(std::string &text, char c, int max, std::string_view budget, std::string_view what);

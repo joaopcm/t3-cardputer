@@ -1225,3 +1225,17 @@ TEST_CASE("unacked replies have a budget that names itself and keeps the text")
     CHECK(row(app, 0).rfind("unacked_max=" + std::to_string(t3::kUnackedMax) + ", reply needed " + std::to_string(t3::kUnackedMax + 1), 0) == 0);
     CHECK(row(app, 8).rfind("> more_", 0) == 0);
 }
+
+TEST_CASE("unacked text has a byte budget that names itself and keeps the text")
+{
+    App app = onWeaverThread();
+    const std::string longest(static_cast<size_t>(t3::kReplyTextMax), 'x');
+    for (int i = 0; i < 2; ++i) {
+        type(app, longest);
+        CHECK(only(press(app, named(KeyName::Enter))).find("\"reply\"") != std::string::npos);
+    }
+    type(app, longest);
+    CHECK(press(app, named(KeyName::Enter)).send.empty());
+    CHECK(row(app, 0).rfind("unacked_bytes_max=" + std::to_string(t3::kUnackedBytesMax) + ", reply needed ", 0) == 0);
+    CHECK(app.editing());
+}

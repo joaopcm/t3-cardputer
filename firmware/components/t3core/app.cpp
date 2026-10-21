@@ -105,13 +105,65 @@ bool App::readyToSend(std::string_view what)
     return true;
 }
 
-bool App::sendTracked(Out &out, std::optional<std::string> frame, std::string_view what, Unacked item)
+namespace {
+
+std::optional<std::string> encodeUnacked(const std::string &id, const std::string &threadId, const std::string &text, Mode mode,
+                                         const std::optional<Request> &request, const std::optional<Option> &option)
 {
-    if (!send(out, std::move(frame), what)) {
+    if (!request) {
+        return encodeReply(id, threadId, text, mode);
+    }
+    std::optional<std::string_view> answer;
+    if (!text.empty()) {
+        answer = text;
+    }
+    return encodeRespond(id, threadId, request->requestId, option->value, answer);
+}
+
+size_t bytesOf(const Option &option)
+{
+    return option.label.size() + option.value.size();
+}
+
+size_t bytesOf(const Request &request)
+{
+    size_t bytes = request.threadId.size() + request.requestId.size();
+    for (const std::string &line : request.lines) {
+        bytes += line.size();
+    }
+    for (const Option &option : request.options) {
+        bytes += bytesOf(option);
+    }
+    return bytes;
+}
+
+}
+
+size_t App::unackedBytes() const
+{
+    size_t bytes = 0;
+    for (const Unacked &item : unacked_) {
+        bytes += item.id.size() + item.threadId.size() + item.text.size() + item.confirmed.size();
+        bytes += item.request ? bytesOf(*item.request) : 0;
+        bytes += item.option ? bytesOf(*item.option) : 0;
+    }
+    return bytes;
+}
+
+bool App::sendTracked(Out &out, std::string_view what, Unacked item)
+{
+    unacked_.push_back(std::move(item));
+    const size_t bytes = unackedBytes();
+    if (bytes > kUnackedBytesMax) {
+        unacked_.pop_back();
+        inform("unacked_bytes_max=" + std::to_string(kUnackedBytesMax) + ", " + std::string(what) + " needed " + std::to_string(bytes));
         return false;
     }
-    item.frame = out.send.back();
-    unacked_.push_back(std::move(item));
+    const Unacked &sent = unacked_.back();
+    if (!send(out, encodeUnacked(sent.id, sent.threadId, sent.text, sent.mode, sent.request, sent.option), what)) {
+        unacked_.pop_back();
+        return false;
+    }
     return true;
 }
 
@@ -331,7 +383,7 @@ App::Out App::onLinkStatus(std::string_view status)
     }
     Out out;
     for (const Unacked &item : unacked_) {
-        out.send.push_back(item.frame);
+        send(out, encodeUnacked(item.id, item.threadId, item.text, item.mode, item.request, item.option), item.request ? "answer" : "reply");
     }
     const bool voiceOnThread = screen_ == Screen::Voice && voiceFrom_ == Screen::Thread;
     const bool threadOpen = (screen_ == Screen::Thread || screen_ == Screen::Request || voiceOnThread) && !threadId_.empty();
@@ -352,7 +404,9 @@ void App::onDeviceError(std::string_view why)
 
 void App::onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs)
 {
-    const auto tracked = std::find_if(unacked_.begin(), unacked_.end(), [&](const Unacked &item) { return item.frame == frame; });
+    const auto tracked = std::find_if(unacked_.begin(), unacked_.end(), [&](const Unacked &item) {
+        return frame.find("\"id\":\"" + item.id + "\"") != std::string_view::npos;
+    });
     if (tracked == unacked_.end()) {
         inform(std::string(why));
         return;

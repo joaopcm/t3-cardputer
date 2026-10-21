@@ -59,8 +59,8 @@ App::Out App::threadKey(Key key)
             return;
         }
         const std::string id = nextId();
-        Unacked item{id, {}, threadId_, reply_, "reply sent: " + std::string(modeName(mode)), std::nullopt, std::nullopt};
-        if (sendTracked(out, encodeReply(id, threadId_, reply_, mode), "reply", std::move(item))) {
+        Unacked item{id, threadId_, reply_, "reply sent: " + std::string(modeName(mode)), mode, std::nullopt, std::nullopt};
+        if (sendTracked(out, "reply", std::move(item))) {
             reply_.clear();
         }
     };
