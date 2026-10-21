@@ -36,9 +36,18 @@ void WifiPicker::scanned(const std::vector<WifiNet> &nets, const std::vector<std
     pool_ = std::move(pool);
     failed_.clear();
     hidden_.reset();
-    if (!unlisted.empty()) {
-        hidden_ = unlisted[hiddenNext_ % unlisted.size()];
-        hiddenNext_ += 1;
+    if (unlisted.empty()) {
+        return;
+    }
+    const auto last = std::find(saved.begin(), saved.end(), lastHidden_);
+    const size_t from = last == saved.end() ? saved.size() - 1 : static_cast<size_t>(last - saved.begin());
+    for (size_t step = 1; step <= saved.size(); ++step) {
+        const std::string &ssid = saved[(from + step) % saved.size()];
+        if (std::find(unlisted.begin(), unlisted.end(), ssid) != unlisted.end()) {
+            hidden_ = ssid;
+            lastHidden_ = ssid;
+            return;
+        }
     }
 }
 

@@ -102,12 +102,34 @@ TEST_CASE("the same scan keeps the round's unlisted saved network")
     WifiPicker picker;
     picker.scanned(kNets, {"attic", "barn", "phone"}, true);
     picker.failed("phone");
-    picker.scanned(kNets, {"attic", "barn", "phone"}, true);
     const std::optional<std::string> unlisted = picker.next();
     REQUIRE(unlisted.has_value());
+    picker.scanned(kNets, {"attic", "barn", "phone"}, true);
+    CHECK(picker.next() == unlisted);
     picker.failed(*unlisted);
     picker.scanned(kNets, {"attic", "barn", "phone"}, true);
     CHECK(picker.next() == "phone");
+}
+
+TEST_CASE("the unlisted rotation goes on after the last one tried when the unlisted set changes")
+{
+    WifiPicker picker;
+    auto round = [&](const std::vector<std::string> &saved) {
+        picker.scanned(kNets, saved, true);
+        std::vector<std::string> tried;
+        while (const std::optional<std::string> ssid = picker.next()) {
+            tried.push_back(*ssid);
+            picker.failed(*ssid);
+        }
+        return tried;
+    };
+    using Ssids = std::vector<std::string>;
+    CHECK(round({"attic", "barn", "cellar"}) == Ssids{"attic"});
+    CHECK(round({"attic", "barn", "cellar"}) == Ssids{"barn"});
+    CHECK(round({"barn", "cellar"}) == Ssids{"cellar"});
+    CHECK(round({"attic", "barn", "cellar"}) == Ssids{"attic"});
+    CHECK(round({"attic", "cellar"}) == Ssids{"cellar"});
+    CHECK(round({"attic", "barn", "cellar"}) == Ssids{"attic"});
 }
 
 TEST_CASE("no saved network in range has nothing to try")

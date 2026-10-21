@@ -22,7 +22,7 @@ private:
     std::vector<std::string> pool_;
     std::vector<std::string> candidates_;
     std::optional<std::string> hidden_;
-    size_t hiddenNext_ = 0;
+    std::string lastHidden_;
     std::vector<std::string> failed_;
 };
 
