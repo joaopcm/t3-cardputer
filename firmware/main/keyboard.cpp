@@ -48,7 +48,7 @@ esp_err_t readReg(uint8_t reg, uint8_t *value)
 
 }
 
-bool keyboard_init()
+std::optional<std::string> keyboard_init()
 {
     i2c_master_bus_config_t busConfig = {};
     busConfig.i2c_port = I2C_NUM_0;
@@ -57,27 +57,24 @@ bool keyboard_init()
     busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
     busConfig.glitch_ignore_cnt = kGlitchIgnoreCycles;
     busConfig.flags.enable_internal_pullup = true;
-    if (i2c_new_master_bus(&busConfig, &bus) != ESP_OK) {
-        ESP_LOGE(TAG, "i2c bus on sda=%d scl=%d failed", kSdaPin, kSclPin);
-        return false;
+    if (const esp_err_t err = i2c_new_master_bus(&busConfig, &bus); err != ESP_OK) {
+        return "keyboard: i2c bus sda=" + std::to_string(kSdaPin) + " scl=" + std::to_string(kSclPin) + " failed: " + esp_err_to_name(err);
     }
     i2c_device_config_t deviceConfig = {};
     deviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     deviceConfig.device_address = kAddress;
     deviceConfig.scl_speed_hz = kBusHz;
-    if (i2c_master_bus_add_device(bus, &deviceConfig, &device) != ESP_OK) {
-        ESP_LOGE(TAG, "tca8418 0x%02x not added to the bus", kAddress);
-        return false;
+    if (const esp_err_t err = i2c_master_bus_add_device(bus, &deviceConfig, &device); err != ESP_OK) {
+        return std::string("keyboard: tca8418 not added to the i2c bus: ") + esp_err_to_name(err);
     }
     if (writeReg(kRegKpGpio1, kKeypadRows0to6) != ESP_OK) {
-        ESP_LOGE(TAG, "tca8418 0x%02x did not answer: is this a Cardputer ADV?", kAddress);
-        return false;
+        return "keyboard: tca8418 not found at 0x34, is this a Cardputer ADV?";
     }
     writeReg(kRegKpGpio2, kKeypadCols0to7);
     writeReg(kRegKpGpio3, kKeypadNoGpio);
     writeReg(kRegConfig, kConfigKeyInterrupt);
     writeReg(kRegIntStat, kIntStatClearAll);
-    return true;
+    return std::nullopt;
 }
 
 std::optional<t3::Key> keyboard_poll()

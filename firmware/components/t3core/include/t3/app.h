@@ -65,7 +65,7 @@ public:
     Out onLinkStatus(std::string_view status);
     Out onBoot(bool hasWifi, bool hasToken);
     Out onAuthRejected();
-    void onTransportError(std::string_view why);
+    void onDeviceError(std::string_view why);
     void onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs);
     void onWifiScan(std::vector<WifiNet> nets);
     Out onWifiResult(bool ok, std::string_view why);

@@ -144,7 +144,7 @@ public:
         }
         if (std::optional<std::string> dropped = transport_dropped()) {
             ESP_LOGE(TAG, "%s", dropped->c_str());
-            app_.onTransportError(*dropped);
+            app_.onDeviceError(*dropped);
             dirty_ = true;
         }
         if (std::optional<PairDone> done = pair_poll()) {
@@ -199,7 +199,7 @@ public:
         }
         if (std::optional<std::string> lost = mic_lost()) {
             ESP_LOGE(TAG, "%s", lost->c_str());
-            app_.onTransportError("voice: " + *lost);
+            app_.onDeviceError("voice: " + *lost);
             dirty_ = true;
         }
     }
@@ -512,12 +512,13 @@ extern "C" void app_main(void)
         return;
     }
     log_heap("sprite");
-    if (const std::optional<std::string> error = settings::init()) {
-        show_fatal(*error, "wifi and the token cannot be saved");
+    const settings::Init nvs = settings::init();
+    if (nvs.error) {
+        show_fatal(*nvs.error, "wifi and the token cannot be saved");
         halt();
     }
-    const bool keyboard_ok = keyboard_init();
-    ESP_LOGI(TAG, "keyboard %s", keyboard_ok ? "ready" : "missing");
+    const std::optional<std::string> keyboardError = keyboard_init();
+    ESP_LOGI(TAG, "keyboard %s", keyboardError ? keyboardError->c_str() : "ready");
     if (!transport_init(settings::relayUrl(), static_cast<size_t>(kCaps.maxFrameBytes))) {
         show_fatal("heap: relay frame buffers do not fit", "the relay link cannot start");
         halt();
@@ -532,6 +533,11 @@ extern "C" void app_main(void)
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
     device.boot(!settings::wifi().empty(), token.has_value());
+    for (const std::optional<std::string> &fault : {nvs.erased, keyboardError}) {
+        if (fault) {
+            device.app().onDeviceError(*fault);
+        }
+    }
     power_init(now_ms());
     draw(device.app());
     const bool mic_ok = mic_init(system_i2c_bus());

@@ -160,19 +160,21 @@ bool sameSsid(const WifiRecord &record, std::string_view ssid)
 
 }
 
-std::optional<std::string> init()
+Init init()
 {
+    Init result;
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "nvs unusable (%s), erasing it: wifi and token are lost", esp_err_to_name(err));
+        result.erased = std::string("settings reset: nvs ") + esp_err_to_name(err) + ", wifi and token lost";
         nvs_flash_erase();
         err = nvs_flash_init();
     }
-    if (err == ESP_OK) {
-        return std::nullopt;
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
+        result.error = std::string("nvs: init failed: ") + esp_err_to_name(err);
     }
-    ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
-    return std::string("nvs: init failed: ") + esp_err_to_name(err);
+    return result;
 }
 
 std::vector<WifiCred> wifi()

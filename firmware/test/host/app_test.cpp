@@ -840,7 +840,7 @@ TEST_CASE("a transport error shows on the status bar of the current screen")
 {
     App app = live();
     push(app, relay(kHome));
-    app.onTransportError("max_frame_bytes=16384, needed 20000");
+    app.onDeviceError("max_frame_bytes=16384, needed 20000");
     CHECK(contains(row(app, 0), "max_frame_bytes=16384, needed 20000"));
     CHECK(app.screenName() == "home");
 }

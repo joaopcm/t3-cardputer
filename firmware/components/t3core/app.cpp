@@ -345,7 +345,7 @@ App::Out App::onLinkStatus(std::string_view status)
     return out;
 }
 
-void App::onTransportError(std::string_view why)
+void App::onDeviceError(std::string_view why)
 {
     inform(std::string(why));
 }

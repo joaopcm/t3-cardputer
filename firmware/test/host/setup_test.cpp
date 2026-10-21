@@ -653,3 +653,13 @@ TEST_CASE("setup screens count as editing from the first frame")
     CHECK(noWifi.screenName() == "setup_wifi");
     CHECK(noWifi.editing());
 }
+
+TEST_CASE("a boot fault shows on row 0 of setup until a key")
+{
+    App app(kCaps, 7);
+    app.onBoot(false, false);
+    app.onDeviceError("settings reset: nvs ESP_ERR_NVS_NEW_VERSION_FOUND, wifi and token lost");
+    CHECK(rows(app)[0].rfind("settings reset: nvs", 0) == 0);
+    app.onWifiScan(kNets);
+    CHECK(rows(app)[0].rfind("settings reset: nvs", 0) == 0);
+}

@@ -21,7 +21,12 @@ inline constexpr size_t kPasswordMax = 63;
 // receipt: docs/protocol.md hello.token is 1-256 chars
 inline constexpr size_t kTokenMax = 256;
 
-std::optional<std::string> init();
+struct Init {
+    std::optional<std::string> error;
+    std::optional<std::string> erased;
+};
+
+Init init();
 
 std::vector<WifiCred> wifi();
 std::optional<std::string> addWifi(const WifiCred &cred);
