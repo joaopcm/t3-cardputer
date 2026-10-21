@@ -1,6 +1,6 @@
 import type { Secrets } from "../secrets.js";
 
-// receipt: both T3 tokens last 30 days (docs/setup.md section 3), and 5 days spans a weekend plus a work week
+// receipt: both T3 tokens last 30 days (docs/install.md "Updating"), and 5 days spans a weekend plus a work week
 export const T3_TOKEN_WARN_DAYS = 5;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
