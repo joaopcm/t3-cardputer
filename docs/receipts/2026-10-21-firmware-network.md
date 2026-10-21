@@ -97,6 +97,7 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 
 - `kWifiJoinWaitMs` = 20000: 3.5x the 5.8 s worst join; a join that has no IP by then is aborted and reported as `no ip within kWifiJoinWaitMs=20000`.
 - `kWifiRetryMs` = 10000: with no saved network in range the device scans for 2.4 s every 12.4 s, about 20% radio duty.
+- Fallback (`t3::WifiPicker`, `wifi_pick_test.cpp`): saved networks in range are tried strongest first. One that fails is skipped for the rest of the round and the next strongest is tried at once. The round starts over after a join, when a scan lists a different set of saved networks, or when every candidate has failed (then after `kWifiRetryMs`). Saved networks the scan did not list are tried last, and only when the scan saw a hidden access point (empty SSID), so a typed hidden network can rejoin. Each such try costs one join attempt, which is not measured on the ADV.
 - `kRawQueueDepth` = 16: a join posts about 6 driver events (scan done, connected, got ip, ...), drained every 20 ms by the main task; a full queue logs `wifi_raw_queue=16, event N dropped`.
 
 ## transport
