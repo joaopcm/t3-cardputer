@@ -159,6 +159,6 @@ After a talk-up whose tail could not be sent, the stats line reads `voice cut sh
 
 | task | free (min) of size |
 | --- | --- |
-| main | 4768 of 8192 after recordings (5024 before the first) |
+| main | 4240 of 8192 at live, device check 2026-10-21 at a4f6842 (3952 used, 2.07x headroom); 4768 after recordings and 5024 before the first in Task 10 |
 | websocket | 2544 of 6144 |
 | websocket control | 1804 of 4096 |

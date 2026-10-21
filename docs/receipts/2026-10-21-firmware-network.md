@@ -117,7 +117,7 @@ The device ratios are below the host upper bounds in `2026-10-21-protocol-parse-
 
 | task | used | size | where it comes from |
 | --- | --- | --- | --- |
-| main (`app_main`) | 3504 | 8192 (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`) | `t3: main_task_stack_free_min=4688`; the 3584 default would leave 80 bytes once it sends over TLS |
+| main (`app_main`) | 3952 | 8192 (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`) | `t3: main_task_stack_free_min=4240` at live, device check 2026-10-21 at a4f6842 (4688 in Task 8); 8192 is 2.07x the use, and the 3584 default would already overflow |
 | websocket task | 3684 | 6144 (`kWsTaskStackBytes`) | `transport: ws_task_stack_free_min=2460`, worst over the soak |
 | pair task | 3620 | 6144 (`kPairTaskStackBytes`) | `transport: pair_task_stack_free_min=4572 of 8192`; at the shipped 6144 that leaves 2524 free, 1.7x the use |
 | websocket control task | 2252 | 4096 (`kControlTaskStackBytes`) | `t3_transport: ws_control_stack_free_min=1844 of 4096`; 1.8x (the first 3072 left 972) |
@@ -211,6 +211,6 @@ A 30-reconnect run straight after the stopped-relay test settled from 154188 to 
 ## json nesting (`kJsonNestingMax` = 32)
 
 - cJSON recurses once per nested object or array (`parse_value` into `parse_array` or `parse_object`). `xtensa-esp32s3-elf-gcc -Og -fstack-usage` on IDF v5.4.2's `components/json/cJSON/cJSON.c` (the ADV's debug and release builds both use `-Og`) gives `parse_value` 32 bytes and `parse_array` / `parse_object` 32 bytes each, so 64 bytes of stack per level. (`-Os` and `-O2` inline them into a 64-byte `parse_value`, the same per level.)
-- The library default `CJSON_NESTING_LIMIT` is 1000, which is 64 KB of recursion. One garbled 8 KiB frame of `[[[[...` could overflow the main task, which parses every frame with 4688 bytes free at its worst ("stacks").
-- The deepest relay frame is `projects` at 4 levels (`items[]`, then each item's `defaults` or `models[]`). The `docs/protocol.md` examples were measured with a script. 32 is 8x that and costs at most 32 x 64 = 2048 bytes, 44% of the free main stack.
+- The library default `CJSON_NESTING_LIMIT` is 1000, which is 64 KB of recursion. One garbled 8 KiB frame of `[[[[...` could overflow the main task, which parses every frame with 4240 bytes free at its worst ("stacks").
+- The deepest relay frame is `projects` at 4 levels (`items[]`, then each item's `defaults` or `models[]`). The `docs/protocol.md` examples were measured with a script. 32 is 8x that and costs at most 32 x 64 = 2048 bytes, 48% of the free main stack.
 - Set on both cJSON builds: `idf_build_set_property(COMPILE_DEFINITIONS "CJSON_NESTING_LIMIT=32")` in `firmware/CMakeLists.txt` (checked on `cJSON.c` in `build/compile_commands.json`) and `target_compile_definitions(cjson PUBLIC ...)` in `test/host/CMakeLists.txt`. A `static_assert` in `protocol.cpp` keeps both equal to `kJsonNestingMax`. A deeper frame is refused as `json_nesting_max=32, frame needed N`.
