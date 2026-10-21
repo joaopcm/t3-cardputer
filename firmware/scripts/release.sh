@@ -10,6 +10,8 @@ LAUNCHER_APP_SLOT_BYTES=$((0x800000 - 0x170000))
 LAUNCHER_APP_ALIGN=$((0x10000))
 # receipt: esp_app_desc_t.version is char[32] (esp-idf v5.4.2 components/esp_app_format/include/esp_app_desc.h), 31 chars plus the nul
 APP_VERSION_MAX_CHARS=31
+# receipt: docs/receipts/2026-10-21-firmware-voice.md "heap", the release .bss, the same as the ce2d546 release
+RELEASE_BSS_BYTES=25000
 LEAK_PATTERN='[a-z0-9]\.ts\.net|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|prod-[0-9a-f]+\.t3coderelay'
 
 . "$FW_DIR/scripts/idf-env.sh"
@@ -41,6 +43,8 @@ for option in T3_DEBUG_SERIAL T3_KEYBOARD_TRACE; do
     exit 1
   fi
 done
+
+"$FW_DIR/scripts/check-bss.sh" "$OUT_DIR/t3_cardputer.elf" "$RELEASE_BSS_BYTES"
 
 app_bytes=$(stat -c %s "$OUT_DIR/t3_cardputer.bin")
 needed=$(( (app_bytes + LAUNCHER_APP_ALIGN - 1) / LAUNCHER_APP_ALIGN * LAUNCHER_APP_ALIGN ))

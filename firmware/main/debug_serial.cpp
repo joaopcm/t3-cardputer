@@ -28,7 +28,7 @@ constexpr size_t kMaxRowHexBytes = 2 * 120 + 1;
 
 QueueHandle_t keyQueue;
 std::atomic<bool> dropRequested{false};
-// why: one byte that lands in existing padding, so .bss stays 25024 bytes; the first staging build grew .bss by 16, moved the heap start, and was the only build whose reconnect TLS start went under the 60398 line (docs/receipts/2026-10-21-firmware-voice.md "heap")
+// why: fits existing padding so .bss keeps its soaked size; growing it likely cost the reconnect heap (release.sh/build.sh check it)
 std::atomic<bool> staged{false};
 std::atomic<DebugNetCut> netCutRequested{DebugNetCut::None};
 std::atomic<uint64_t> powerRequested{0};
@@ -119,6 +119,17 @@ void handlePower(std::string_view args)
     emitLine("POWER ok");
 }
 
+bool requestNetCut(DebugNetCut cut, const char *name)
+{
+    DebugNetCut idle = DebugNetCut::None;
+    if (!netCutRequested.compare_exchange_strong(idle, cut)) {
+        emitLine("ERR %s refused, the last net cut is not taken yet, send it again", name);
+        return false;
+    }
+    emitLine("%s ok%s", name, cut == DebugNetCut::Stage ? ", until reset" : "");
+    return true;
+}
+
 constexpr std::string_view kFramePrefix = "FRAME ";
 
 void handleFrame(std::string_view json)
@@ -156,18 +167,15 @@ void debug_serial_handle(std::string_view line)
         dropRequested = true;
         emitLine("DROP ok");
     } else if (line == "WIFIOFF") {
-        netCutRequested = DebugNetCut::LeaveAp;
-        emitLine("WIFIOFF ok");
+        requestNetCut(DebugNetCut::LeaveAp, "WIFIOFF");
     } else if (line == "NETDOWN") {
-        netCutRequested = DebugNetCut::BlackHole;
-        emitLine("NETDOWN ok");
+        requestNetCut(DebugNetCut::BlackHole, "NETDOWN");
     } else if (line == "NETUP") {
-        netCutRequested = DebugNetCut::Restore;
-        emitLine("NETUP ok");
-    } else if (line == "STAGE") {
-        staged = true;
-        netCutRequested = DebugNetCut::Stage;
+        requestNetCut(DebugNetCut::Restore, "NETUP");
+    } else if (line == "STAGE" && staged) {
         emitLine("STAGE ok, until reset");
+    } else if (line == "STAGE") {
+        staged = requestNetCut(DebugNetCut::Stage, "STAGE");
     } else if (line.substr(0, kFramePrefix.size()) == kFramePrefix) {
         handleFrame(line.substr(kFramePrefix.size()));
     } else if (line.substr(0, kPowerPrefix.size()) == kPowerPrefix) {
