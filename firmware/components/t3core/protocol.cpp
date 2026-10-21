@@ -657,7 +657,7 @@ std::optional<std::string> encodeHello(const HelloCaps &caps, std::string_view t
     return Builder("hello")
         .num("v", ProtocolVersion)
         .str("token", token)
-        .str("fw", fw)
+        .str("fw", fw.substr(0, kFwMax))
         .num("cols", caps.cols)
         .num("bodyRows", caps.bodyRows)
         .num("maxFrameBytes", caps.maxFrameBytes)

@@ -365,6 +365,15 @@ TEST_CASE("ids never repeat within a boot and differ across seeds")
     CHECK(t3::IdGen(0).next().size() == 16);
 }
 
+TEST_CASE("hello clips a long git describe version to the 32 chars the relay accepts")
+{
+    const std::string fw = "firmware-v0.1.0-rc.1-123-g72d2fc2a-dirty";
+    REQUIRE(fw.size() > static_cast<size_t>(t3::kFwMax));
+    const JsonPtr hello = parseJson(*t3::encodeHello({40, 8, 4096, 5}, "tok", fw));
+    REQUIRE(hello);
+    CHECK(std::string(cJSON_GetObjectItemCaseSensitive(hello.get(), "fw")->valuestring) == fw.substr(0, t3::kFwMax));
+}
+
 TEST_CASE("encoders emit the documented shapes")
 {
     CHECK(sameJson(t3::encodeHello({40, 8, 4096, 5}, "tok", "0.1.0"),
