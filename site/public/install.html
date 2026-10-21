@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Install T3 Cardputer</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/vendor/spark-md5/spark-md5.min.js"></script>
+    <script type="module" src="/install.js"></script>
+  </head>
+  <body>
+    <main>
+      <p class="brand"><a href="/">T3 Cardputer</a></p>
+      <h1>Install T3 on your ADV</h1>
+
+      <p id="unsupported" class="problem" role="alert" hidden></p>
+
+      <section id="no-link" hidden>
+        <h2>Run setup.sh on your T3 machine first</h2>
+        <p>It sets up the relay and prints a link to this page. Open that link here.</p>
+        <pre><code>curl -fsSL https://t3-cardputer.jopcmelo.com/setup.sh | sh</code></pre>
+        <p>Already set up? Run <code>t3-cardputer-relay install-link</code> for a new link.</p>
+      </section>
+
+      <p id="link-error" class="problem" role="alert" hidden></p>
+
+      <ol id="steps" class="steps" hidden>
+        <li>
+          <h2>Your relay</h2>
+          <dl>
+            <dt>Relay</dt>
+            <dd id="relay-host"></dd>
+            <dt>Pairing code</dt>
+            <dd>Filled in</dd>
+          </dl>
+          <p class="hint">The pairing code works for 10 minutes. If it runs out, run <code>t3-cardputer-relay install-link</code> and open the new link.</p>
+        </li>
+
+        <li>
+          <h2>Before you start</h2>
+          <p class="warning">This replaces everything on the ADV, Launcher included.</p>
+          <p>Plug the ADV into this computer with a USB-C data cable.</p>
+        </li>
+
+        <li>
+          <label class="check"><input type="checkbox" id="clean"> Clean install</label>
+          <p class="hint">Off keeps the ADV's WiFi, relay and pairing. On erases them.</p>
+        </li>
+
+        <li>
+          <button type="button" id="install" disabled>Connect ADV and install</button>
+          <p id="firmware" class="hint"></p>
+          <progress id="install-progress" max="1" value="0" hidden></progress>
+          <ul id="install-log" class="log" aria-live="polite"></ul>
+        </li>
+
+        <li id="step-wifi" hidden>
+          <h2>WiFi for the ADV</h2>
+          <form id="wifi-form" autocomplete="off">
+            <label for="ssid">Network name (SSID)</label>
+            <input id="ssid" name="ssid" autocapitalize="off" spellcheck="false">
+            <p id="ssid-hint" class="hint" hidden></p>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="off">
+            <label class="check"><input type="checkbox" id="open-network"> Open network, no password</label>
+            <button type="submit" id="send">Send to ADV</button>
+          </form>
+          <ul id="wifi-log" class="log" aria-live="polite"></ul>
+        </li>
+
+        <li id="step-done" hidden>
+          <h2>Done</h2>
+          <p>Your ADV is restarting. It joins WiFi and pairs by itself.</p>
+          <p>If it shows an error, look it up in <a href="https://github.com/joaopcm/t3-cardputer/blob/main/docs/troubleshooting.md">troubleshooting</a>.</p>
+        </li>
+      </ol>
+    </main>
+  </body>
+</html>

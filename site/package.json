@@ -1,0 +1,13 @@
+{
+  "name": "t3-cardputer-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "vendor": "node scripts/vendor.mjs"
+  },
+  "devDependencies": {
+    "esptool-js": "0.7.0",
+    "spark-md5": "3.0.2"
+  }
+}

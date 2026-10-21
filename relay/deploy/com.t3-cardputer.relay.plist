@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.t3-cardputer.relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__BUNDLE__</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd agents start with PATH=/usr/bin:/bin:/usr/sbin:/sbin; the relay shells out to git, gh and pnpm, which live under Homebrew or ~/.local/bin -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <!-- same 5 s as RestartSec in the systemd unit -->
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <!-- same 240 s as TimeoutStopSec in the systemd unit, receipt there -->
+  <key>ExitTimeOut</key>
+  <integer>240</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/relay.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/relay.log</string>
+</dict>
+</plist>

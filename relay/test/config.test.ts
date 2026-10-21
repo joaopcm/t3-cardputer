@@ -74,6 +74,36 @@ describe("loadConfig", () => {
     expect(() => loadConfig(path)).toThrow(/prot/);
   });
 
+  it("leaves the canary off and publicUrl unset by default", () => {
+    const config = loadConfig(join(tmpdir(), "missing-relay.json"));
+    expect(config.canary).toEqual({ enabled: false, model: "claude-haiku-5-5" });
+    expect(config.publicUrl).toBeUndefined();
+  });
+
+  it("takes canary.enabled and canary.providerInstanceId", () => {
+    const config = loadConfig(tmpFile(JSON.stringify({ canary: { enabled: true, providerInstanceId: "claudeAgent" } })));
+    expect(config.canary).toEqual({ enabled: true, model: "claude-haiku-5-5", providerInstanceId: "claudeAgent" });
+  });
+
+  it("turns the canary on by default when repair.projectId is set, since self-repair starts from a failed canary, and an explicit value wins", () => {
+    expect(loadConfig(tmpFile(JSON.stringify({ repair: { projectId: "p1" } }))).canary.enabled).toBe(true);
+    expect(loadConfig(tmpFile(JSON.stringify({ port: 9000 }))).canary.enabled).toBe(false);
+    expect(loadConfig(tmpFile(JSON.stringify({ repair: { projectId: "p1" }, canary: { enabled: false } }))).canary.enabled).toBe(false);
+    expect(loadConfig(tmpFile(JSON.stringify({ canary: { enabled: true } }))).canary.enabled).toBe(true);
+  });
+
+  it("rejects canary.enabled that is not a boolean", () => {
+    expect(() => loadConfig(tmpFile(JSON.stringify({ canary: { enabled: "yes" } })))).toThrow(/canary\.enabled.*"yes"/);
+  });
+
+  it("takes publicUrl as https://host[:port] and rejects anything else naming it", () => {
+    expect(loadConfig(tmpFile(JSON.stringify({ publicUrl: "https://relay.example.com:8443" }))).publicUrl).toBe("https://relay.example.com:8443");
+    expect(loadConfig(tmpFile(JSON.stringify({ publicUrl: "https://relay.example.com" }))).publicUrl).toBe("https://relay.example.com");
+    for (const bad of ["http://relay.example.com", "https://relay.example.com/", "https://relay.example.com:8443/v1", "relay.example.com"]) {
+      expect(() => loadConfig(tmpFile(JSON.stringify({ publicUrl: bad })))).toThrow(/publicUrl.*https:\/\/host\[:port\]/);
+    }
+  });
+
   it("names the file when JSON is malformed", () => {
     const path = tmpFile("{nope");
     expect(() => loadConfig(path)).toThrow(path);

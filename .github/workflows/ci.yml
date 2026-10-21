@@ -50,6 +50,20 @@ jobs:
               ;;
           esac
 
+  setup-sh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck
+        run: shellcheck -s sh site/public/setup.sh site/test/setup/run.sh site/test/setup/stubs/*
+      - name: harness
+        run: sh site/test/setup/run.sh
+
   firmware-host:
     runs-on: ubuntu-latest
     steps:

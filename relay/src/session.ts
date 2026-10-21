@@ -12,7 +12,9 @@ import {
   FIRST_FRAME_NOT_HELLO,
   PROTOCOL_VERSION,
   ProtocolError,
+  REJECTION_TEXT_MAX,
   clipText,
+  clipTextTo,
   parseDeviceMessage,
   rejectionFor,
   type DeviceMessage,
@@ -34,6 +36,8 @@ export type T3Client = WatcherT3 & Pick<T3Mcp, "answerQuestion" | "latestAssista
 export type ApprovalsState = { available: boolean; reason?: string };
 export type ApprovalsDownPhase = "checking" | "fixing" | "none";
 const DOWN_PHASE_SUFFIX: Record<ApprovalsDownPhase, string> = { checking: ", checking again", fixing: ", fix in progress", none: "" };
+const UPDATE_HINT = "; update: t3-cardputer-relay update";
+type ApprovalsDown = { reason: string; phase: ApprovalsDownPhase };
 
 export type HubDeps = {
   limits: Limits;
@@ -44,6 +48,7 @@ export type HubDeps = {
   defaults: Pick<DefaultsStore, "get" | "remember">;
   stt: Stt;
   sttModel: string;
+  selfRepair: boolean;
   samples?: SampleKeeper | undefined;
   approvalsState: () => ApprovalsState;
   warnings?: () => string[];
@@ -90,9 +95,9 @@ export class Hub {
   readonly acks: AckCache;
   private readonly sessions = new Map<string, Session>();
   private readonly answers = new Map<string, Record<string, string>>();
-  private broken: { reason: string; phase: ApprovalsDownPhase } | undefined;
+  private broken: ApprovalsDown | undefined;
   private canaryCleared: string | undefined;
-  private canaryDown: { reason: string; phase: ApprovalsDownPhase } | undefined;
+  private canaryDown: ApprovalsDown | undefined;
   private repairWarning: string | undefined;
   private catalogWarning: string | undefined;
   private modelCatalog = new Map<string, T3Model>();
@@ -175,11 +180,17 @@ export class Hub {
   }
 
   approvalsState(): ApprovalsState {
-    if (this.broken !== undefined) return { available: false, reason: clipText(`approvals down: ${this.broken.reason}${DOWN_PHASE_SUFFIX[this.broken.phase]}`) };
-    if (this.canaryDown !== undefined) return { available: false, reason: clipText(`approvals down: ${this.canaryDown.reason}${DOWN_PHASE_SUFFIX[this.canaryDown.phase]}`) };
+    const down = this.broken ?? this.canaryDown;
+    if (down !== undefined) return { available: false, reason: this.downReason(down) };
     if (this.adapter.state === "unauthorized") return { available: false, reason: T3_AUTH_WARNING };
     if (this.adapter.state === "unreachable") return { available: false, reason: clipText(`approvals unreachable: ${this.adapter.reason}`) };
     return this.deps.approvalsState();
+  }
+
+  private downReason(down: ApprovalsDown): string {
+    const text = `approvals down: ${down.reason}${DOWN_PHASE_SUFFIX[down.phase]}`;
+    if (this.deps.selfRepair) return clipText(text);
+    return `${clipTextTo(text, REJECTION_TEXT_MAX - UPDATE_HINT.length)}${UPDATE_HINT}`;
   }
 
   markApprovalsDown(reason: string, phase: ApprovalsDownPhase): void {

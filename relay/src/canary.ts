@@ -15,7 +15,7 @@ export type CanaryDeps = {
   t3: Pick<T3Mcp, "launch" | "waitForRun" | "settleThread">;
   approvals: Pick<ApprovalsAdapter, "listPending" | "respond">;
 };
-export type CanaryOptions = { model: string; timeoutMs: number; pollIntervalMs?: number };
+export type CanaryOptions = { model: string; providerInstanceId?: string | undefined; timeoutMs: number; pollIntervalMs?: number };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -38,6 +38,7 @@ export async function runCanary(deps: CanaryDeps, opts: CanaryOptions): Promise<
       title: CANARY_TITLE,
       message: CANARY_MESSAGE,
       model: opts.model,
+      ...(opts.providerInstanceId === undefined ? {} : { providerInstanceId: opts.providerInstanceId }),
       options: CANARY_MODEL_OPTIONS,
       workspace: "root",
       runtimeMode: "approval-required",

@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$*" in
+  -s) echo "$STUB_OS" ;;
+  -m) echo "$STUB_ARCH" ;;
+  *) echo "stub uname: unexpected $*" >&2; exit 2 ;;
+esac
