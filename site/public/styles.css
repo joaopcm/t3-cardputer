@@ -1,0 +1,172 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1b1b1f;
+  --muted: #5d5d66;
+  --bg: #fbfbfc;
+  --line: #d9d9de;
+  --accent: #2f5bd3;
+  --warn-bg: #fff4d6;
+  --warn-fg: #5c4300;
+  --bad: #b3261e;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #ececf1;
+    --muted: #a3a3ad;
+    --bg: #131316;
+    --line: #34343b;
+    --accent: #8aa8ff;
+    --warn-bg: #3a2f10;
+    --warn-fg: #ffe3a3;
+    --bad: #ff8a80;
+  }
+}
+
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+main {
+  max-width: 38rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+.brand {
+  margin: 0 0 2rem;
+  font-weight: 600;
+}
+
+.brand a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h1 {
+  font-size: 1.75rem;
+  margin: 0 0 1.5rem;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.5rem;
+}
+
+pre,
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.steps > li {
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--line);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0 0 0.5rem;
+}
+
+dt {
+  color: var(--muted);
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+}
+
+.warning {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.problem {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+input:not([type="checkbox"]) {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.6rem 1.1rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+  justify-self: start;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+progress {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.log {
+  padding-left: 1.1rem;
+  margin: 0.75rem 0 0;
+}
+
+[hidden] {
+  display: none !important;
+}
