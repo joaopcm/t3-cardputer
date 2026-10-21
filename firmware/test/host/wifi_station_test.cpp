@@ -129,3 +129,22 @@ TEST_CASE("a join the access point refuses tries the next saved network at once"
     REQUIRE(events.size() == 1);
     CHECK(events[0].text == "wifi: home failed, reason 2, joining phone");
 }
+
+TEST_CASE("a saved network forgotten mid-round counts as failed and the next one is tried")
+{
+    FakeDriver driver;
+    driver.saved_ = {{{"home", "password1"}, {"phone", "password2"}, {"attic", "password3"}}, std::nullopt};
+    WifiStation station(driver);
+    station.start(0);
+    drain(station, 0);
+    station.onScanDone({{"home", -40, true, false}, {"phone", -60, true, false}, {"attic", -70, true, false}}, false, 0);
+    drain(station, 0);
+    REQUIRE(driver.joins == std::vector<std::string>{"home"});
+
+    driver.saved_ = {{{"home", "password1"}, {"attic", "password3"}}, std::nullopt};
+    station.onDisconnected("reason 2", 100);
+    const std::vector<WifiEvent> events = drain(station, 100);
+    CHECK(driver.joins == std::vector<std::string>{"home", "attic"});
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].text == "wifi: home failed, reason 2, joining attic");
+}

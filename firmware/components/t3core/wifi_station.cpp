@@ -55,13 +55,13 @@ void WifiStation::connect(const WifiJoin &cred, uint32_t nowMs, std::string_view
 void WifiStation::connectNextSaved(uint32_t nowMs, std::string_view lastFailure)
 {
     const SavedWifi saved = driver_.saved();
-    if (const std::optional<std::string> ssid = picker_.next()) {
-        for (const WifiJoin &cred : saved.creds) {
-            if (cred.ssid == *ssid) {
-                connect(cred, nowMs, lastFailure);
-                return;
-            }
+    while (const std::optional<std::string> ssid = picker_.next()) {
+        const auto cred = std::find_if(saved.creds.begin(), saved.creds.end(), [&](const WifiJoin &c) { return c.ssid == *ssid; });
+        if (cred != saved.creds.end()) {
+            connect(*cred, nowMs, lastFailure);
+            return;
         }
+        picker_.failed(*ssid);
     }
     state_ = State::Waiting;
     deadlineMs_ = nowMs + kWifiRetryMs;
