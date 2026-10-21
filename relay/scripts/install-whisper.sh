@@ -3,10 +3,10 @@ set -euo pipefail
 
 WHISPER_TAG="v1.9.5"
 WHISPER_REPO="https://github.com/ggml-org/whisper.cpp"
-MODELS=(small.en medium.en large-v3-turbo)
 
-USAGE="usage: install-whisper.sh [--gpu none|cuda|metal] [--prefix <dir>]
+USAGE="usage: install-whisper.sh [--gpu none|cuda|metal] [--prefix <dir>] [--model <name>]
   --gpu     none (cpu only), cuda (needs nvcc), metal (macOS). default: metal on macOS arm64, none elsewhere
+  --model   the ggml model to download, the one whisper.model in relay.json names. default: medium.en
   --prefix  whisper.cpp checkout and build dir, models go next to it in ../models. default: \$T3_CARDPUTER_WHISPER_DIR or ~/.local/share/t3-cardputer/whisper"
 
 OS="$(uname -s)"
@@ -19,6 +19,7 @@ case "$OS" in
 esac
 
 GPU=""
+MODEL=medium.en
 BIN_DIR="${T3_CARDPUTER_WHISPER_DIR:-$HOME/.local/share/t3-cardputer/whisper}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -28,6 +29,10 @@ while [ $# -gt 0 ]; do
       ;;
     --prefix)
       BIN_DIR="${2:?--prefix needs a directory}"
+      shift 2
+      ;;
+    --model)
+      MODEL="${2:?--model needs a model name, like medium.en}"
       shift 2
       ;;
     -h | --help)
@@ -137,14 +142,12 @@ echo "build: whisper-server, gpu $GPU"
 cmake -S "$BIN_DIR" -B "$BIN_DIR/build" -DCMAKE_BUILD_TYPE=Release "${CMAKE_GPU_FLAGS[@]}"
 cmake --build "$BIN_DIR/build" -j "$JOBS" --config Release --target whisper-server
 
-for model in "${MODELS[@]}"; do
-  if [ -s "$MODELS_DIR/ggml-$model.bin" ]; then
-    echo "model: $model already at $MODELS_DIR"
-    continue
-  fi
-  echo "model: downloading $model into $MODELS_DIR"
-  "$BIN_DIR/models/download-ggml-model.sh" "$model" "$MODELS_DIR"
-done
+if [ -s "$MODELS_DIR/ggml-$MODEL.bin" ]; then
+  echo "model: $MODEL already at $MODELS_DIR"
+else
+  echo "model: downloading $MODEL into $MODELS_DIR"
+  "$BIN_DIR/models/download-ggml-model.sh" "$MODEL" "$MODELS_DIR"
+fi
 
-echo "done: whisper-server built with gpu $GPU, models in $MODELS_DIR"
+echo "done: whisper-server built with gpu $GPU, model $MODEL in $MODELS_DIR"
 echo "$SERVER" >&3

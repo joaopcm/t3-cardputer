@@ -50,7 +50,7 @@ What it does, in order:
 
 1. Checks the machine: Linux or macOS (Windows is refused), not root, Node 22 or newer, Tailscale logged in, and T3 answering at `http://127.0.0.1:3773`. Set `t3BaseUrl` in `~/.config/t3-cardputer/relay.json` if your T3 is elsewhere.
 2. Downloads the relay from the GitHub release the script pins, checks every file against the release's `SHA256SUMS`, installs it in `~/.local/share/t3-cardputer/releases/<version>` and links `~/.local/bin/t3-cardputer-relay` to it.
-3. Builds voice: whisper.cpp in `~/.local/share/t3-cardputer/whisper`, and downloads the `small.en`, `medium.en` and `large-v3-turbo` models next to it. On my machine `du -sh` says `models/` is 3.4G and `whisper/` is 70M. On Apple Silicon it asks about Metal, default yes. On Linux with an NVIDIA GPU it asks about CUDA (that needs the CUDA toolkit), default no. On a re-run the default is what you built last time. Everything else builds for the CPU.
+3. Builds voice: whisper.cpp in `~/.local/share/t3-cardputer/whisper`, and downloads one model next to it: `whisper.model` from `relay.json`, `medium.en` by default. On my machine `ggml-medium.en.bin` is 1,533,774,781 bytes (1.5 GB) and `du -sh` says `whisper/` is 70M. To switch models later, set `whisper.model` and run setup again, it downloads the new one and keeps the old. On Apple Silicon it asks about Metal, default yes. On Linux with an NVIDIA GPU it asks about CUDA (that needs the CUDA toolkit), default no. On a re-run the default is what you built last time. Everything else builds for the CPU.
 4. Pairs the relay with T3. With the `t3` CLI on PATH it runs `t3 auth pairing create` twice itself. Without it, it prints that command and asks you to paste the two credentials (input is hidden). The tokens land in `~/.config/t3-cardputer/secrets.json`, mode 0600.
 5. Asks about the canary, default no. When T3 updates, the canary runs one short agent turn to check that approvals still work, and that turn uses your T3 usage. If you say yes, it picks a small model (`haiku`, `mini` or `flash` as a whole part of the id, like `gpt-5-mini`) from the ones your T3 has, or asks you to pick one.
 6. Turns on Tailscale Funnel on port 8443, after asking, and saves the URL as `publicUrl` in `relay.json`. It needs HTTPS certificates on in your tailnet, and on Linux it needs you to be the Tailscale operator once: `sudo tailscale set --operator=$USER`. Never 443: on 443 Funnel takes over the tailnet address, and anything else serving https there (a reverse proxy, say) stops working.
@@ -125,10 +125,10 @@ ln -sfn ~/.local/share/t3-cardputer/current/t3-cardputer-relay.mjs ~/.local/bin/
 t3-cardputer-relay --version
 ```
 
-Build voice. `--gpu` takes `none`, `cuda` or `metal`:
+Build voice. `--gpu` takes `none`, `cuda` or `metal`. `--model` is the one model it downloads, `medium.en` by default, and should match `whisper.model` in `relay.json`:
 
 ```
-bash install-whisper.sh --gpu none
+bash install-whisper.sh --gpu none --model medium.en
 ```
 
 Pair with T3. `renew` makes both tokens with the `t3` CLI. Without `t3` on PATH it prints the two commands to run where T3 runs, and how to hand the credentials to `t3-cardputer-relay pair-t3 --stdin`:

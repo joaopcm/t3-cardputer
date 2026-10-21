@@ -55,7 +55,7 @@ const commands = {
   "config-read": (file) => {
     const config = readJson(file) || {};
     const canary = config.canary || {};
-    const lines = [config.t3BaseUrl, config.port, (config.whisper || {}).binDir, canary.enabled, canary.model, config.publicUrl];
+    const lines = [config.t3BaseUrl, config.port, (config.whisper || {}).binDir, canary.enabled, canary.model, config.publicUrl, (config.whisper || {}).model];
     console.log(lines.map((value) => (value === undefined ? "" : String(value))).join("\n"));
   },
   "config-set": (file, key) => {
@@ -275,9 +275,11 @@ read_config() {
   canary_enabled=$(printf '%s\n' "$config" | sed -n 4p)
   canary_model=$(printf '%s\n' "$config" | sed -n 5p)
   public_url=$(printf '%s\n' "$config" | sed -n 6p)
+  whisper_model=$(printf '%s\n' "$config" | sed -n 7p)
   t3_url=${t3_url:-http://127.0.0.1:3773}
   port=${port:-8787}
   whisper_dir=${whisper_dir:-$SHARE/whisper}
+  whisper_model=${whisper_model:-medium.en}
 }
 
 check_tailscale() {
@@ -313,7 +315,7 @@ print_plan() {
 Dry run, nothing written. setup.sh would:
   download relay $VERSION from $RELEASE_URL and check it against SHA256SUMS
   install it in $SHARE/releases/$VERSION and link $BIN
-  build voice (whisper.cpp) in $whisper_dir
+  build voice (whisper.cpp) in $whisper_dir and download the $whisper_model model
   pair with T3 at $t3_url, unless $SECRETS_JSON has unexpired tokens
   ask about the canary, unless $RELAY_JSON already has canary.enabled
   turn on Tailscale Funnel on port $FUNNEL_PORT for 127.0.0.1:$port, after asking
@@ -387,8 +389,8 @@ install_voice() {
     metal) label=Metal ;;
     cuda) label=CUDA ;;
   esac
-  if ! bash "$release_dir/install-whisper.sh" --gpu "$gpu" --prefix "$whisper_dir" </dev/null >/dev/null; then
-    fail "Voice" "install-whisper.sh --gpu $gpu failed, its error is above" "fix that error, or pick the CPU build, then run setup.sh again"
+  if ! bash "$release_dir/install-whisper.sh" --gpu "$gpu" --prefix "$whisper_dir" --model "$whisper_model" </dev/null >/dev/null; then
+    fail "Voice" "install-whisper.sh --gpu $gpu --model $whisper_model failed, its error is above" "fix that error, or pick the CPU build, then run setup.sh again"
   fi
   ok "Voice built for $label"
 }

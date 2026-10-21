@@ -179,7 +179,7 @@ expect_no "Available on the internet" "$dir/out"
 expect_json "$dir/home/.config/t3-cardputer/relay.json" canary '{"enabled":true,"model":"claude-haiku-5-5","providerInstanceId":"claude-1"}'
 expect_json "$dir/state/paired.json" mcp '"SECRET-CRED-1"'
 expect_json "$dir/state/paired.json" internal '"SECRET-CRED-2"'
-expect_call "install-whisper --gpu none --prefix $dir/home/.local/share/t3-cardputer/whisper"
+expect_call "install-whisper --gpu none --prefix $dir/home/.local/share/t3-cardputer/whisper --model medium.en"
 expect_call "tailscale funnel --bg --https=8443 8787"
 expect_call "loginctl enable-linger tester"
 expect_call "systemctl --user daemon-reload"
@@ -242,7 +242,7 @@ expect_last_lines
 expect_installed
 expect_no_secrets
 expect_json "$dir/home/.config/t3-cardputer/relay.json" canary '{"enabled":false}'
-expect_call "install-whisper --gpu metal --prefix $dir/home/.local/share/t3-cardputer/whisper"
+expect_call "install-whisper --gpu metal --prefix $dir/home/.local/share/t3-cardputer/whisper --model medium.en"
 plist="$dir/home/Library/LaunchAgents/com.t3-cardputer.relay.plist"
 expect_call "launchctl bootstrap gui/501 $plist"
 expect_no "systemctl" "$dir/state/calls.log"
@@ -330,6 +330,15 @@ expect_json "$dir/home/.config/t3-cardputer/relay.json" canary '{"enabled":true,
 finish_case "$before"
 
 before=$failures
+fresh_case whisper-model-from-config
+mkdir -p "$dir/home/.config/t3-cardputer"
+printf '{"whisper":{"model":"small.en"}}\n' >"$dir/home/.config/t3-cardputer/relay.json"
+run_setup --yes
+expect_status 0
+expect_call "install-whisper --gpu none --prefix $dir/home/.local/share/t3-cardputer/whisper --model small.en"
+finish_case "$before"
+
+before=$failures
 fresh_case dry-run
 answers 'y\ny\ny\n'
 run_setup --dry-run
@@ -383,7 +392,7 @@ printf 'GGML_CUDA:BOOL=ON\nGGML_METAL:BOOL=OFF\n' >"$dir/home/.local/share/t3-ca
 run_setup --update
 expect_status 0
 expect_line "✓ Voice built for CUDA"
-expect_call "install-whisper --gpu cuda --prefix $dir/home/.local/share/t3-cardputer/whisper"
+expect_call "install-whisper --gpu cuda --prefix $dir/home/.local/share/t3-cardputer/whisper --model medium.en"
 finish_case "$before"
 
 before=$failures
