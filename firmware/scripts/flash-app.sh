@@ -15,7 +15,16 @@ size_to_bytes() {
   esac
 }
 
-IFS=', ' read -r _ _ _ factory_offset factory_size_text _ < <(grep -E '^factory[ ,]' "$FW_DIR/partitions.csv")
+factory_row=$(grep -E '^factory[ ,]' "$FW_DIR/partitions.csv" || true)
+if [[ -z "$factory_row" ]]; then
+  echo "partition table check failed: no factory row in $FW_DIR/partitions.csv" >&2
+  exit 1
+fi
+IFS=', ' read -r _ _ _ factory_offset factory_size_text _ <<<"$factory_row"
+if [[ -z "$factory_offset" || -z "$factory_size_text" ]]; then
+  echo "partition table check failed: factory row has no offset or size in $FW_DIR/partitions.csv: $factory_row" >&2
+  exit 1
+fi
 factory_size=$(size_to_bytes "$factory_size_text")
 
 if [[ ! -f "$APP" ]]; then
