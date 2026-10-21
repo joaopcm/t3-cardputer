@@ -2,6 +2,7 @@ import { ESPLoader, ESPRESSIF_VID, Transport } from "/vendor/esptool-js/bundle.j
 import { browserSupport } from "/lib/browser-support.js";
 import { checkPartFits, chipMatches, flashPlan, partUrl } from "/lib/flash-plan.js";
 import { parseFragment } from "/lib/fragment.js";
+import { flashErrorMessage, portOpenMessage, replug } from "/lib/install-errors.js";
 import { encodeInfoRequest, encodeProvision, lineSplitter, parseDeviceLine } from "/lib/serial-frames.js";
 
 // receipt: provisional, not measured on the ADV yet. The device polls USB serial every 20 ms (kMainPollTicks), drains a reply within 100 ms (kReplyDrainTicks) and restarts within 500 ms after ok (docs/protocol.md), and provision.py uses the same 5 s tripwire. Replace with 5x the slowest of 10 provision.py runs.
@@ -12,7 +13,6 @@ const kResetHoldMs = 100;
 const kBaud = 115200;
 
 const issues = "https://github.com/joaopcm/t3-cardputer/issues";
-const replug = "Unplug the ADV, plug it back in, then click Connect ADV and install again.";
 
 class Named extends Error {}
 
@@ -45,7 +45,7 @@ function start() {
 async function loadManifest() {
   try {
     const response = await fetch("/fw/latest/manifest.json", { cache: "no-store" });
-    if (!response.ok) throw new Named(`Couldn't load the firmware list (/fw/latest/manifest.json, HTTP ${response.status}). Reload the page to try again.`);
+    if (!response.ok) throw new Named(`Couldn't load the firmware list (/fw/latest/manifest.json, HTTP ${response.status}). Open the install link again.`);
     const manifest = await response.json();
     if (!manifest.version || !manifest.chip || !Array.isArray(manifest.parts) || !manifest.nvs) {
       throw new Named(`The firmware list is broken. Open an issue at ${issues}.`);
@@ -54,7 +54,7 @@ async function loadManifest() {
     $("firmware").textContent = `Installs ${state.manifest.name} ${state.manifest.version}.`;
     $("install").disabled = false;
   } catch (error) {
-    $("firmware").textContent = error instanceof Named ? error.message : `Couldn't load the firmware list: ${error.message}. Reload the page to try again.`;
+    $("firmware").textContent = error instanceof Named ? error.message : `Couldn't load the firmware list: ${error.message}. Open the install link again.`;
     $("firmware").className = "problem";
   }
 }
@@ -115,11 +115,11 @@ async function downloadParts(plan, log) {
     const part = state.manifest.parts.find((p) => p.path === write.path);
     log.say(`Downloading ${write.path}`);
     const response = await fetch(partUrl(state.manifest, write.path));
-    if (!response.ok) throw new Named(`Couldn't download ${write.path} (HTTP ${response.status}). Nothing was written. Reload the page and try again.`);
+    if (!response.ok) throw new Named(`Couldn't download ${write.path} (HTTP ${response.status}). Nothing was written. Click Connect ADV and install to try again.`);
     const data = new Uint8Array(await response.arrayBuffer());
     const sha256 = toHex(await crypto.subtle.digest("SHA-256", data));
     if (sha256 !== part.sha256) {
-      throw new Named(`${write.path} failed its sha256 check: expected ${part.sha256}, got ${sha256}. Nothing was written. Reload the page and try again.`);
+      throw new Named(`${write.path} failed its sha256 check: expected ${part.sha256}, got ${sha256}. Nothing was written. Click Connect ADV and install to try again.`);
     }
     const tooBig = checkPartFits(write, data.length);
     if (tooBig) throw new Named(`${tooBig}. The firmware manifest is broken, nothing was written. Open an issue at ${issues}.`);
@@ -137,9 +137,10 @@ async function flash(port, plan, files, log) {
     await loader.main();
   } catch (error) {
     await transport.disconnect().catch(() => {});
-    throw connectError(error);
+    throw connectError(error, port);
   }
 
+  let current = 0;
   try {
     if (!chipMatches(loader.chip.CHIP_NAME, state.manifest.chip)) {
       throw new Named(`This board is an ${loader.chip.CHIP_NAME}, the ADV is an ESP32-S3. Plug in the ADV and pick its port.`);
@@ -154,7 +155,9 @@ async function flash(port, plan, files, log) {
       flashSize: "keep",
       eraseAll: plan.eraseAll,
       compress: true,
+      calculateMD5Hash: md5hex,
       reportProgress(index, written, total) {
+        current = index;
         if (written === 0) log.say(`Writing ${plan.writes[index].path} (${index + 1} of ${files.length})`);
         progress.value = (index + written / total) / files.length;
       },
@@ -164,7 +167,7 @@ async function flash(port, plan, files, log) {
   } catch (error) {
     await transport.disconnect().catch(() => {});
     if (error instanceof Named) throw error;
-    throw new Named(`Writing the firmware stopped: ${error.message}. ${replug}`);
+    throw new Named(flashErrorMessage(error, plan.writes[current].path));
   }
   // why: the ADV re-enumerates on USB when it resets, which can close the port under us
   await transport.disconnect().catch(() => {});
@@ -178,16 +181,16 @@ async function resetIntoApp(transport) {
   await transport.setRTS(false);
 }
 
-function connectError(error) {
-  if (error.name === "InvalidStateError" || error.name === "NetworkError") return busyPort();
+function md5hex(image) {
+  return globalThis.SparkMD5.ArrayBuffer.hash(image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength));
+}
+
+function connectError(error, port) {
+  if (["InvalidStateError", "NetworkError", "NotFoundError"].includes(error.name)) return new Named(portOpenMessage(error, port.connected));
   if (/Failed to connect/.test(error.message)) {
     return new Named("The ADV didn't enter download mode. Unplug it, hold G0 while you plug it back in, then click Connect ADV and install again.");
   }
   return new Named(`Connecting to the ADV failed: ${error.message}. ${replug}`);
-}
-
-function busyPort() {
-  return new Named("The ADV's port is busy. Close other apps and tabs that use it (a serial monitor, Arduino IDE, idf.py monitor), then try again.");
 }
 
 function showWifiForm() {
@@ -247,8 +250,8 @@ async function findPort() {
 async function ask(port, frame, kinds) {
   try {
     await port.open({ baudRate: kBaud });
-  } catch {
-    throw busyPort();
+  } catch (error) {
+    throw new Named(portOpenMessage(error, port.connected));
   }
   try {
     await port.setSignals({ requestToSend: false });
