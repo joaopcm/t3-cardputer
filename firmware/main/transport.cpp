@@ -496,7 +496,7 @@ std::optional<TransportEvent> transport_poll()
     const uint64_t kept = closeKeptAside.exchange(0);
     if (kept != 0 && static_cast<uint32_t>(kept >> 32) == generation.load()) {
         const int32_t code = static_cast<int32_t>(static_cast<uint32_t>(kept));
-        closeReason = "rx_inbox_depth=" + std::to_string(kInboxDepth) + ", close " + std::to_string(code) + " needed one more slot";
+        closeReason = "rx_inbox_depth=" + std::to_string(kInboxDepth) + ", close " + std::to_string(code) + " needed " + std::to_string(kInboxDepth + 1);
         return TransportEvent{TransportEvent::Kind::Close, code, closeReason};
     }
     return std::nullopt;
