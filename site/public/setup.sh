@@ -15,10 +15,12 @@ T3_PAIRING="t3 auth pairing create --json --ttl 5m --label t3-cardputer-relay"
 FUNNEL_PORT=8443
 # receipt: T3 answered GET / in 0.7-4.6 ms over 10 loopback requests on the homelab, so 5 s only trips a hung or unreachable T3
 T3_PROBE_TIMEOUT_S=5
-# receipt: not yet measured through systemctl; process start to the listening line took 220-227 ms over 10 local starts of dist/cli.js serve (the bundle reached "relay ready" in 138-163 ms), temp config, no T3 tokens; 5x the slowest is 1133 ms, so 12 polls 100 ms apart
-HEALTHZ_POLLS=12
+# receipt: systemd-run --user of the bundle to /healthz 200 took 161-171 ms over 10 transient units on the homelab (warm cache, temp config, no T3 tokens); cold start and slow hosts unmeasured, so 30 s (175x the slowest) only trips a relay that never comes up, and the loop exits on the first 200
+HEALTHZ_TIMEOUT_S=30
 # receipt: /healthz answered in 3.5 ms worst over 200 loopback probes, so 0.1 s per probe only trips a hung relay
 HEALTHZ_PROBE_TIMEOUT_S=0.1
+# receipt: the bundle is 1.6 MB and the other assets are smaller, so a working link moves bytes every second; 60 s under 1 B/s only trips a stalled download
+DOWNLOAD_STALL_S=60
 
 TOOLS='
 const fs = require("fs");
@@ -121,6 +123,10 @@ const commands = {
     console.log(canaryOf(cheap));
   },
   "json-get": (key) => console.log(JSON.parse(stdin())[key]),
+  render: (template, node, bundle, logDir) => {
+    const text = fs.readFileSync(template, "utf8");
+    process.stdout.write(text.split("__NODE__").join(node).split("__BUNDLE__").join(bundle).split("__LOG_DIR__").join(logDir));
+  },
   "models-list": () => JSON.parse(stdin()).forEach((model, i) => console.log("  " + (i + 1) + ") " + model.label + " (" + model.id + ")")),
   "canary-nth": (n) => {
     const model = JSON.parse(stdin())[Number(n) - 1];
@@ -161,7 +167,7 @@ TTY_OPEN=0
 open_tty() {
   [ "$TTY_OPEN" = 0 ] || return 0
   if ! (exec 3<"$TTY") 2>/dev/null; then
-    fail "$1" "no terminal to answer on" "run setup.sh in a terminal, or add --yes to take the defaults: $SETUP_CMD -s -- --yes"
+    fail "$1" "no terminal to answer on" "$2"
   fi
   exec 3<"$TTY"
   TTY_OPEN=1
@@ -177,7 +183,7 @@ ask() {
     [ "$3" = y ]
     return
   fi
-  open_tty "$1"
+  open_tty "$1" "run setup.sh in a terminal, or add --yes to take the defaults: $SETUP_CMD -s -- --yes"
   if [ "$3" = y ]; then hint="[Y/n]"; else hint="[y/N]"; fi
   printf '%s %s ' "$2" "$hint"
   read_answer
@@ -189,16 +195,17 @@ ask() {
 }
 
 read_hidden() {
-  open_tty "$1"
+  open_tty "$1" "put the t3 CLI on PATH, or run setup.sh in a terminal"
   printf '%s (hidden): ' "$2"
   if [ -t 3 ]; then
-    trap 'stty echo <&3; exit 130' INT TERM
+    trap 'stty echo <&3' EXIT
+    trap 'exit 130' INT TERM QUIT
     stty -echo <&3
   fi
   IFS= read -r ANSWER <&3 || ANSWER=""
   if [ -t 3 ]; then
     stty echo <&3
-    trap - INT TERM
+    trap - EXIT INT TERM QUIT
   fi
   printf '\n'
 }
@@ -214,15 +221,19 @@ EOF
 }
 
 check_platform() {
-  OS=$(uname -s)
-  ARCH=$(uname -m)
+  if ! OS=$(uname -s) || ! ARCH=$(uname -m); then
+    fail "Platform" "uname failed, its error is above" "run setup.sh on a Linux or macOS machine"
+  fi
   case $OS in
     Linux) os_name=Linux ;;
     Darwin) os_name=macOS ;;
     MINGW* | MSYS* | CYGWIN* | Windows*) fail "Windows isn't supported yet" ;;
     *) fail "$OS" "setup.sh runs on Linux and macOS only" "run it on the Linux or macOS machine where T3 runs" ;;
   esac
-  if [ "$(id -u)" = 0 ]; then
+  if ! USER_ID=$(id -u) || ! USER_NAME=$(id -un); then
+    fail "User" "id failed, its error is above" "run setup.sh as your normal user"
+  fi
+  if [ "$USER_ID" = 0 ]; then
     fail "Running as root" "setup.sh installs the relay for your user" "run it again as your normal user, without sudo"
   fi
   ok "$os_name $ARCH"
@@ -238,7 +249,12 @@ check_node() {
   if ! NODE=$(command -v node); then
     fail "Node" "not found, the relay runs on Node 22 or newer" "install Node 22, https://nodejs.org"
   fi
-  node_version=$("$NODE" -p process.versions.node)
+  if ! node_version=$("$NODE" -p process.versions.node) || ! NODE_EXEC=$("$NODE" -p process.execPath); then
+    fail "Node" "$NODE didn't run, its error is above" "install Node 22, https://nodejs.org"
+  fi
+  case ${node_version%%.*} in
+    "" | *[!0-9]*) fail "Node" "$NODE reports version \"$node_version\", not a Node version" "install Node 22, https://nodejs.org" ;;
+  esac
   if [ "${node_version%%.*}" -lt 22 ]; then
     fail "Node $node_version" "too old, the relay needs Node 22 or newer" "install Node 22, https://nodejs.org"
   fi
@@ -271,7 +287,9 @@ check_tailscale() {
   if ! ts_status=$("$TAILSCALE" status --json </dev/null); then
     fail "Tailscale" "tailscale status failed, its error is above" "start Tailscale, then run setup.sh again"
   fi
-  ts_state=$(printf '%s' "$ts_status" | tool ts-state)
+  if ! ts_state=$(printf '%s' "$ts_status" | tool ts-state); then
+    fail "Tailscale" "tailscale status --json printed something setup.sh can't read, the error is above" "tailscale status"
+  fi
   if [ "$ts_state" != Running ]; then
     fail "Tailscale" "not logged in (state $ts_state)" "tailscale up"
   fi
@@ -307,8 +325,13 @@ install_relay() {
   rm -rf "$staging"
   mkdir -p "$staging"
   for asset in t3-cardputer-relay.mjs install-whisper.sh "$unit_asset" SHA256SUMS; do
-    if ! curl -fsSL --proto '=https' -o "$staging/$asset" "$RELEASE_URL/$asset" </dev/null; then
-      fail "Relay download" "$RELEASE_URL/$asset failed" "check that github.com is reachable, then run setup.sh again"
+    curl_status=0
+    curl -fsSL --proto '=https' --speed-limit 1 --speed-time "$DOWNLOAD_STALL_S" -o "$staging/$asset" "$RELEASE_URL/$asset" </dev/null || curl_status=$?
+    if [ "$curl_status" = 28 ]; then
+      fail "Relay download" "download_stall_s=$DOWNLOAD_STALL_S, $RELEASE_URL/$asset sent nothing for longer than that" "check your connection to github.com, then run setup.sh again"
+    fi
+    if [ "$curl_status" != 0 ]; then
+      fail "Relay download" "$RELEASE_URL/$asset failed (curl exit $curl_status)" "check that github.com is reachable, then run setup.sh again"
     fi
   done
   if ! why=$(tool verify "$staging" t3-cardputer-relay.mjs install-whisper.sh "$unit_asset" 2>&1); then
@@ -330,12 +353,30 @@ install_relay() {
   esac
 }
 
+existing_gpu() {
+  cache="$whisper_dir/build/CMakeCache.txt"
+  if [ ! -f "$cache" ]; then
+    echo ""
+  elif grep -q '^GGML_CUDA:BOOL=ON' "$cache"; then
+    echo cuda
+  elif grep -q '^GGML_METAL:BOOL=ON' "$cache"; then
+    echo metal
+  else
+    echo none
+  fi
+}
+
 install_voice() {
-  gpu=none
+  built=$(existing_gpu)
+  gpu=${built:-none}
   if [ "$OS" = Darwin ] && [ "$ARCH" = arm64 ]; then
-    if ask Voice "Build voice with Metal for this Mac's GPU?" y; then gpu=metal; fi
+    default=y
+    [ "$built" != none ] || default=n
+    if ask Voice "Build voice with Metal for this Mac's GPU?" "$default"; then gpu=metal; else gpu=none; fi
   elif [ "$OS" = Linux ] && command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
-    if ask Voice "Build voice for your NVIDIA GPU with CUDA? It needs the CUDA toolkit." n; then gpu=cuda; fi
+    default=n
+    [ "$built" != cuda ] || default=y
+    if ask Voice "Build voice for your NVIDIA GPU with CUDA? It needs the CUDA toolkit." "$default"; then gpu=cuda; else gpu=none; fi
   fi
   case $gpu in
     none) label=CPU ;;
@@ -451,7 +492,12 @@ set_funnel() {
 }
 
 render() {
-  sed -e "s|__NODE__|$NODE|g" -e "s|__BUNDLE__|$BUNDLE|g" -e "s|__LOG_DIR__|$1|g" "$release_dir/$unit_asset"
+  if ! tool render "$release_dir/$unit_asset" "$NODE_EXEC" "$BUNDLE" "$2" >"$1"; then
+    fail "Relay service" "rendering $unit_asset failed, its error is above" "run setup.sh again"
+  fi
+  if grep -q '__' "$1" || ! grep -qF "$BUNDLE" "$1"; then
+    fail "Relay service" "$1 still has a placeholder or doesn't run $BUNDLE, the $unit_asset in release $VERSION is wrong" "report it at https://github.com/joaopcm/t3-cardputer/issues"
+  fi
 }
 
 systemd_user() {
@@ -466,10 +512,9 @@ install_systemd() {
   fi
   unit_dir="$HOME/.config/systemd/user"
   mkdir -p "$unit_dir"
-  render "" >"$unit_dir/t3-cardputer-relay.service"
-  user=$(id -un)
-  if [ "$(loginctl show-user "$user" -p Linger 2>/dev/null)" != Linger=yes ] && ! loginctl enable-linger "$user"; then
-    fail "Relay service" "loginctl enable-linger failed, so the relay would stop when you log out" "sudo loginctl enable-linger $user, then run setup.sh again"
+  render "$unit_dir/t3-cardputer-relay.service" ""
+  if [ "$(loginctl show-user "$USER_NAME" -p Linger 2>/dev/null)" != Linger=yes ] && ! loginctl enable-linger "$USER_NAME"; then
+    fail "Relay service" "loginctl enable-linger failed, so the relay would stop when you log out" "sudo loginctl enable-linger $USER_NAME, then run setup.sh again"
   fi
   systemd_user daemon-reload
   systemd_user -q enable t3-cardputer-relay
@@ -481,14 +526,14 @@ install_systemd() {
 install_launchd() {
   log_dir="$HOME/Library/Logs/t3-cardputer"
   plist="$HOME/Library/LaunchAgents/com.t3-cardputer.relay.plist"
-  agent="gui/$(id -u)/com.t3-cardputer.relay"
+  agent="gui/$USER_ID/com.t3-cardputer.relay"
   mkdir -p "$log_dir" "$(dirname "$plist")"
   if launchctl print "$agent" >/dev/null 2>&1 && ! launchctl bootout "$agent"; then
     fail "Relay service" "launchctl bootout failed, its error is above" "launchctl bootout $agent, then run setup.sh again"
   fi
-  render "$log_dir" >"$plist"
-  if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
-    fail "Relay service" "launchctl bootstrap failed, its error is above" "launchctl bootstrap gui/$(id -u) $plist"
+  render "$plist" "$log_dir"
+  if ! launchctl bootstrap "gui/$USER_ID" "$plist"; then
+    fail "Relay service" "launchctl bootstrap failed, its error is above" "launchctl bootstrap gui/$USER_ID $plist"
   fi
   service_kind="launchd agent, starts at login"
   logs_cmd="tail -n 50 $log_dir/relay.log"
@@ -496,12 +541,11 @@ install_launchd() {
 
 start_service() {
   if [ "$OS" = Darwin ]; then install_launchd; else install_systemd; fi
-  polls=1
+  deadline=$(($(date +%s) + HEALTHZ_TIMEOUT_S))
   until [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time "$HEALTHZ_PROBE_TIMEOUT_S" "http://127.0.0.1:$port/healthz" </dev/null)" = 200 ]; do
-    if [ "$polls" -ge "$HEALTHZ_POLLS" ]; then
-      fail "Relay service" "healthz_polls=$HEALTHZ_POLLS, the relay needed more than $HEALTHZ_POLLS polls 100 ms apart to answer /healthz" "$logs_cmd"
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      fail "Relay service" "healthz_timeout_s=$HEALTHZ_TIMEOUT_S, the relay needed longer than that to answer /healthz" "$logs_cmd"
     fi
-    polls=$((polls + 1))
     sleep 0.1
   done
   ok "Relay service running ($service_kind)"

@@ -1,8 +1,0 @@
-[Unit]
-Description=t3-cardputer relay
-
-[Service]
-ExecStart=__NODE__ __BUNDLE__ serve
-
-[Install]
-WantedBy=default.target

@@ -3,23 +3,30 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 setup_src="$here/../../public/setup.sh"
+deploy="$here/../../../relay/deploy"
 version=9.9.9
 host=t3-box.example.com
 link="https://t3-cardputer.jopcmelo.com/install#r=https%3A%2F%2F$host%3A8443&c=K7Q2AB9X"
 models='[{"id":"claude-opus-5-5","label":"Claude Opus 5.5","providerInstanceId":"claude-1"},{"id":"claude-haiku-5-5","label":"Claude Haiku 5.5","providerInstanceId":"claude-1"}]'
 real_node=$(command -v node)
+real_exec=$("$real_node" -p process.execPath)
 tools="sh bash cat cp mkdir ln chmod mv rm sed grep sleep cmp stty touch dirname"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-mkdir "$work/release"
-cp "$here"/fixtures/* "$work/release/"
-(cd "$work/release" && "$real_node" -e '
-  const { createHash } = require("node:crypto");
-  const { readFileSync, readdirSync } = require("node:fs");
-  for (const name of readdirSync(".").sort()) console.log(createHash("sha256").update(readFileSync(name)).digest("hex") + "  " + name);
-' >SHA256SUMS)
+make_release() {
+  mkdir "$work/$1"
+  cp "$here"/fixtures/* "$deploy/com.t3-cardputer.relay.plist" "$work/$1/"
+  cp "$deploy/$2" "$work/$1/t3-cardputer-relay.service"
+  (cd "$work/$1" && "$real_node" -e '
+    const { createHash } = require("node:crypto");
+    const { readFileSync, readdirSync } = require("node:fs");
+    for (const name of readdirSync(".").sort()) console.log(createHash("sha256").update(readFileSync(name)).digest("hex") + "  " + name);
+  ' >SHA256SUMS)
+}
+make_release release t3-cardputer-relay.release.service
+make_release release-homelab-unit t3-cardputer-relay.service
 sed "s/__VERSION__/$version/g" "$setup_src" >"$work/setup.sh"
 
 failures=0
@@ -35,7 +42,7 @@ fresh_case() {
   for stub in "$here"/stubs/*; do
     ln -s "$stub" "$dir/bin/${stub##*/}"
   done
-  os=Linux arch=x86_64 uid=1000 node_version=22.11.0 ts_state=Running ready_polls=3 tty="$work/no-tty" catalog=$models
+  os=Linux arch=x86_64 uid=1000 node_version=22.11.0 ts_state=Running ready_polls=3 tty="$work/no-tty" catalog=$models release="$work/release"
 }
 
 without() {
@@ -51,7 +58,7 @@ run_setup() {
   : >"$dir/state/calls.log"
   set +e
   env -i HOME="$dir/home" PATH="$dir/bin" USER=tester LANG=C.UTF-8 \
-    REAL_NODE="$real_node" STUB_STATE="$dir/state" STUB_FIXTURES="$work/release" STUB_RELAY_VERSION="$version" \
+    REAL_NODE="$real_node" STUB_STATE="$dir/state" STUB_FIXTURES="$release" STUB_RELAY_VERSION="$version" \
     STUB_OS="$os" STUB_ARCH="$arch" STUB_UID="$uid" STUB_NODE_VERSION="$node_version" STUB_TS_STATE="$ts_state" \
     STUB_HOST="$host" STUB_MODELS="$catalog" STUB_READY_POLLS="$ready_polls" T3_CARDPUTER_TTY="$tty" \
     /bin/sh "$work/setup.sh" "$@" >"$dir/out" 2>&1
@@ -178,7 +185,7 @@ expect_call "systemctl --user daemon-reload"
 expect_call "systemctl --user -q enable t3-cardputer-relay"
 expect_call "systemctl --user restart t3-cardputer-relay"
 unit="$dir/home/.config/systemd/user/t3-cardputer-relay.service"
-grep -qxF "ExecStart=$dir/bin/node $dir/home/.local/share/t3-cardputer/current/t3-cardputer-relay.mjs serve" "$unit" || fail "unit ExecStart: $(grep ExecStart "$unit")"
+grep -qxF "ExecStart=$real_exec $dir/home/.local/share/t3-cardputer/current/t3-cardputer-relay.mjs serve" "$unit" || fail "unit ExecStart: $(grep ExecStart "$unit")"
 finish_case "$before"
 
 before=$failures
@@ -212,7 +219,7 @@ cmp -s "$dir/relay.before" "$dir/home/.config/t3-cardputer/relay.json" || fail "
 finish_case "$before"
 
 before=$failures
-fresh_case macos-fresh
+fresh_case "macos-fresh-a&b|c"
 os=Darwin arch=arm64 uid=501
 run_setup --yes
 expect_status 0
@@ -239,6 +246,7 @@ expect_call "launchctl bootstrap gui/501 $plist"
 expect_no "systemctl" "$dir/state/calls.log"
 expect_no "__" "$plist"
 grep -qF "<string>$dir/home/.local/share/t3-cardputer/current/t3-cardputer-relay.mjs</string>" "$plist" || fail "plist has no bundle path"
+grep -qF "<string>$real_exec</string>" "$plist" || fail "plist has no node path"
 grep -qF "<string>$dir/home/Library/Logs/t3-cardputer/relay.log</string>" "$plist" || fail "plist has no log path"
 [ -d "$dir/home/Library/Logs/t3-cardputer" ] || fail "no log dir"
 finish_case "$before"
@@ -342,8 +350,52 @@ fresh_case never-ready
 ready_polls=1000
 run_setup --yes
 expect_status 1
-expect_line "✗ Relay service: healthz_polls=12, the relay needed more than 12 polls 100 ms apart to answer /healthz. next: journalctl --user -u t3-cardputer-relay -n 50"
+expect_line "✗ Relay service: healthz_timeout_s=30, the relay needed longer than that to answer /healthz. next: journalctl --user -u t3-cardputer-relay -n 50"
 expect_no "install-link" "$dir/state/calls.log"
+finish_case "$before"
+
+before=$failures
+fresh_case homelab-unit-template
+release="$work/release-homelab-unit"
+run_setup --yes
+expect_status 1
+expect_line "✗ Relay service: $dir/home/.config/systemd/user/t3-cardputer-relay.service still has a placeholder or doesn't run $dir/home/.local/share/t3-cardputer/current/t3-cardputer-relay.mjs, the t3-cardputer-relay.service in release $version is wrong. next: report it at https://github.com/joaopcm/t3-cardputer/issues"
+expect_no "systemctl" "$dir/state/calls.log"
+finish_case "$before"
+
+before=$failures
+fresh_case cuda-kept
+mkdir -p "$dir/home/.local/share/t3-cardputer/whisper/build"
+printf 'GGML_CUDA:BOOL=ON\nGGML_METAL:BOOL=OFF\n' >"$dir/home/.local/share/t3-cardputer/whisper/build/CMakeCache.txt"
+run_setup --update
+expect_status 0
+expect_line "✓ Voice built for CUDA"
+expect_call "install-whisper --gpu cuda --prefix $dir/home/.local/share/t3-cardputer/whisper"
+finish_case "$before"
+
+before=$failures
+fresh_case download-stall
+touch "$dir/state/stall"
+run_setup --yes
+expect_status 1
+expect_line "✗ Relay download: download_stall_s=60, https://github.com/joaopcm/t3-cardputer/releases/download/v$version/t3-cardputer-relay.mjs sent nothing for longer than that. next: check your connection to github.com, then run setup.sh again"
+finish_case "$before"
+
+before=$failures
+fresh_case node-garbled
+node_version=""
+run_setup --yes
+expect_status 1
+expect_line "✗ Node: $dir/bin/node reports version \"\", not a Node version. next: install Node 22, https://nodejs.org"
+expect_home_empty
+finish_case "$before"
+
+before=$failures
+fresh_case no-tty-no-t3
+without t3
+run_setup --yes
+expect_status 1
+expect_line "✗ T3 pairing: no terminal to answer on. next: put the t3 CLI on PATH, or run setup.sh in a terminal"
 finish_case "$before"
 
 if [ "$failures" -gt 0 ]; then
