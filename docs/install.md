@@ -38,6 +38,7 @@ On each T3 update the relay runs one short agent turn to check approvals still w
 Turn on Tailscale Funnel on port 8443 so the ADV can reach the relay? [Y/n]
 ✓ Funnel on port 8443
 ✓ Relay service running (systemd user unit, starts at boot)
+✓ Funnel answers at /healthz
 ✓ Install link ready, the code expires in 10 min
 Plug in your ADV and open this in Chrome or Edge:
 https://t3-cardputer.jopcmelo.com/install#r=https%3A%2F%2Ft3-box.example.com%3A8443&c=K7Q2AB9X
@@ -52,9 +53,10 @@ What it does, in order:
 3. Builds voice: whisper.cpp in `~/.local/share/t3-cardputer/whisper`, and downloads the `small.en`, `medium.en` and `large-v3-turbo` models next to it. On my machine `du -sh` says `models/` is 3.4G and `whisper/` is 70M. On Apple Silicon it asks about Metal, default yes. On Linux with an NVIDIA GPU it asks about CUDA (that needs the CUDA toolkit), default no. On a re-run the default is what you built last time. Everything else builds for the CPU.
 4. Pairs the relay with T3. With the `t3` CLI on PATH it runs `t3 auth pairing create` twice itself. Without it, it prints that command and asks you to paste the two credentials (input is hidden). The tokens land in `~/.config/t3-cardputer/secrets.json`, mode 0600.
 5. Asks about the canary, default no. When T3 updates, the canary runs one short agent turn to check that approvals still work, and that turn uses your T3 usage. If you say yes, it picks a small model (`haiku`, `mini` or `flash` in the id) from the ones your T3 has, or asks you to pick one.
-6. Turns on Tailscale Funnel on port 8443, after asking, and saves the URL as `publicUrl` in `relay.json`. Never 443: on 443 Funnel takes over the tailnet address, and anything else serving https there (a reverse proxy, say) stops working.
+6. Turns on Tailscale Funnel on port 8443, after asking, and saves the URL as `publicUrl` in `relay.json`. It needs HTTPS certificates on in your tailnet, and on Linux it needs you to be the Tailscale operator once: `sudo tailscale set --operator=$USER`. Never 443: on 443 Funnel takes over the tailnet address, and anything else serving https there (a reverse proxy, say) stops working.
 7. Installs and starts the service and waits up to 30 seconds for `/healthz`. On Linux that's a systemd user unit plus `loginctl enable-linger`, so it starts at boot and keeps running after you log out. On macOS it's a launchd agent, which runs while you're logged in.
-8. Prints the install link. On battery power it also says the machine must stay awake. A laptop that sleeps takes the relay with it.
+8. Checks that the Funnel URL answers `/healthz`, for up to 2 minutes. A new Funnel can take longer to get its certificate and DNS, so a timeout prints a `!` warning and setup goes on.
+9. Prints the install link. On battery power it also says the machine must stay awake. A laptop that sleeps takes the relay with it.
 
 Running it again is safe. It keeps your config, tokens that haven't expired, the canary choice and Funnel, and updates the relay in place.
 

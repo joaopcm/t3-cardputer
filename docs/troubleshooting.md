@@ -196,6 +196,9 @@ Most `✗` lines end with `next:` and the command to run. These need more than t
 | `This machine runs a self-repairing checkout, setup.sh leaves it alone` | `relay.json` has `repair.projectId`, so this relay updates itself from `main`. | Nothing. See [run from a git checkout](install.md#run-from-a-git-checkout). |
 | `no terminal to answer on` | Setup has a question and no terminal to ask on, like over ssh without a tty. | Run it in a terminal, or add `--yes` to take the defaults. |
 | `this machine isn't allowed to use Funnel` | Your tailnet policy doesn't give this machine the `funnel` attribute. | Add it, see https://tailscale.com/kb/1223/funnel |
+| `HTTPS certificates are off on your tailnet` | Funnel needs HTTPS certificates, and your tailnet has them off. | Turn on HTTPS at https://login.tailscale.com/admin/dns, then run setup again. |
+| `tailscale funnel needs root or the Tailscale operator` | On Linux, `tailscaled` runs as root and only lets root or the operator change Funnel. Tailscale's own line above it says `Access denied`. | `sudo tailscale set --operator=$USER` once, then run setup again. |
+| `! Funnel: public_healthz_timeout_s=` | A warning, setup still printed the link. The relay runs, but its Funnel URL didn't answer within 2 minutes. The first certificate and DNS for a new Funnel can take longer. | Wait until the `curl -sf` command in the line prints `ok`, then open the link. If the code expired by then, `t3-cardputer-relay install-link` prints a fresh one. |
 | `already serves` | Something else uses Funnel on port 8443. | If it's yours to stop, `tailscale funnel --https=8443 off`, then run setup again. |
 | `loginctl enable-linger failed` | Without linger the relay stops when you log out. | `sudo loginctl enable-linger $USER`, then run setup again. |
 | `healthz_timeout_s=` | The relay didn't answer `/healthz` within 30 seconds of starting. | Check the logs, setup prints the command. |

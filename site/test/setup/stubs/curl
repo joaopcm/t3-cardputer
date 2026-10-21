@@ -24,6 +24,10 @@ case $url in
   http://127.0.0.1:3773/)
     [ ! -e "$STUB_STATE/t3-down" ] || exit 7
     ;;
+  "https://$STUB_HOST:8443/healthz")
+    [ ! -e "$STUB_STATE/public-down" ] || exit 28
+    [ -f "$STUB_STATE/funnel-port" ] || exit 6
+    ;;
   http://127.0.0.1:*/healthz)
     polls=$(($(cat "$STUB_STATE/healthz-polls" 2>/dev/null || echo 0) + 1))
     echo "$polls" >"$STUB_STATE/healthz-polls"

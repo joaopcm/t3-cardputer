@@ -42,7 +42,7 @@ fresh_case() {
   for stub in "$here"/stubs/*; do
     ln -s "$stub" "$dir/bin/${stub##*/}"
   done
-  os=Linux arch=x86_64 uid=1000 node_version=22.11.0 ts_state=Running ready_polls=3 tty="$work/no-tty" catalog=$models release="$work/release"
+  os=Linux arch=x86_64 uid=1000 node_version=22.11.0 ts_state=Running ts_caps='"funnel":null,"https":null' clock_step=1 ready_polls=3 tty="$work/no-tty" catalog=$models release="$work/release"
 }
 
 without() {
@@ -59,7 +59,7 @@ run_setup() {
   set +e
   env -i HOME="$dir/home" PATH="$dir/bin" USER=tester LANG=C.UTF-8 \
     REAL_NODE="$real_node" STUB_STATE="$dir/state" STUB_FIXTURES="$release" STUB_RELAY_VERSION="$version" \
-    STUB_OS="$os" STUB_ARCH="$arch" STUB_UID="$uid" STUB_NODE_VERSION="$node_version" STUB_TS_STATE="$ts_state" \
+    STUB_OS="$os" STUB_ARCH="$arch" STUB_UID="$uid" STUB_NODE_VERSION="$node_version" STUB_TS_STATE="$ts_state" STUB_TS_CAPS="$ts_caps" STUB_CLOCK_STEP="$clock_step" \
     STUB_HOST="$host" STUB_MODELS="$catalog" STUB_READY_POLLS="$ready_polls" T3_CARDPUTER_TTY="$tty" \
     /bin/sh "$work/setup.sh" "$@" >"$dir/out" 2>&1
   status=$?
@@ -167,6 +167,7 @@ expect_markers \
   "✓ Canary on, using claude-haiku-5-5" \
   "✓ Funnel on port 8443" \
   "✓ Relay service running (systemd user unit, starts at boot)" \
+  "✓ Funnel answers at /healthz" \
   "✓ Install link ready, the code expires in 10 min"
 expect_line "Build voice for your NVIDIA GPU with CUDA? It needs the CUDA toolkit. [y/N] "
 expect_line "On each T3 update the relay runs one short agent turn to check approvals still work. It uses your usage. Enable? [y/N] "
@@ -234,6 +235,7 @@ expect_markers \
   "✓ Canary off" \
   "✓ Funnel on port 8443" \
   "✓ Relay service running (launchd agent, starts at login)" \
+  "✓ Funnel answers at /healthz" \
   "✓ Install link ready, the code expires in 10 min"
 expect_line "This machine must be awake for the ADV to reach your agents."
 expect_last_lines
@@ -396,6 +398,36 @@ without t3
 run_setup --yes
 expect_status 1
 expect_line "✗ T3 pairing: no terminal to answer on. next: put the t3 CLI on PATH, or run setup.sh in a terminal"
+finish_case "$before"
+
+before=$failures
+fresh_case funnel-not-operator
+touch "$dir/state/not-operator"
+run_setup --yes
+expect_status 1
+expect_line "Access denied: serve config denied"
+expect_line "✗ Funnel: tailscale funnel needs root or the Tailscale operator. next: sudo tailscale set --operator=\$USER, then run setup.sh again"
+expect_no "systemctl" "$dir/state/calls.log"
+finish_case "$before"
+
+before=$failures
+fresh_case https-off
+ts_caps='"funnel":null'
+run_setup --yes
+expect_status 1
+expect_line "✗ Funnel: HTTPS certificates are off on your tailnet, Funnel needs them. next: turn on HTTPS at https://login.tailscale.com/admin/dns, then run setup.sh again"
+expect_no "funnel --bg" "$dir/state/calls.log"
+finish_case "$before"
+
+before=$failures
+fresh_case public-healthz-timeout
+touch "$dir/state/public-down"
+clock_step=30 ready_polls=1
+run_setup --yes
+expect_status 0
+expect_line "! Funnel: public_healthz_timeout_s=120, https://$host:8443/healthz didn't answer in that time. next: a first Funnel certificate and DNS can take a few minutes, open the link once curl -sf https://$host:8443/healthz prints ok"
+expect_no "✓ Funnel answers" "$dir/out"
+[ "$(tail -n 1 "$dir/out")" = "$link" ] || fail "last line is: $(tail -n 1 "$dir/out")"
 finish_case "$before"
 
 if [ "$failures" -gt 0 ]; then

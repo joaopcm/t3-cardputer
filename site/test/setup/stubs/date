@@ -1,5 +1,5 @@
 #!/bin/sh
 [ "$*" = +%s ] || { echo "stub date: unexpected $*" >&2; exit 2; }
-now=$(($(cat "$STUB_STATE/clock" 2>/dev/null || echo 1000) + 1))
+now=$(($(cat "$STUB_STATE/clock" 2>/dev/null || echo 1000) + ${STUB_CLOCK_STEP:-1}))
 echo "$now" >"$STUB_STATE/clock"
 echo "$now"

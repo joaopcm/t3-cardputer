@@ -19,6 +19,10 @@ T3_PROBE_TIMEOUT_S=5
 HEALTHZ_TIMEOUT_S=30
 # receipt: /healthz answered in 3.5 ms worst over 200 loopback probes, so 0.1 s per probe only trips a hung relay
 HEALTHZ_PROBE_TIMEOUT_S=0.1
+# receipt: unmeasured, a first Funnel certificate and public DNS were never timed here; 120 s is sized as a tripwire past a slow first issue, and a timeout only warns
+PUBLIC_HEALTHZ_TIMEOUT_S=120
+# receipt: unmeasured, tailscaled can fetch the first certificate during the TLS handshake, so 10 s per probe leaves room for that while the deadline above bounds the loop
+PUBLIC_HEALTHZ_PROBE_TIMEOUT_S=10
 # receipt: the bundle is 1.6 MB and the other assets are smaller, so a working link moves bytes every second; 60 s under 1 B/s only trips a stalled download
 DOWNLOAD_STALL_S=60
 
@@ -99,9 +103,9 @@ const commands = {
     process.stdout.write(JSON.stringify({ mcp, internal }));
   },
   "ts-state": () => console.log(JSON.parse(stdin()).BackendState || "unknown"),
-  "ts-funnel-allowed": () => {
+  "ts-cap": (cap) => {
     const self = JSON.parse(stdin()).Self || {};
-    process.exit("funnel" in (self.CapMap || {}) || (self.Capabilities || []).includes("funnel") ? 0 : 1);
+    process.exit(cap in (self.CapMap || {}) || (self.Capabilities || []).includes(cap) ? 0 : 1);
   },
   "funnel-url": (funnelPort, port) => {
     const status = JSON.parse(stdin() || "{}");
@@ -314,7 +318,7 @@ Dry run, nothing written. setup.sh would:
   ask about the canary, unless $RELAY_JSON already has canary.enabled
   turn on Tailscale Funnel on port $FUNNEL_PORT for 127.0.0.1:$port, after asking
   install and start the $service, then wait for /healthz
-  print the install link
+  check that the Funnel URL answers /healthz, then print the install link
 EOF
 }
 
@@ -473,10 +477,17 @@ set_funnel() {
     if ! ask Funnel "Turn on Tailscale Funnel on port $FUNNEL_PORT so the ADV can reach the relay?" y; then
       fail "Funnel" "the ADV reaches the relay only through Funnel" "tailscale funnel --bg --https=$FUNNEL_PORT $port, then run setup.sh again"
     fi
-    if ! printf '%s' "$ts_status" | tool ts-funnel-allowed; then
+    if ! printf '%s' "$ts_status" | tool ts-cap https; then
+      fail "Funnel" "HTTPS certificates are off on your tailnet, Funnel needs them" "turn on HTTPS at https://login.tailscale.com/admin/dns, then run setup.sh again"
+    fi
+    if ! printf '%s' "$ts_status" | tool ts-cap funnel; then
       fail "Funnel" "this machine isn't allowed to use Funnel" "add the funnel node attribute in your tailnet policy, https://tailscale.com/kb/1223/funnel"
     fi
-    if ! "$TAILSCALE" funnel --bg --https="$FUNNEL_PORT" "$port" </dev/null >/dev/null; then
+    if ! funnel_out=$("$TAILSCALE" funnel --bg --https="$FUNNEL_PORT" "$port" </dev/null 2>&1); then
+      printf '%s\n' "$funnel_out" >&2
+      if printf '%s' "$funnel_out" | grep -qi 'access denied'; then
+        fail "Funnel" "tailscale funnel needs root or the Tailscale operator" "sudo tailscale set --operator=\$USER, then run setup.sh again"
+      fi
       fail "Funnel" "tailscale funnel failed, its error is above" "tailscale funnel --bg --https=$FUNNEL_PORT $port"
     fi
     url_status=0
@@ -559,6 +570,18 @@ on_battery_power() {
   fi
 }
 
+check_public() {
+  deadline=$(($(date +%s) + PUBLIC_HEALTHZ_TIMEOUT_S))
+  until curl -sf -o /dev/null --max-time "$PUBLIC_HEALTHZ_PROBE_TIMEOUT_S" "$url/healthz" </dev/null; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      printf '! Funnel: public_healthz_timeout_s=%s, %s/healthz didn'"'"'t answer in that time. next: a first Funnel certificate and DNS can take a few minutes, open the link once curl -sf %s/healthz prints ok\n' "$PUBLIC_HEALTHZ_TIMEOUT_S" "$url" "$url"
+      return
+    fi
+    sleep 1
+  done
+  ok "Funnel answers at /healthz"
+}
+
 print_link() {
   if ! link_out=$(relay install-link); then
     fail "Install link" "t3-cardputer-relay install-link failed, its error is above" "t3-cardputer-relay install-link"
@@ -612,6 +635,7 @@ main() {
     ok "Relay updated to $VERSION"
     return
   fi
+  check_public
   print_link
 }
 
