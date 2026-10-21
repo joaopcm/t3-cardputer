@@ -107,13 +107,17 @@ public:
 
     t3::App &app() { return app_; }
 
-    void boot(bool hasWifi, bool hasToken, const std::optional<t3::RelayUrl> &relay)
+    void boot(bool hasWifi, bool hasToken, const std::optional<t3::RelayUrl> &relay, std::optional<std::string> pairCode)
     {
         linked_ = relay.has_value();
         if (relay) {
             app_.setRelayUrl(relay->https);
         }
         feed(app_.onBoot(hasWifi, hasToken, linked_));
+        pairCode_ = std::move(pairCode);
+        if (hasToken) {
+            startAutoPair();
+        }
         if (hasWifi && linked_) {
             wifi_start(now_ms());
         }
@@ -226,6 +230,17 @@ private:
             dirty_ = true;
         }
         apply(link_.onTick(now_ms()));
+    }
+
+    void startAutoPair()
+    {
+        if (!pairCode_) {
+            return;
+        }
+        std::string code = std::move(*pairCode_);
+        pairCode_.reset();
+        ESP_LOGI(TAG, "pair: provisioned code found");
+        feed(app_.startAutoPair(std::move(code)));
     }
 
     void apply(const t3::Link::Out &out)
@@ -382,6 +397,9 @@ private:
         case WifiEvent::Kind::Up:
             log_heap("wifi up");
             apply(link_.onWifi(true, now_ms()));
+            if (link_.state() == t3::Link::State::NeedsPair) {
+                startAutoPair();
+            }
             return;
         case WifiEvent::Kind::Down:
             apply(link_.onWifi(false, now_ms()));
@@ -413,7 +431,7 @@ private:
     {
         if (!done.error.empty()) {
             ESP_LOGW(TAG, "%s", done.error.c_str());
-            feed(app_.onPairResult(std::nullopt, done.error));
+            feed(app_.onPairResult(std::nullopt, done.error, 0));
             return;
         }
         t3::PairReply reply = t3::parsePairReply(done.status, done.body);
@@ -421,7 +439,7 @@ private:
         if (!reply.token) {
             ESP_LOGW(TAG, "%s", reply.error.c_str());
         }
-        feed(app_.onPairResult(std::move(reply.token), reply.error));
+        feed(app_.onPairResult(std::move(reply.token), reply.error, done.status));
     }
 
     void feed(const t3::App::Out &out)
@@ -445,12 +463,18 @@ private:
             wifi_join(out.joinWifi->ssid, out.joinWifi->password, now_ms());
         }
         if (const std::optional<std::string> refused = out.pair ? link_.pairRefused() : std::nullopt) {
-            feed(app_.onPairResult(std::nullopt, *refused));
+            feed(app_.onPairResult(std::nullopt, *refused, 0));
         } else if (out.pair) {
             const std::optional<std::string> body = t3::encodePair(out.pair->code, out.pair->name);
             const std::optional<std::string> error = body ? pair_start(*body) : std::optional<std::string>("out of memory: pair body not built");
             if (error) {
-                feed(app_.onPairResult(std::nullopt, *error));
+                feed(app_.onPairResult(std::nullopt, *error, 0));
+            }
+        }
+        if (out.pairCodeSpent) {
+            if (const std::optional<std::string> error = settings::clearPendingPairCode()) {
+                ESP_LOGE(TAG, "%s", error->c_str());
+                app_.onDeviceError(*error + ", spent pair code still saved");
             }
         }
         if (out.storeToken) {
@@ -491,6 +515,7 @@ private:
     t3::App app_;
     t3::Link link_;
     settings::WifiCred joining_;
+    std::optional<std::string> pairCode_;
     std::map<std::string, size_t> largestFrame_;
     int16_t chunk_[kMicChunkSamples];
     VoiceStats voice_;
@@ -637,7 +662,7 @@ extern "C" void app_main(void)
     const std::optional<std::string> token = settings::token();
     static Device device(kCaps, (static_cast<uint64_t>(esp_random()) << 32) | esp_random(), token.value_or(""));
     const settings::SavedWifi saved = settings::wifi();
-    device.boot(!saved.list.empty(), token.has_value(), relay.url);
+    device.boot(!saved.list.empty(), token.has_value(), relay.url, settings::pendingPairCode());
     const std::optional<std::string> relayChanged =
         settings::takeRelayChanged() ? std::optional<std::string>("relay changed: token cleared, pair again") : std::nullopt;
     std::string faults;

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <utility>
 #include <variant>
 
 #include "screens/screen.h"
@@ -33,6 +34,7 @@ constexpr std::string_view kTypeSsidRow = "+ type a network name";
 // receipt: docs/protocol.md "Pairing": code is the 8 characters as shown
 constexpr size_t kPairCodeLen = 8;
 constexpr std::string_view kPairName = "cardputer";
+constexpr std::string_view kAutoPairCodeRefused = "pair: code expired or used, run t3-cardputer-relay install-link and open the new link";
 constexpr std::string_view kHttps = "https://";
 
 Key typed(Key key)
@@ -57,6 +59,12 @@ Color netColor(const WifiNet &net)
 std::string charCount(size_t count)
 {
     return std::to_string(count) + (count == 1 ? " char" : " chars");
+}
+
+// why: docs/protocol.md "Pairing", the relay answers 401 for a code that is unknown, expired or used, and a host with no /v1/pair answers 404
+bool codeRefused(int httpStatus)
+{
+    return httpStatus == 401 || httpStatus == 404;
 }
 
 std::string relayHost(std::string_view https)
@@ -101,6 +109,7 @@ App::Out App::onAuthRejected()
     inform(notes, color);
     hasToken_ = false;
     pairing_ = false;
+    autoPairing_ = false;
     pairCode_.clear();
     pairNote_ = "re-pair needed: relay rejected token";
     screen_ = Screen::SetupPair;
@@ -177,17 +186,38 @@ App::Out App::onWifiResult(bool ok, std::string_view why)
     return {};
 }
 
-App::Out App::onPairResult(std::optional<std::string> token, std::string_view why)
+App::Out App::startAutoPair(std::string code)
+{
+    Out out;
+    if (hasToken_ || pairing_) {
+        out.pairCodeSpent = true;
+        inform(hasToken_ ? "provisioned pair code not used: already paired" : "provisioned pair code not used: a typed code is pairing", Color::Warn);
+        return out;
+    }
+    pairing_ = true;
+    autoPairing_ = true;
+    screen_ = Screen::SetupPair;
+    out.pair = PairRequest{std::move(code), std::string(kPairName)};
+    return out;
+}
+
+App::Out App::onPairResult(std::optional<std::string> token, std::string_view why, int httpStatus)
 {
     if (!pairing_) {
         return {};
     }
+    Out out;
+    out.pairCodeSpent = true;
+    const bool automatic = std::exchange(autoPairing_, false);
     if (!token || token->empty()) {
         pairing_ = false;
-        inform(why.empty() ? "pairing failed" : std::string(why));
-        return {};
+        if (automatic && codeRefused(httpStatus)) {
+            inform(std::string(kAutoPairCodeRefused));
+        } else {
+            inform(why.empty() ? "pairing failed" : std::string(why));
+        }
+        return out;
     }
-    Out out;
     out.storeToken = std::move(*token);
     return out;
 }
@@ -506,7 +536,7 @@ void App::drawPair(Grid &grid) const
     grid.put(kInputLabelRow, 0, "code " + std::to_string(pairCode_.size()) + "/" + std::to_string(kPairCodeLen), Color::Dim);
     grid.put(kInputRow, 0, inputLine(pairCode_));
     if (pairing_) {
-        grid.put(kPairStatusRow, 0, "pairing...", Color::Ok);
+        grid.put(kPairStatusRow, 0, autoPairing_ ? "pairing with relay..." : "pairing...", Color::Ok);
     }
     drawHint(grid, "Enter pair  Esc back");
     drawSetupBar(grid, "pair 4/4");

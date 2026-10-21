@@ -155,11 +155,12 @@ After a talk-up whose tail could not be sent, the stats line reads `voice cut sh
 - TLS start is gated (`kTlsHeapBytes` = 60398 in `firmware/main/transport.cpp`): the control task waits up to one link backoff step (500 ms, 10 checks) for a largest block of 60398 bytes, then connects anyway. If that handshake fails, the close reason reads `tls_heap=60398, largest block N`. In the 12 connects after a stall the gate never had to wait: the stalled client's stop already ran first, so the heap was free by then. The main task's `connect` log line comes earlier (at the link's decision) and read 59392 in the same cycles.
 - Connects after a plain drop always had 79872 (1.32x). The low readings (62464, 63488) were all connects after a drop mid-recording. There, the old socket's TLS session and up to 16 KB of unacknowledged audio are still being freed when the 500 ms backoff reconnects, so free heap at connect is about 145 KB instead of about 184 KB.
 - USB provisioning (`serial_port.cpp`, task 2 of the distribution plan) re-soak, debug build, same ADV and relay, 16 drops mid-recording on the new-task prompt (talk-down, 2 s, `\x02DROP`, talk-up): connect and TLS start never went under 71680 (1.19x the line), live never under 69632. Commit 21f4b30 under the same procedure: 73728 in 12 of 12. The first provisioning build created the debug key queue before the driver's ring buffers, and that order alone left 55296 in 12 of 12 (`tls_heap=60398, largest block 55296, connecting anyway`, still went live). Free heap was the same in both orders, so the heap at reconnect is placement-sensitive: re-soak after any change to what boots before the link.
+- Auto-pair from a provisioned code (task 3 of the distribution plan) reads the pending code from NVS before the link starts. Re-soak, debug build, same ADV and relay, 8 drops mid-recording on a thread (talk-down, 2 s, `\x02DROP`, talk-up): connect and TLS start never went under 75776 (1.25x the line), live never under 75776. Right after the auto-pair itself, connect read 83968.
 
 ## stacks
 
 | task | free (min) of size |
 | --- | --- |
-| main | 4240 of 8192 at live, device check 2026-10-21 at a4f6842 (3952 used, 2.07x headroom); 4768 after recordings and 5024 before the first in Task 10 |
+| main | 4240 of 8192 at live, device check 2026-10-21 at a4f6842 (3952 used, 2.07x headroom); 4768 after recordings and 5024 before the first in Task 10; 3040 after an auto-pair from a provisioned code (5152 used, 1.59x), 4576 on a boot that did not pair |
 | websocket | 2544 of 6144 |
 | websocket control | 1804 of 4096 |

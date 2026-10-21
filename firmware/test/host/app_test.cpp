@@ -1572,3 +1572,97 @@ TEST_CASE("a link drop mid-recording shows both the lost voice and the unconfirm
     CHECK(contains(shown(app), "voice: connection lost"));
     CHECK(contains(shown(app), "reply to layout engine not confirmed, resending on reconnect"));
 }
+
+namespace {
+
+App provisionedBoot(bool hasToken)
+{
+    App app(kCaps, 7);
+    app.onBoot(true, hasToken, true);
+    return app;
+}
+
+}
+
+TEST_CASE("a provisioned code pairs by itself once, named cardputer")
+{
+    App app = provisionedBoot(false);
+    const App::Out out = app.startAutoPair("7KQ2M9XA");
+    REQUIRE(out.pair.has_value());
+    CHECK(out.pair->code == "7KQ2M9XA");
+    CHECK(out.pair->name == "cardputer");
+    CHECK_FALSE(out.pairCodeSpent);
+    CHECK(app.screenName() == "setup_pair");
+    CHECK(contains(allText(app), "pairing with relay..."));
+    for (char c : std::string("7KQ2M9XA")) {
+        CHECK_FALSE(press(app, ch(c)).pair.has_value());
+    }
+    CHECK_FALSE(press(app, named(KeyName::Enter)).pair.has_value());
+}
+
+TEST_CASE("a provisioned code that pairs stores the token, is spent and leaves setup")
+{
+    App app = provisionedBoot(false);
+    app.startAutoPair("7KQ2M9XA");
+    const App::Out out = app.onPairResult("tok_abc", "", 200);
+    REQUIRE(out.storeToken.has_value());
+    CHECK(*out.storeToken == "tok_abc");
+    CHECK(out.pairCodeSpent);
+    CHECK(app.onTokenStored(true, "").reconnect);
+    CHECK(app.screenName() == "connecting");
+    pushFrame(app, kWeaverHome);
+    CHECK(app.screenName() == "home");
+}
+
+TEST_CASE("a provisioned code the relay refuses says how to get a new link and never retries")
+{
+    for (const int status : {401, 404}) {
+        CAPTURE(status);
+        App app = provisionedBoot(false);
+        app.startAutoPair("7KQ2M9XA");
+        const App::Out out = app.onPairResult(std::nullopt, "pairing failed (" + std::to_string(status) + "): pairing failed", status);
+        CHECK(out.pairCodeSpent);
+        CHECK_FALSE(out.pair.has_value());
+        CHECK(app.screenName() == "setup_pair");
+        CHECK(row(app, 0).rfind("pair: code expired or used,", 0) == 0);
+        CHECK(contains(shown(app), "pair: code expired or used, run t3-cardputer-relay install-link and open the new link"));
+        CHECK_FALSE(contains(allText(app), "pairing with relay"));
+        CHECK_FALSE(press(app, named(KeyName::Enter)).pair.has_value());
+    }
+}
+
+TEST_CASE("a provisioned code lost to the network names the error and is not retried")
+{
+    App app = provisionedBoot(false);
+    app.startAutoPair("7KQ2M9XA");
+    const App::Out out = app.onPairResult(std::nullopt, "pair: ESP_ERR_HTTP_CONNECT", 0);
+    CHECK(out.pairCodeSpent);
+    CHECK_FALSE(out.pair.has_value());
+    CHECK(app.screenName() == "setup_pair");
+    CHECK(row(app, 0).rfind("pair: ESP_ERR_HTTP_CONNECT", 0) == 0);
+    CHECK_FALSE(app.onLinkStatus("re-pair needed", tick()).pair.has_value());
+    CHECK_FALSE(app.onWake().pair.has_value());
+    CHECK_FALSE(press(app, named(KeyName::Enter)).pair.has_value());
+}
+
+TEST_CASE("a provisioned code on a paired device is spent without pairing")
+{
+    App app = provisionedBoot(true);
+    const App::Out out = app.startAutoPair("7KQ2M9XA");
+    CHECK_FALSE(out.pair.has_value());
+    CHECK(out.pairCodeSpent);
+    CHECK(app.screenName() == "connecting");
+    CHECK(contains(shown(app), "provisioned pair code not used: already paired"));
+}
+
+TEST_CASE("a provisioned code is spent, not sent, while a typed code is pairing")
+{
+    App app = provisionedBoot(false);
+    type(app, "7KQ2M9XA");
+    REQUIRE(press(app, named(KeyName::Enter)).pair.has_value());
+    const App::Out out = app.startAutoPair("ZZZZ9999");
+    CHECK_FALSE(out.pair.has_value());
+    CHECK(out.pairCodeSpent);
+    CHECK(app.onPairResult(std::nullopt, "pairing failed (401): pairing failed", 401).pairCodeSpent);
+    CHECK(row(app, 0).rfind("pairing failed (401)", 0) == 0);
+}

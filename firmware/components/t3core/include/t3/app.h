@@ -54,6 +54,7 @@ public:
         std::optional<std::string> storeToken;
         std::optional<std::string> relayUrl;
         bool reconnect = false;
+        bool pairCodeSpent = false;
     };
 
     App(const HelloCaps &caps, uint64_t idSeed);
@@ -72,7 +73,8 @@ public:
     void onSendFailed(std::string_view frame, std::string_view why, uint32_t nowMs);
     void onWifiScan(std::vector<WifiNet> nets);
     Out onWifiResult(bool ok, std::string_view why);
-    Out onPairResult(std::optional<std::string> token, std::string_view why);
+    Out startAutoPair(std::string code);
+    Out onPairResult(std::optional<std::string> token, std::string_view why, int httpStatus);
     Out onTokenStored(bool ok, std::string_view why);
     void onWifiForgotten(std::string_view ssid, bool ok, std::string_view why);
     void draw(Grid &grid) const;
@@ -243,6 +245,7 @@ private:
     std::string pairCode_;
     std::string pairNote_;
     bool pairing_ = false;
+    bool autoPairing_ = false;
     bool hasRelay_ = false;
     std::string relayUrl_;
     std::string relayText_;

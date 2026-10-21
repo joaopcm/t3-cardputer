@@ -535,7 +535,7 @@ TEST_CASE("a paired token is handed out to store, and only a stored token closes
     App app = onPair();
     type(app, "7KQ2M9XA");
     press(app, named(KeyName::Enter));
-    const App::Out out = app.onPairResult("tok_abc", "");
+    const App::Out out = app.onPairResult("tok_abc", "", 200);
     REQUIRE(out.storeToken.has_value());
     CHECK(*out.storeToken == "tok_abc");
     CHECK_FALSE(out.reconnect);
@@ -552,7 +552,7 @@ TEST_CASE("a token that was not written says why, never says paired and asks for
     App app = onPair();
     type(app, "7KQ2M9XA");
     press(app, named(KeyName::Enter));
-    app.onPairResult("tok_abc", "");
+    app.onPairResult("tok_abc", "", 200);
     const App::Out out = app.onTokenStored(false, "nvs: token not saved: ESP_ERR_NVS_NOT_ENOUGH_SPACE");
     CHECK_FALSE(out.reconnect);
     CHECK(app.screenName() == "setup_pair");
@@ -577,10 +577,10 @@ TEST_CASE("a failed pairing says why, keeps the code and lets the user retry")
     App app = onPair();
     type(app, "7KQ2M9XA");
     press(app, named(KeyName::Enter));
-    const App::Out out = app.onPairResult(std::nullopt, "pairing failed");
+    const App::Out out = app.onPairResult(std::nullopt, "pairing failed (401): pairing failed", 401);
     CHECK_FALSE(out.storeToken.has_value());
     CHECK(app.screenName() == "setup_pair");
-    CHECK(rows(app)[0].rfind("pairing failed", 0) == 0);
+    CHECK(rows(app)[0].rfind("pairing failed (401): pairing failed", 0) == 0);
     CHECK(contains(allText(app), "> 7KQ2M9XA_"));
     CHECK(press(app, named(KeyName::Enter)).pair.has_value());
 }
@@ -588,7 +588,7 @@ TEST_CASE("a failed pairing says why, keeps the code and lets the user retry")
 TEST_CASE("a pair result nobody asked for is ignored")
 {
     App app = onPair();
-    const App::Out out = app.onPairResult("tok_abc", "");
+    const App::Out out = app.onPairResult("tok_abc", "", 200);
     CHECK_FALSE(out.storeToken.has_value());
     CHECK(app.screenName() == "setup_pair");
 }
