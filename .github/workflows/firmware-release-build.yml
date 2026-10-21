@@ -1,0 +1,29 @@
+name: firmware-release-build
+
+on:
+  pull_request:
+    paths:
+      - firmware/**
+      - .github/workflows/firmware-release-build.yml
+  push:
+    branches: [main]
+    paths:
+      - firmware/**
+      - .github/workflows/firmware-release-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.4.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: release build and .bss tripwire
+        shell: bash
+        env:
+          T3_VERSION: 0.0.0-ci
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          firmware/scripts/release.sh

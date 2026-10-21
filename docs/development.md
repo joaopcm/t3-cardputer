@@ -129,6 +129,8 @@ CI (`.github/workflows/ci.yml`) runs the relay's typecheck, tests and build, the
 
 It has to print nothing. Use placeholders like `<machine>.<tailnet>.ts.net` for hosts in docs, never a real one.
 
+A pull request or push that touches `firmware/` also runs `.github/workflows/firmware-release-build.yml`. It builds the release firmware in the `espressif/idf:v5.4.2` container, so the `.bss` tripwire in `release.sh` fires before merge, not at release time.
+
 `relay/test/docs-troubleshooting.test.ts` checks that every first-column entry in `docs/troubleshooting.md` is text the firmware, relay or site really prints, and that every relative link in `README.md` and `docs/*.md` points at a file. Change an on-screen message and the test tells you which row to update.
 
 ## Releases
