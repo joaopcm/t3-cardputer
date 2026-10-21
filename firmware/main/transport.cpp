@@ -80,6 +80,7 @@ bool skipping = false;
 size_t filled = 0;
 uint64_t frameStart = 0;
 
+std::atomic<uint64_t> closeKeptAside{0};
 std::atomic<uint32_t> droppedFrames{0};
 std::atomic<uint32_t> droppedBytes{0};
 std::atomic<Drop> dropWhy{Drop::None};
@@ -103,6 +104,17 @@ bool post(Item &item, uint32_t gen)
     }
     xTaskNotifyGive(mainTask);
     return true;
+}
+
+void postOrKeepClose(Item &item, uint32_t gen)
+{
+    if (post(item, gen)) {
+        return;
+    }
+    // why: a close lost to a full inbox would leave the link live on a dead socket forever, so it waits beside the queue until the queue drains
+    ESP_LOGE(TAG, "rx_inbox_depth=%u, close %d kept aside, queue full", static_cast<unsigned>(kInboxDepth), static_cast<int>(item.code));
+    closeKeptAside = (static_cast<uint64_t>(gen) << 32) | static_cast<uint32_t>(item.code);
+    xTaskNotifyGive(mainTask);
 }
 
 void abandonFill()
@@ -149,9 +161,7 @@ void postClose(int code, std::string_view reason)
     const size_t bytes = std::min(reason.size(), kReasonMax);
     std::memcpy(item.reason, reason.data(), bytes);
     item.bytes = static_cast<uint32_t>(bytes);
-    if (!post(item, taskGen)) {
-        ESP_LOGE(TAG, "rx_inbox_depth=%u, close %d dropped, queue full", static_cast<unsigned>(kInboxDepth), code);
-    }
+    postOrKeepClose(item, taskGen);
 }
 
 void onText(const esp_websocket_event_data_t &event)
@@ -277,7 +287,7 @@ void controlLoop(void *)
                     constexpr std::string_view kWhy = "websocket start failed";
                     std::memcpy(item.reason, kWhy.data(), kWhy.size());
                     item.bytes = kWhy.size();
-                    post(item, wanted);
+                    postOrKeepClose(item, wanted);
                 }
             }
             const UBaseType_t stackFree = uxTaskGetStackHighWaterMark(nullptr);
@@ -482,6 +492,12 @@ std::optional<TransportEvent> transport_poll()
             closeReason = std::string(item.reason, item.bytes);
             return TransportEvent{TransportEvent::Kind::Close, item.code, closeReason};
         }
+    }
+    const uint64_t kept = closeKeptAside.exchange(0);
+    if (kept != 0 && static_cast<uint32_t>(kept >> 32) == generation.load()) {
+        const int32_t code = static_cast<int32_t>(static_cast<uint32_t>(kept));
+        closeReason = "rx_inbox_depth=" + std::to_string(kInboxDepth) + ", close " + std::to_string(code) + " needed one more slot";
+        return TransportEvent{TransportEvent::Kind::Close, code, closeReason};
     }
     return std::nullopt;
 }
