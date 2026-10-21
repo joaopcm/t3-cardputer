@@ -61,15 +61,18 @@ Notes:
 | app image | 385072 (0x5e030) | 358672 (0x57910) | 26400 bytes of flash |
 | debug task stack used | 2340 of 4096 | - | |
 
-Since USB provisioning (`firmware/main/serial_port.cpp`) the driver, both ring buffers and the 4096-byte task run in every build, so the "off" column above no longer describes a release. Measured on the ADV, release builds (`firmware/scripts/release.sh`, both debug Kconfigs off), commit 21f4b30 against the same commit plus the provisioning channel (`t3: boot|ready` log lines):
+Since USB provisioning (`firmware/main/serial_port.cpp`) the driver, both ring buffers and the 4096-byte task run in every build, so the "off" column above no longer describes a release. Measured on the ADV, release builds (`firmware/scripts/release.sh`, both debug Kconfigs off), commit 21f4b30 against the provisioning channel after its fix round (`t3: boot|ready|connect|live` log lines):
 
-| what | 21f4b30 release | with provisioning | cost |
+| what | 21f4b30 release | with provisioning | note |
 | --- | --- | --- | --- |
-| free heap at boot (app_main entry) | 310324 | 304164 | 6160 bytes of static RAM, 2048 of them the two line buffers |
-| free heap at `ready` | 238028 | 225508 | 12520 bytes total |
-| heap taken by `serial_port_start()` itself | 0 | 12520 - 6160 = 6360 | 4096 task stack, 256 rx + 1024 tx ring buffers, driver |
-| largest free block at `ready` | 172032 | 163840 | 8192 bytes |
-| app image | 1294128 | 1311056 | 16928 bytes of flash |
+| free heap at boot (app_main entry) | 310324 | 305188 | 5136 bytes of static RAM, 1024 of them the line buffer |
+| free heap at `ready`, relay set | | 192500, largest block 129024 | 5 boots, same every time |
+| largest block at connect, relay set | | 116736 at least, 129024 in 4 of 5 boots | `t3: connect` and `tls start after 0 ms heap wait` |
+| largest block at live | | 79872 at least, 83968 at most | 5 boots |
+| app image | 1294128 | 1311456 | 17328 bytes of flash |
+| serial task stack | | 2376 used of 4096 (1720 free at the worst point, after an err reply and its log line) | `serial: task_stack_free_min` |
+
+The worst connect (after a drop mid-recording) needs the debug channel to reproduce, so it is in `2026-10-21-firmware-voice.md` "heap". A release carries less static RAM than that debug build, not more.
 
 A host that writes to the 21f4b30 release gets its writes stuck (nothing reads the port). With provisioning, `\x02T3INFO` and `\x02T3PROV` lines get their replies and `\x02HEAP` or any other line gets nothing.
 

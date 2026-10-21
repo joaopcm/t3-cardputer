@@ -39,6 +39,13 @@ std::string_view trimmed(std::string_view text)
     return text;
 }
 
+bool startsWithNoCase(std::string_view text, std::string_view prefix)
+{
+    return text.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), text.begin(), [](char a, char b) {
+               return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b));
+           });
+}
+
 bool allHex(std::string_view text)
 {
     return std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
@@ -197,6 +204,30 @@ std::string encodeInfo(const DeviceInfo &info)
     out += std::string(",\"relaySet\":") + (info.relaySet ? "true" : "false");
     out += std::string(",\"paired\":") + (info.paired ? "true" : "false");
     out += ",\"wifiSaved\":" + std::to_string(info.wifiSaved) + "}";
+    return out;
+}
+
+SerialLine classifySerialLine(std::string_view line)
+{
+    constexpr std::string_view kProvision = "T3PROV";
+    constexpr std::string_view kProvisionFrame = "T3PROV ";
+    constexpr std::string_view kInfo = "T3INFO";
+    if (line.substr(0, kProvisionFrame.size()) == kProvisionFrame) {
+        return SerialLine::Provision;
+    }
+    if (line == kInfo) {
+        return SerialLine::Info;
+    }
+    if (startsWithNoCase(line, kProvision) || startsWithNoCase(line, kInfo)) {
+        return SerialLine::Misframed;
+    }
+    return SerialLine::Other;
+}
+
+std::string printableLine(std::string_view line)
+{
+    std::string out(line);
+    std::replace_if(out.begin(), out.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; }, '?');
     return out;
 }
 

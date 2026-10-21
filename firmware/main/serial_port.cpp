@@ -19,7 +19,7 @@ constexpr char TAG[] = "serial";
 
 constexpr char kStx = 0x02;
 constexpr std::string_view kProvisionPrefix = "T3PROV ";
-constexpr std::string_view kInfoLine = "T3INFO";
+constexpr std::string_view kMisframedReply = "T3PROV err provision: frames are \"T3PROV <json>\" or \"T3INFO\"";
 
 // receipts: docs/receipts/2026-10-21-firmware-baseline.md, section "grid, sprite and debug serial"
 constexpr uint32_t kRxBufferBytes = 256;
@@ -29,44 +29,50 @@ constexpr UBaseType_t kTaskPriority = 3;
 constexpr TickType_t kReplyDrainTicks = pdMS_TO_TICKS(100);
 
 char lineBytes[t3::kProvisionLineMax];
-char provisionJson[t3::kProvisionLineMax];
 size_t provisionSize = 0;
 std::atomic<bool> provisionReady{false};
 std::atomic<bool> infoRequested{false};
+TaskHandle_t serialTaskHandle;
 
-bool startsWith(std::string_view text, std::string_view prefix)
+void logStack()
 {
-    return text.substr(0, prefix.size()) == prefix;
+    ESP_LOGI(TAG, "task_stack_free_min=%u of %u", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+             static_cast<unsigned>(kSerialTaskStackBytes));
 }
 
-void queueProvision(std::string_view json)
+void handOver(size_t len)
 {
-    if (provisionReady.load(std::memory_order_acquire)) {
-        serial_port_reply("T3PROV err provision: busy with the last frame, send again");
-        return;
-    }
-    std::memcpy(provisionJson, json.data(), json.size());
-    provisionSize = json.size();
+    provisionSize = len;
     provisionReady.store(true, std::memory_order_release);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 void route(std::string_view text)
 {
-    if (startsWith(text, kProvisionPrefix)) {
-        queueProvision(text.substr(kProvisionPrefix.size()));
-    } else if (text == kInfoLine) {
+    switch (t3::classifySerialLine(text)) {
+    case t3::SerialLine::Provision:
+        handOver(text.size());
+        break;
+    case t3::SerialLine::Info:
         infoRequested = true;
-    } else {
+        break;
+    case t3::SerialLine::Misframed:
+        serial_port_reply(kMisframedReply);
+        break;
+    case t3::SerialLine::Other:
 #ifdef CONFIG_T3_DEBUG_SERIAL
         debug_serial_handle(text);
 #endif
+        return;
     }
+    logStack();
 }
 
 void overflowed(std::string_view head, size_t needed)
 {
-    if (startsWith(head, kProvisionPrefix)) {
+    if (t3::classifySerialLine(head) != t3::SerialLine::Other) {
         serial_port_reply("T3PROV err provision_line_max=" + std::to_string(t3::kProvisionLineMax) + ", line needed " + std::to_string(needed));
+        logStack();
         return;
     }
 #ifdef CONFIG_T3_DEBUG_SERIAL
@@ -109,9 +115,6 @@ void serialTask(void *)
 
 bool serial_port_start()
 {
-    if (!debug_serial_start()) {
-        return false;
-    }
     usb_serial_jtag_driver_config_t config = {.tx_buffer_size = kTxBufferBytes, .rx_buffer_size = kRxBufferBytes};
     if (usb_serial_jtag_driver_install(&config) != ESP_OK) {
         ESP_LOGE(TAG, "usb_serial_jtag driver install failed, rx=%u tx=%u", static_cast<unsigned>(kRxBufferBytes),
@@ -121,7 +124,11 @@ bool serial_port_start()
     usb_serial_jtag_vfs_use_driver();
     // why: the console default turns \n into \r\n, and docs/protocol.md "USB provisioning" frames end in a bare \n
     usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_LF);
-    if (xTaskCreate(serialTask, "serial_port", kSerialTaskStackBytes, nullptr, kTaskPriority, nullptr) != pdPASS) {
+    // why: the key queue goes after the driver rings; queue first left the reconnect after a voice drop a 55296 largest block, under the 60398 TLS line (docs/receipts/2026-10-21-firmware-voice.md "heap")
+    if (!debug_serial_start()) {
+        return false;
+    }
+    if (xTaskCreate(serialTask, "serial_port", kSerialTaskStackBytes, nullptr, kTaskPriority, &serialTaskHandle) != pdPASS) {
         ESP_LOGE(TAG, "serial task alloc failed, stack=%u", static_cast<unsigned>(kSerialTaskStackBytes));
         return false;
     }
@@ -133,9 +140,9 @@ std::optional<std::string> serial_port_poll_provision()
     if (!provisionReady.load(std::memory_order_acquire)) {
         return std::nullopt;
     }
-    std::string json(provisionJson, provisionSize);
-    std::memset(provisionJson, 0, provisionSize);
+    std::string json(lineBytes + kProvisionPrefix.size(), provisionSize - kProvisionPrefix.size());
     provisionReady.store(false, std::memory_order_release);
+    xTaskNotifyGive(serialTaskHandle);
     return json;
 }
 
@@ -146,11 +153,7 @@ bool serial_port_poll_info()
 
 void serial_port_reply(std::string_view line)
 {
-    std::string out;
-    out.reserve(line.size() + 2);
-    out += kStx;
-    out += line;
-    out += '\n';
+    const std::string out = kStx + t3::printableLine(line) + '\n';
     std::fwrite(out.data(), 1, out.size(), stdout);
     std::fflush(stdout);
     usb_serial_jtag_wait_tx_done(kReplyDrainTicks);

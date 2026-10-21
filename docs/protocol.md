@@ -493,6 +493,8 @@ device \x02T3PROV err <reason>\n
 - `wifi.ssid` is 1-32 bytes, kept byte-exact (UTF-8 and spaces are fine). `wifi.password` is 8-63 chars, a 64 hex digit raw PSK, or empty for an open network, also byte-exact. Saving a known SSID replaces its password.
 - `relay` is trimmed and normalized like the relay URL typed on the device (`https://` or `wss://` or no scheme, host and port only).
 - `code` is trimmed and uppercased, then must be 8 letters or digits. The device pairs with it on the next boot.
+- A line that starts with `T3PROV` or `T3INFO` in any case but is neither frame gets `err provision: frames are "T3PROV <json>" or "T3INFO"`.
+- Replies never carry control bytes: anything below 0x20 and 0x7f goes out as `?`, so an echoed key can't fake a second reply line.
 - The whole line after `\x02` is at most 1024 bytes (`provision_line_max`). A longer one gets `err provision_line_max=1024, line needed <n>`.
 - The device writes wifi, then relay, then code. On the first failure it stops and answers `err <reason>`; nothing after the failure is written. A relay URL different from a stored one wipes the device token, and the device says so on screen.
 - After `ok` the device restarts within 500 ms.

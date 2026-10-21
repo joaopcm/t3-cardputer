@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-// receipt: docs/receipts/2026-10-21-firmware-baseline.md "grid, sprite and debug serial", 2340 of 4096 used at the worst point (SHOT)
+// receipt: docs/receipts/2026-10-21-firmware-baseline.md, debug 2340 of 4096 used at SHOT, release 2376 of 4096 after an err reply; kept at 4096 in both: 1.7x the release worst, and another size changes the boot allocations the reconnect heap was soaked with (2026-10-21-firmware-voice.md "heap")
 inline constexpr uint32_t kSerialTaskStackBytes = 4096;
 
 bool serial_port_start();

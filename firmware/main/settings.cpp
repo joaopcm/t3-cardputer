@@ -279,11 +279,10 @@ std::optional<std::string> setRelayUrl(std::string_view url)
         return std::nullopt;
     }
     // why: the token was issued by the old relay (docs/superpowers/plans/2026-10-21-distribution.md "Global Constraints"); the flag carries the notice across the restart that follows, and goes after the url so a failed url write never shows a false notice
-    if (std::optional<std::string> error = writeString(kRelayChangedKey, "1")) {
-        return error;
-    }
-    if (std::optional<std::string> error = wipeToken()) {
-        return error;
+    const std::optional<std::string> flagError = writeString(kRelayChangedKey, "1");
+    const std::optional<std::string> wipeError = wipeToken();
+    if (flagError || wipeError) {
+        return flagError ? flagError : wipeError;
     }
     ESP_LOGI(TAG, "relay changed: token cleared, pair again");
     return std::nullopt;

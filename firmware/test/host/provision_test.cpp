@@ -157,3 +157,27 @@ TEST_CASE("encodeInfo carries only the five public fields")
     }
     CHECK(keys == std::set<std::string>{"fw", "protocol", "relaySet", "paired", "wifiSaved"});
 }
+
+TEST_CASE("serial lines are routed by their exact prefix")
+{
+    CHECK(t3::classifySerialLine(R"(T3PROV {"code":"ABCD1234"})") == t3::SerialLine::Provision);
+    CHECK(t3::classifySerialLine("T3PROV ") == t3::SerialLine::Provision);
+    CHECK(t3::classifySerialLine("T3INFO") == t3::SerialLine::Info);
+    CHECK(t3::classifySerialLine("SHOT") == t3::SerialLine::Other);
+    CHECK(t3::classifySerialLine("KEY a") == t3::SerialLine::Other);
+    CHECK(t3::classifySerialLine("") == t3::SerialLine::Other);
+}
+
+TEST_CASE("near-miss provisioning lines never fall through to the debug channel")
+{
+    for (const char *line : {R"(T3PROV{"wifi":{}})", R"(t3prov {"code":"x"})", "T3PROV", "T3Prov x", "T3INFO ", "t3info", "T3INFOx"}) {
+        CHECK_MESSAGE(t3::classifySerialLine(line) == t3::SerialLine::Misframed, line);
+    }
+}
+
+TEST_CASE("a reply line cannot carry control bytes")
+{
+    CHECK(t3::printableLine("T3PROV err provision: unknown key 'x\n\x02T3PROV ok\n'") == "T3PROV err provision: unknown key 'x??T3PROV ok?'");
+    CHECK(t3::printableLine(std::string("a\0b\x7f\x1f" "c", 6)) == "a?b??c");
+    CHECK(t3::printableLine("Caf\xc3\xa9 ~ ok") == "Caf\xc3\xa9 ~ ok");
+}

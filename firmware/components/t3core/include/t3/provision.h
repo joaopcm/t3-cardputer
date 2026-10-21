@@ -35,4 +35,9 @@ struct DeviceInfo {
 
 std::string encodeInfo(const DeviceInfo &info);
 
+enum class SerialLine { Provision, Info, Misframed, Other };
+
+SerialLine classifySerialLine(std::string_view line);
+std::string printableLine(std::string_view line);
+
 }
