@@ -42,18 +42,25 @@ idf.py -B "$OUT_DIR" merge-bin -o "$OUT_DIR/t3-cardputer-full.bin"
 full_bytes=$(stat -c %s "$OUT_DIR/t3-cardputer-full.bin")
 echo "app image $app_bytes bytes (partition $needed of launcher slot $LAUNCHER_APP_SLOT_BYTES), full image $full_bytes bytes"
 
-version=$(git -C "$FW_DIR" describe --tags --always --dirty)
-python3 "$FW_DIR/scripts/web-manifest.py" "$OUT_DIR" "$FW_DIR/partitions.csv" "$OUT_DIR/web" "$version"
+version=${T3_VERSION:-$(git -C "$FW_DIR" describe --tags --always --dirty 2>/dev/null || true)}
+if [[ -z "$version" ]]; then
+  echo "release version unknown: git describe failed (no repo access?) and T3_VERSION is empty; set T3_VERSION=<tag>" >&2
+  exit 1
+fi
+python3 "$FW_DIR/scripts/web-manifest.py" "$OUT_DIR" "$FW_DIR/partitions.csv" "$FW_DIR/components/t3core/include/t3/protocol.h" "$OUT_DIR/web" "$version"
 
+# why: scan only what ships; cmake caches and ELF paths in the rest of build-release/ are false-positive surface
 leak_status=0
-leaks=$(grep -raEl "$LEAK_PATTERN" "$OUT_DIR") || leak_status=$?
+leaks=$(grep -raEl "$LEAK_PATTERN" "$OUT_DIR/web" "$OUT_DIR"/t3-cardputer-*.bin) || leak_status=$?
 if (( leak_status == 0 )); then
+  rm -rf "$OUT_DIR/web"
   echo "release leak check failed: relay url, tailnet name or tailscale ip found in:" >&2
   echo "$leaks" >&2
   exit 1
 fi
 if (( leak_status != 1 )); then
-  echo "release leak check could not read $OUT_DIR (grep exit $leak_status)" >&2
+  rm -rf "$OUT_DIR/web"
+  echo "release leak check could not read the release parts (grep exit $leak_status)" >&2
   exit 1
 fi
 

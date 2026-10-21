@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import hashlib
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -11,7 +12,6 @@ PART_NAMES = {
     "app": "t3-cardputer.bin",
 }
 MANIFEST_NAME = "T3 Cardputer"
-MANIFEST_PROTOCOL = 1
 
 
 def fail(message):
@@ -35,14 +35,22 @@ def nvs_region(partitions_csv):
     fail(f"no nvs row in {partitions_csv}")
 
 
+def protocol_version(protocol_header):
+    match = re.search(r"\bProtocolVersion\s*=\s*(\d+)\s*;", protocol_header.read_text())
+    if match is None:
+        fail(f"no ProtocolVersion in {protocol_header}")
+    return int(match.group(1))
+
+
 def main():
-    if len(sys.argv) != 5:
-        fail("usage: web-manifest.py <build dir> <partitions.csv> <out dir> <version>")
-    build_dir, partitions_csv, out_dir, version = (
+    if len(sys.argv) != 6:
+        fail("usage: web-manifest.py <build dir> <partitions.csv> <protocol.h> <out dir> <version>")
+    build_dir, partitions_csv, protocol_header, out_dir, version = (
         Path(sys.argv[1]),
         Path(sys.argv[2]),
         Path(sys.argv[3]),
-        sys.argv[4],
+        Path(sys.argv[4]),
+        sys.argv[5],
     )
     flasher_args = json.loads((build_dir / "flasher_args.json").read_text())
     chip = flasher_args["extra_esptool_args"]["chip"]
@@ -69,7 +77,7 @@ def main():
         "name": MANIFEST_NAME,
         "version": version,
         "chip": chip,
-        "protocol": MANIFEST_PROTOCOL,
+        "protocol": protocol_version(protocol_header),
         "parts": parts,
         "nvs": nvs_region(partitions_csv),
     }
