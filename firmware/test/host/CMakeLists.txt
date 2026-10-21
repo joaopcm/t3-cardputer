@@ -9,6 +9,7 @@ enable_testing()
 
 add_library(cjson STATIC third_party/cJSON.c)
 target_include_directories(cjson PUBLIC third_party)
+target_compile_definitions(cjson PUBLIC CJSON_NESTING_LIMIT=32)
 
 set(T3CORE_DIR ${CMAKE_CURRENT_LIST_DIR}/../../components/t3core)
 add_library(t3core STATIC ${T3CORE_DIR}/grid.cpp ${T3CORE_DIR}/protocol.cpp ${T3CORE_DIR}/link.cpp ${T3CORE_DIR}/app.cpp ${T3CORE_DIR}/screens/home.cpp ${T3CORE_DIR}/screens/thread.cpp ${T3CORE_DIR}/screens/request.cpp ${T3CORE_DIR}/screens/newtask.cpp ${T3CORE_DIR}/screens/setup.cpp ${T3CORE_DIR}/screens/voice.cpp ${T3CORE_DIR}/keymap.cpp ${T3CORE_DIR}/power.cpp ${T3CORE_DIR}/wifi_pick.cpp)

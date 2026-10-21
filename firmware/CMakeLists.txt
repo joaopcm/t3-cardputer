@@ -14,4 +14,6 @@ if(NOT T3_RELAY_URL MATCHES "^wss://.")
     message(FATAL_ERROR "T3_RELAY_URL in firmware/local.cmake must start with wss:// or https://")
 endif()
 
+idf_build_set_property(COMPILE_DEFINITIONS "CJSON_NESTING_LIMIT=32" APPEND)
+
 project(t3_cardputer)
