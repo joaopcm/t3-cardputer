@@ -16,6 +16,8 @@ You run every piece yourself: the relay next to your T3, the firmware on your AD
 
 Tokens and WiFi passwords never show up in command arguments, logs or the ADV's serial output. `pair-t3 --stdin`, `secrets set github` and setup's paste prompts read them from stdin with echo off.
 
+One exception: `pair-t3 --mcp <code> --internal <code>` takes T3's pairing codes as arguments, so they can show up in `ps` and your shell history. Each code works once and expires after 5 minutes, and the relay stores the tokens it trades them for, not the codes. `pair-t3 --stdin` and setup keep them out of argv.
+
 ## What Funnel exposes
 
 Funnel puts `https://<machine>.<tailnet>.ts.net:8443` on the public internet and forwards it to the relay on `127.0.0.1:8787`. The relay only binds loopback. Through Funnel it answers:
