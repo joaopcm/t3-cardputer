@@ -558,9 +558,35 @@ TEST_CASE("a refused respond goes back to the request and says why")
     App app = onApproval();
     const Frame sent(only(press(app, ch('N'))));
     CHECK(app.screenName() == "thread");
-    push(app, t3::Ack{sent.str("id"), false, std::string("request no longer pending")});
+    push(app, t3::Ack{sent.str("id"), false, std::string("T3 unreachable")});
     CHECK(app.screenName() == "approval");
-    CHECK(row(app, 0).rfind("refused: request no longer pending", 0) == 0);
+    CHECK(row(app, 0).rfind("refused: T3 unreachable", 0) == 0);
+}
+
+TEST_CASE("an answer refused because its request is gone does not reopen the request")
+{
+    for (const char *why : {"request no longer pending, refresh", "already answered"}) {
+        App app = onApproval();
+        const Frame sent(only(press(app, ch('N'))));
+        push(app, t3::Ack{sent.str("id"), false, std::string(why)});
+        CHECK(app.screenName() == "thread");
+        CHECK(shown(app).rfind("refused: " + std::string(why), 0) == 0);
+    }
+}
+
+TEST_CASE("a request pushed again while its answer is unconfirmed does not reopen it, the next question does")
+{
+    App app = onApproval();
+    only(press(app, ch('Y')));
+    app.onLinkStatus("relay unreachable: closed 1006");
+    CHECK(app.onLinkStatus("").send.size() == 2);
+    push(app, relay(kBouncePage));
+    push(app, relay(kBounceRequest));
+    CHECK(app.screenName() == "thread");
+
+    push(app, relay(R"({"type":"request","threadId":"thr_bounce","requestId":"req_1","kind":"approval",
+ "lines":["Wants to run another command:","  pnpm build"],"options":[{"key":"Y","label":"Allow once","value":"allow_once"}]})"));
+    CHECK(app.screenName() == "approval");
 }
 
 TEST_CASE("thread pages with up and down, backspace on an empty line goes home")

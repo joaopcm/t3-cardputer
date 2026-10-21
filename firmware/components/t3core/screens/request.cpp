@@ -87,6 +87,12 @@ App::RequestLayout App::requestLayout() const
 
 void App::onRequest(const Request &request, uint32_t nowMs)
 {
+    const bool answering = std::any_of(unacked_.begin(), unacked_.end(), [&](const Unacked &item) {
+        return item.request && item.request->requestId == request.requestId && item.request->lines == request.lines;
+    });
+    if (answering) {
+        return;
+    }
     if (request.threadId == threadId_ && screen_ == Screen::Voice && voiceFrom_ == Screen::Thread) {
         waiting_ = request;
         inform("request waiting: Tab opens it", Color::Warn);

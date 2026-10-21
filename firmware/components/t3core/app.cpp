@@ -130,6 +130,12 @@ std::optional<std::string> encodeUnacked(const std::string &id, const std::strin
     return encodeRespond(id, threadId, request->requestId, option->value, answer);
 }
 
+// why: docs/protocol.md "request": a respond whose handle is no longer pending gets `request no longer pending, refresh`, and one that T3 turns down because it was answered elsewhere first gets `already answered`
+bool requestGone(std::string_view why)
+{
+    return why.rfind("request no longer pending", 0) == 0 || why == "already answered";
+}
+
 size_t bytesOf(const Option &option)
 {
     return option.label.size() + option.value.size();
@@ -185,7 +191,12 @@ void App::giveBack(const Unacked &item, bool refused, std::string_view why, uint
 {
     const std::string kind = item.request ? "answer" : "reply";
     const std::string here = (refused ? std::string("refused: ") : kind + " not sent: ") + std::string(why);
-    if (screen_ == Screen::Thread && threadId_ == item.threadId) {
+    const bool onThread = screen_ == Screen::Thread && threadId_ == item.threadId;
+    if (refused && item.request && requestGone(why)) {
+        inform(onThread ? here : "answer to " + threadTitle(item.threadId) + " failed: " + std::string(why));
+        return;
+    }
+    if (onThread) {
         if (item.request) {
             if (enterRequest(*item.request, nowMs)) {
                 if (!item.text.empty()) {
