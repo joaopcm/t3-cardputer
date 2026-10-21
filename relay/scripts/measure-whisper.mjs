@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const [model, threadsArg = "8", runsArg = "5", wavArg, referenceArg] = process.argv.slice(2);
-if (!model) {
-  console.error("usage: node measure-whisper.mjs <model> [threads=8] [runs=5] [wav] [reference]");
+if (!model || (wavArg && !referenceArg)) {
+  console.error("usage: node measure-whisper.mjs <model> [threads=8] [runs=5] [<wav> <reference>]  (wav needs its reference text)");
   process.exit(2);
 }
 const threads = Number(threadsArg);
@@ -78,6 +78,7 @@ console.log(
       medianMs: Math.round(median),
       p95Ms: Math.round(p95),
       peakRssMb: Math.round(peakRssMb),
+      reference,
       wordErrors: results.map((r) => wordErrors(reference, r.text)),
       transcript: results[0].text,
     },

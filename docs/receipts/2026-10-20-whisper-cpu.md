@@ -39,7 +39,7 @@ The clean clip does not separate the models: all three made 0 errors. To get a s
 | -5 dB | 2 | 2 | 2 |
 | -10 dB | 16 | **10** | 12 |
 
-`medium.en` is never worse than the others and is best at -10 dB. It is also a third faster than `large-v3-turbo` (8.5 s vs 12.7 s). One clip with synthetic noise is thin evidence, so this is a tie-break and not a ranking: published benchmarks put `large-v3-turbo` at or slightly above `medium.en` on English, and nothing here contradicts that. **Re-check all three on real ADV recordings in plan 2** (coding vocabulary, hotspot audio) and flip `whisper.model` if `large-v3-turbo` wins. Switching is one config value: `models` already has all three.
+`medium.en` is never worse than the others and is best at -10 dB. It is also a third faster than `large-v3-turbo` (8.5 s vs 12.7 s). One clip with synthetic noise is thin evidence, so this is a tie-break and not a ranking: published benchmarks put `large-v3-turbo` at or slightly above `medium.en` on English, and nothing here contradicts that. The re-check on real ADV recordings is in "ADV recordings 2026-10-21" below (`medium.en` kept). Switching is one config value: `models` already has all three.
 
 ## Limits and their receipts
 
@@ -63,11 +63,12 @@ The relay spawns `whisper-server` once, bound to 127.0.0.1 on `whisper.port`, an
 ```
 relay/scripts/install-whisper.sh
 node relay/scripts/measure-whisper.mjs medium.en 8 5
+node relay/scripts/measure-whisper.mjs medium.en 8 3 clip.wav "reference text"
 ```
 
 ## ADV recordings 2026-10-21
 
-Re-check promised above. Two real clips recorded on the ADV mic through the relay (`stt.keepSamples`), plus `samples/jfk.wav` for continuity. The brief asked for 5 Checkpoint B clips; only these 2 usable ones exist (a 0.6 s empty tap was ignored), so this is thin evidence too. Audio stays out of the repo. Same host and tool as above (`measure-whisper.mjs`, 8 threads), 3 timed runs after a warm-up, with the live relay's own `medium.en` child idle on its port. Memory available at the time: 7.3 GiB (`free -h`, agents and the live relay running).
+Re-check promised above. Two real clips recorded on the ADV mic through the relay (`stt.keepSamples`), plus `samples/jfk.wav` for continuity. Only 2 usable ADV clips exist; 5 were planned (a 0.6 s empty tap was ignored), so this is thin evidence too. Audio stays out of the repo. Same host and tool as above (`measure-whisper.mjs`, 8 threads), 3 timed runs after a warm-up, with the live relay's own `medium.en` child idle on its port. Memory available at the time: 7.3 GiB (`free -h`, agents and the live relay running).
 
 Clips (peak level from the relay's sidecar):
 
