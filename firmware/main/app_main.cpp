@@ -519,7 +519,7 @@ extern "C" void app_main(void)
     }
     const std::optional<std::string> keyboardError = keyboard_init();
     ESP_LOGI(TAG, "keyboard %s", keyboardError ? keyboardError->c_str() : "ready");
-    if (!transport_init(settings::relayUrl(), static_cast<size_t>(kCaps.maxFrameBytes))) {
+    if (!transport_init(T3_RELAY_URL, static_cast<size_t>(kCaps.maxFrameBytes))) {
         show_fatal("heap: relay frame buffers do not fit", "the relay link cannot start");
         halt();
     }

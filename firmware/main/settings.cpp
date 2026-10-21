@@ -15,7 +15,6 @@ constexpr char TAG[] = "settings";
 constexpr char kNamespace[] = "t3";
 constexpr char kWifiKey[] = "wifi";
 constexpr char kTokenKey[] = "token";
-constexpr char kRelayUrlKey[] = "relay_url";
 
 struct WifiRecord {
     char ssid[kSsidMax + 1];
@@ -244,16 +243,6 @@ std::optional<std::string> setToken(std::string_view token)
 std::optional<std::string> wipeToken()
 {
     return eraseKey(kTokenKey);
-}
-
-std::string relayUrl()
-{
-    return readString(kRelayUrlKey).value_or(T3_RELAY_URL);
-}
-
-std::optional<std::string> setRelayUrl(std::string_view url)
-{
-    return writeString(kRelayUrlKey, url);
 }
 
 }

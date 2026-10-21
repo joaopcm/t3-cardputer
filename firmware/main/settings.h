@@ -36,7 +36,4 @@ std::optional<std::string> token();
 std::optional<std::string> setToken(std::string_view token);
 std::optional<std::string> wipeToken();
 
-std::string relayUrl();
-std::optional<std::string> setRelayUrl(std::string_view url);
-
 }
