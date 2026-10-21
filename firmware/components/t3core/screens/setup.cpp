@@ -81,7 +81,7 @@ App::Out App::onBoot(bool hasWifi, bool hasToken, bool hasRelay)
     if (!hasRelay) {
         relayText_.clear();
         screen_ = Screen::SetupRelay;
-        inform("relay: not set, type your relay url (setup.sh prints it)", Color::Warn);
+        inform("relay: not set, open the install link from setup.sh or type the relay url", Color::Warn);
         return {};
     }
     if (!hasWifi) {
@@ -545,7 +545,7 @@ void App::drawPair(Grid &grid) const
 void App::drawRelay(Grid &grid) const
 {
     grid.put(1, 0, "type your relay url", Color::Dim);
-    const std::vector<std::string> lines = wrapWords("run setup.sh on the relay host, it prints the url", Grid::Cols);
+    const std::vector<std::string> lines = wrapWords("tailscale funnel status on the relay host shows it", Grid::Cols);
     for (size_t i = 0; i < lines.size(); ++i) {
         grid.put(kGuideTop + static_cast<int>(i), 0, lines[i]);
     }

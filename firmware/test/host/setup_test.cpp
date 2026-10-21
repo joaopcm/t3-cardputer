@@ -695,8 +695,11 @@ TEST_CASE("no relay url opens the relay screen and says where to get one")
     CHECK(app.screenName() == "setup_relay");
     CHECK_FALSE(out.scanWifi);
     CHECK(app.editing());
-    CHECK(rows(app)[0].rfind("relay: not set, type your relay url", 0) == 0);
-    CHECK(contains(allText(app), "(setup.sh prints it)"));
+    CHECK(rows(app)[0].rfind("relay: not set, open the install link", 0) == 0);
+    CHECK(contains(allText(app), "from setup.sh or type the relay url"));
+    CHECK_FALSE(contains(allText(app), "setup.sh prints"));
+    CHECK_FALSE(contains(allText(app), "prints the url"));
+    CHECK(contains(allText(app), "tailscale funnel status"));
 }
 
 TEST_CASE("a typed relay url is handed out normalized to save")

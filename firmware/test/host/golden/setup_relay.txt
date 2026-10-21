@@ -1,7 +1,7 @@
 setup                          relay 1/4
 type your relay url                     
-run setup.sh on the relay host, it      
-prints the url                          
+tailscale funnel status on the relay    
+host shows it                           
                                         
                                         
 url 22/320                              
