@@ -42,7 +42,8 @@ void WifiStation::startScan()
 
 void WifiStation::connect(const WifiJoin &cred, uint32_t nowMs, std::string_view lastFailure)
 {
-    target_ = cred.ssid;
+    target_ = cred;
+    authRetried_ = false;
     if (const std::optional<std::string> error = driver_.connect(cred)) {
         failed("join did not start: " + *error, nowMs);
         return;
@@ -85,14 +86,14 @@ void WifiStation::startJoin(uint32_t nowMs)
 void WifiStation::failed(std::string_view why, uint32_t nowMs)
 {
     state_ = State::Waiting;
-    const std::string failure = "wifi: " + target_ + " failed, " + std::string(why);
+    const std::string failure = "wifi: " + target_.ssid + " failed, " + std::string(why);
     if (joining_) {
         joining_ = false;
         deadlineMs_ = nowMs;
         emit(WifiEvent::Kind::JoinFailed, failure);
         return;
     }
-    picker_.failed(target_);
+    picker_.failed(target_.ssid);
     connectNextSaved(nowMs, failure);
 }
 
@@ -134,7 +135,7 @@ void WifiStation::join(WifiJoin cred, uint32_t nowMs)
         driver_.disconnect();
         return;
     case State::Dropping:
-        picker_.failed(target_);
+        picker_.failed(target_.ssid);
         state_ = State::Leaving;
         deadlineMs_ = nowMs + kWifiJoinWaitMs;
         return;
@@ -183,13 +184,13 @@ void WifiStation::onGotIp()
     picker_.joined();
     if (joining_) {
         joining_ = false;
-        emit(WifiEvent::Kind::Joined, target_);
+        emit(WifiEvent::Kind::Joined, target_.ssid);
     }
-    emit(WifiEvent::Kind::Up, target_);
+    emit(WifiEvent::Kind::Up, target_.ssid);
     afterConnectAttempt();
 }
 
-void WifiStation::onDisconnected(std::string_view why, uint32_t nowMs)
+void WifiStation::onDisconnected(int reason, std::string_view why, uint32_t nowMs)
 {
     switch (state_) {
     case State::Leaving:
@@ -197,6 +198,13 @@ void WifiStation::onDisconnected(std::string_view why, uint32_t nowMs)
         startJoin(nowMs);
         return;
     case State::Connecting:
+        if (reason == kWifiReasonAuthExpire && !authRetried_) {
+            // why: after a sudden reset the access point still holds the old association and answers the first join with reason 2; the device check of 2026-10-21 at a4f6842 saw it on 2 of 3 reboots after a typed join, and the next join went through
+            const WifiJoin cred = target_;
+            connect(cred, nowMs, "wifi: " + cred.ssid + " auth expired (reason 2)");
+            authRetried_ = true;
+            return;
+        }
         failed(why, nowMs);
         afterConnectAttempt();
         return;

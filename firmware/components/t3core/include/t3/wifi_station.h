@@ -15,6 +15,8 @@ namespace t3 {
 // receipt: docs/receipts/2026-10-21-firmware-network.md "wifi"
 inline constexpr uint32_t kWifiJoinWaitMs = 20000;
 inline constexpr uint32_t kWifiRetryMs = 10000;
+// receipt: IEEE 802.11 reason code 2, "previous authentication no longer valid" (WIFI_REASON_AUTH_EXPIRE in esp_wifi_types.h)
+inline constexpr int kWifiReasonAuthExpire = 2;
 
 struct WifiEvent {
     enum class Kind { Up, Down, Scanned, Joined, JoinFailed, Status };
@@ -46,7 +48,7 @@ public:
     void join(WifiJoin cred, uint32_t nowMs);
     void onScanDone(std::vector<WifiNet> nets, bool hiddenInRange, uint32_t nowMs);
     void onGotIp();
-    void onDisconnected(std::string_view why, uint32_t nowMs);
+    void onDisconnected(int reason, std::string_view why, uint32_t nowMs);
     bool hasEvent() const { return !pending_.empty(); }
     std::optional<WifiEvent> poll(uint32_t nowMs);
 
@@ -68,7 +70,8 @@ private:
     bool listWanted_ = false;
     bool scanAfterConnect_ = false;
     uint32_t deadlineMs_ = 0;
-    std::string target_;
+    WifiJoin target_;
+    bool authRetried_ = false;
     std::string dropWhy_;
     std::optional<WifiJoin> join_;
     bool joining_ = false;

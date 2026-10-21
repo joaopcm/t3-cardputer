@@ -62,7 +62,7 @@ TEST_CASE("a join that times out waits for the driver's disconnect before trying
     CHECK(driver.disconnects == 1);
     CHECK(driver.joins == std::vector<std::string>{"home"});
 
-    station.onDisconnected("reason 8", t3::kWifiJoinWaitMs + 50);
+    station.onDisconnected(8, "reason 8", t3::kWifiJoinWaitMs + 50);
     const std::vector<WifiEvent> events = drain(station, t3::kWifiJoinWaitMs + 50);
     CHECK(driver.joins == std::vector<std::string>{"home", "phone"});
     REQUIRE(events.size() == 1);
@@ -97,7 +97,7 @@ TEST_CASE("a typed join during a timed-out join's disconnect joins the typed net
 
     station.join(WifiJoin{"attic", "password3"}, t3::kWifiJoinWaitMs + 10);
     CHECK(driver.disconnects == 1);
-    station.onDisconnected("reason 8", t3::kWifiJoinWaitMs + 50);
+    station.onDisconnected(8, "reason 8", t3::kWifiJoinWaitMs + 50);
     drain(station, t3::kWifiJoinWaitMs + 50);
     CHECK(driver.joins == std::vector<std::string>{"home", "attic"});
 }
@@ -113,4 +113,37 @@ TEST_CASE("an unreadable saved list names its error instead of saying none are s
     const std::vector<WifiEvent> events = drain(station, 0);
     REQUIRE(events.size() == 1);
     CHECK(events[0].text == "wifi: nvs: saved networks unreadable: ESP_ERR_NVS_INVALID_LENGTH");
+}
+
+TEST_CASE("reason 2 after a reset retries the same network once before it counts as failed")
+{
+    FakeDriver driver;
+    WifiStation station(driver);
+    joiningHome(station, driver);
+
+    station.onDisconnected(t3::kWifiReasonAuthExpire, "reason 2", 100);
+    const std::vector<WifiEvent> retry = drain(station, 100);
+    CHECK(driver.joins == std::vector<std::string>{"home", "home"});
+    REQUIRE(retry.size() == 1);
+    CHECK(retry[0].text == "wifi: home auth expired (reason 2), joining home");
+
+    station.onDisconnected(t3::kWifiReasonAuthExpire, "reason 2", 200);
+    drain(station, 200);
+    CHECK(driver.joins == std::vector<std::string>{"home", "home", "phone"});
+}
+
+TEST_CASE("a reason 2 retry that then times out still waits for its disconnect")
+{
+    FakeDriver driver;
+    WifiStation station(driver);
+    joiningHome(station, driver);
+    station.onDisconnected(t3::kWifiReasonAuthExpire, "reason 2", 100);
+    drain(station, 100);
+
+    drain(station, 100 + t3::kWifiJoinWaitMs);
+    CHECK(driver.disconnects == 1);
+    CHECK(driver.joins == std::vector<std::string>{"home", "home"});
+    station.onDisconnected(8, "reason 8", 200 + t3::kWifiJoinWaitMs);
+    drain(station, 200 + t3::kWifiJoinWaitMs);
+    CHECK(driver.joins == std::vector<std::string>{"home", "home", "phone"});
 }

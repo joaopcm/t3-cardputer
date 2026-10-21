@@ -151,7 +151,7 @@ void handle(const Raw &raw, uint32_t nowMs)
         return;
     }
     case WIFI_EVENT_STA_DISCONNECTED:
-        station.onDisconnected(reasonText(raw.reason), nowMs);
+        station.onDisconnected(raw.reason, reasonText(raw.reason), nowMs);
         return;
     default:
         return;
