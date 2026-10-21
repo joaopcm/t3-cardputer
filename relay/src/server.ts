@@ -6,10 +6,11 @@ import { z } from "zod";
 import type { ApprovalsAdapter } from "./approvals/index.js";
 import { LockedOutError, PairingError, type DeviceAuth } from "./auth/devices.js";
 import { lockoutSourceKey } from "./auth/lockout.js";
-import type { RelayConfig } from "./config.js";
+import { samplesDirOf, type RelayConfig } from "./config.js";
 import type { DefaultsStore } from "./defaults-store.js";
 import { DEVICE_FRAME_BYTES_MAX, DEVICE_NAME_MAX, DEVICE_PATH, PAIR_BODY_BYTES_MAX } from "./protocol/messages.js";
 import { Hub, type ApprovalsDownPhase, type ApprovalsState, type T3Client } from "./session.js";
+import { createSampleKeeper } from "./stt/samples.js";
 import type { Stt } from "./stt/types.js";
 import { Watcher } from "./watcher.js";
 
@@ -45,7 +46,9 @@ export async function startServer(deps: ServerDeps): Promise<{
 }> {
   const { limits } = deps.config;
   const watcher = new Watcher(deps.t3, deps.approvals, limits.pollIntervalMs);
-  const hub = new Hub({ ...deps, limits, relayVersion: RELAY_VERSION }, watcher);
+  const { stt: sttConfig } = deps.config;
+  const samples = sttConfig.keepSamples ? createSampleKeeper({ dir: samplesDirOf(deps.config), maxSamples: sttConfig.maxSamples }) : undefined;
+  const hub = new Hub({ ...deps, limits, relayVersion: RELAY_VERSION, sttModel: deps.config.whisper.model, samples }, watcher);
 
   const http = createServer((req, res) => {
     handleHttp(req, res, deps.auth).catch((error: unknown) => {
